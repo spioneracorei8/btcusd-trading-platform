@@ -1,0 +1,38 @@
+# Caddy runs on the VPS host and terminates TLS in front of the api container,
+# which only listens on 127.0.0.1:8080.
+#
+# Replace the site address with the real hostname before deploying. Caddy
+# obtains and renews the certificate automatically.
+
+btc.example.com {
+	encode zstd gzip
+
+	log {
+		output file /var/log/caddy/btcusd-api.log
+		format json
+	}
+
+	# Single-owner system: nothing here is meant to be public. Keep the
+	# health endpoints reachable for uptime checks and put everything else
+	# behind the reverse proxy only after the API gains real endpoints in
+	# phase 08.
+	handle /health {
+		reverse_proxy 127.0.0.1:8080
+	}
+
+	handle /ready {
+		reverse_proxy 127.0.0.1:8080
+	}
+
+	handle {
+		reverse_proxy 127.0.0.1:8080
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "no-referrer"
+		-Server
+	}
+}

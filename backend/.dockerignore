@@ -1,0 +1,7 @@
+# Keep the build context small and free of host artefacts.
+bin/
+*.test
+*.out
+.env
+.env.*
+!.env.example

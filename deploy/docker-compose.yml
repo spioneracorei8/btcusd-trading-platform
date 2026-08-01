@@ -1,0 +1,89 @@
+# Production-shaped compose file: images are built, no source is mounted.
+#
+# Defaults are baked in so `docker compose up` works with no .env at all.
+# Override them from the repository root .env with:
+#   docker compose --env-file .env -f deploy/docker-compose.yml up
+# which is what `make up` does.
+
+name: btcusd-trading-platform
+
+services:
+  postgres:
+    image: timescale/timescaledb:latest-pg16
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-trading}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-trading}
+      POSTGRES_DB: ${POSTGRES_DB:-btcusd}
+      # Keep the server itself in UTC; every timestamp in this system is UTC.
+      TZ: UTC
+      PGTZ: UTC
+    healthcheck:
+      # $$ escapes the substitution so the variable is expanded inside the
+      # container, not by compose.
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      # Bound to loopback: the database is never exposed to the internet.
+      # Published so `make migrate-up` and the integration tests can reach it.
+      - "127.0.0.1:${POSTGRES_HOST_PORT:-5432}:5432"
+    restart: unless-stopped
+
+  api:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+      args:
+        CMD: api
+    environment:
+      APP_ENV: ${APP_ENV:-dev}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      HTTP_PORT: "8080"
+      DATABASE_URL: postgres://${POSTGRES_USER:-trading}:${POSTGRES_PASSWORD:-trading}@postgres:5432/${POSTGRES_DB:-btcusd}?sslmode=disable
+      DATABASE_MAX_CONNS: ${DATABASE_MAX_CONNS:-10}
+      MARKET_SYMBOL: ${MARKET_SYMBOL:-BTCUSDT}
+      MARKET_TYPE: ${MARKET_TYPE:-spot}
+      MARKET_TIMEFRAMES: ${MARKET_TIMEFRAMES:-1m,5m,15m,1h}
+      FEE_TAKER_PCT: ${FEE_TAKER_PCT:-0.05}
+      SLIPPAGE_TICKS: ${SLIPPAGE_TICKS:-1}
+      NOTIFY_ENABLED: ${NOTIFY_ENABLED:-false}
+      FCM_PROJECT_ID: ${FCM_PROJECT_ID:-}
+      FCM_CREDENTIALS_FILE: ${FCM_CREDENTIALS_FILE:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      # Caddy on the host terminates TLS and proxies to this port.
+      - "127.0.0.1:${API_HOST_PORT:-8080}:8080"
+    restart: unless-stopped
+
+  collector:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+      args:
+        CMD: collector
+    environment:
+      APP_ENV: ${APP_ENV:-dev}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      HTTP_PORT: "8080"
+      DATABASE_URL: postgres://${POSTGRES_USER:-trading}:${POSTGRES_PASSWORD:-trading}@postgres:5432/${POSTGRES_DB:-btcusd}?sslmode=disable
+      DATABASE_MAX_CONNS: ${DATABASE_MAX_CONNS:-10}
+      MARKET_SYMBOL: ${MARKET_SYMBOL:-BTCUSDT}
+      MARKET_TYPE: ${MARKET_TYPE:-spot}
+      MARKET_TIMEFRAMES: ${MARKET_TIMEFRAMES:-1m,5m,15m,1h}
+      FEE_TAKER_PCT: ${FEE_TAKER_PCT:-0.05}
+      SLIPPAGE_TICKS: ${SLIPPAGE_TICKS:-1}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    # Phase 01 collector logs its configuration and exits, so restarting it
+    # would just loop. It becomes a long-running worker in phase 02.
+    restart: "no"
+
+volumes:
+  pgdata:
