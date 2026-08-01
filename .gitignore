@@ -10,7 +10,7 @@ service-account*.json
 
 # Build output
 bin/
-backend/bin/
+server/bin/
 dist/
 
 # Go

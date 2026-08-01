@@ -95,28 +95,40 @@ scalping 1m-5m อ่อนไหวกับต้นทุนมาก ถ้�
 
 ## 5. Folder Structure
 
+ใช้ clean architecture แบบเดียวกับ `go-clean-arch-auth-service` / `go-clean-arch-user-service` / `job-queue`
+คือ **interface อยู่ที่ root ของ service, implementation อยู่ใน subpackage**
+
 ```
-trading-platform/
+btcusd-trading-platform/
 ├── CLAUDE.md
+├── Makefile
+├── .env.example
 ├── docs/
 │   ├── decisions/          # ADR สั้น ๆ ไฟล์ละ 1 หน้า
 │   └── prompts/            # phase-01.md, phase-02.md, ...
-├── backend/
-│   ├── cmd/
-│   │   ├── api/            # REST + WS server
-│   │   ├── collector/      # binance ingestion worker
-│   │   └── backtest/       # CLI runner
-│   ├── internal/
-│   │   ├── config/
-│   │   ├── domain/         # struct กลาง ไม่ import อะไรเลย
-│   │   ├── market/         # binance ws + rest + backfill
-│   │   ├── storage/        # postgres, sqlc generated
-│   │   ├── indicator/
-│   │   ├── trend/
-│   │   ├── strategy/
-│   │   ├── backtest/
-│   │   └── notify/
+├── server/
+│   ├── main.go             # entry point ของ API
+│   ├── collector/main.go   # binance ingestion worker
+│   ├── backtest/main.go    # CLI runner
+│   ├── config/             # env.go — โหลด env อย่างเดียว ไม่มีไฟล์ config
+│   ├── constants/          # constant.go, enum.go, error.go — ไม่ import อะไรในโปรเจกต์
+│   ├── helper/             # helper.go, time.go
+│   ├── logger/             # slog handler
+│   ├── middleware/         # request id, request log, recoverer
+│   ├── models/             # struct กลาง import ได้แค่ constants
+│   ├── routes/             # api.go — ผูก path เข้ากับ handler interface
+│   ├── server/             # server.go — ต่อ repo → usecase → handler
+│   ├── database/           # pgx pool, convert, db/ (sqlc generated), queries/
+│   ├── services/
+│   │   └── <domain>/       # candle, signal, datagap, health,
+│   │       ├── handler.go        #   ต่อไป: market, indicator, trend,
+│   │       ├── handler/          #   strategy, notify
+│   │       ├── repository.go
+│   │       ├── repository/
+│   │       ├── usecase.go
+│   │       └── usecase/
 │   ├── migrations/
+│   ├── testhelper/
 │   └── testdata/
 ├── mobile/
 └── deploy/
@@ -124,8 +136,15 @@ trading-platform/
     └── Caddyfile
 ```
 
-**กฎการ import:** `domain` ห้าม import package อื่นในโปรเจกต์
-ทิศทาง dependency: `cmd → internal/* → domain` เท่านั้น ห้ามย้อนกลับ
+**กฎการ import**
+- `constants` ห้าม import package อื่นในโปรเจกต์
+- `models` import ได้แค่ `constants`
+- `services/<domain>/*.go` (ไฟล์ interface) import ได้แค่ `models` + `constants`
+- implementation (`handler/`, `usecase/`, `repository/`) import interface ของ service ตัวเอง ไม่ import ของ layer อื่นข้ามชั้น
+- **usecase ห้ามรู้จัก pgx/SQL** — คุยผ่าน repository interface เท่านั้น
+- `server/server.go` เป็นที่เดียวที่รู้ว่า implementation ตัวไหนมาต่อกับ interface ตัวไหน
+
+ทิศทาง dependency: `main → server → routes → handler → usecase → repository → database` ห้ามย้อนกลับ
 
 ---
 

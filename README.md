@@ -27,26 +27,45 @@ curl localhost:8080/health
 
 ## Layout
 
+Clean architecture: a service declares its interfaces at the package root and
+keeps the implementations in subpackages, so a usecase depends on
+`CandleRepository`, never on the SQL behind it.
+
 ```
-backend/
-  cmd/api          REST server: /health, /ready
-  cmd/collector    Binance ingestion worker (phase 02)
-  cmd/backtest     backtest CLI (phase 04)
-  internal/config  environment-only configuration and validation
-  internal/domain  core types; imports no other package of this project
-  internal/storage pgx v5 pool, sqlc queries, domain mapping
-  internal/logging slog handler construction
-  migrations       goose migrations
+server/
+  main.go          API entry point
+  collector/       Binance ingestion worker (phase 02)
+  backtest/        backtest CLI (phase 04)
+  config/          environment-only configuration and validation
+  constants/       enums, fixed values, sentinel errors
+  helper/          small pure utilities
+  logger/          slog handler construction
+  middleware/      request id, request log, panic recovery
+  models/          entities; imports only constants
+  routes/          path -> handler wiring
+  server/          repo -> usecase -> handler wiring, HTTP lifecycle
+  database/        pgx v5 pool, sqlc output, wire-type conversion
+  services/
+    candle/        repository.go, usecase.go + repository/, usecase/
+    signal/        repository.go, usecase.go + repository/, usecase/
+    datagap/       repository.go, usecase.go + repository/, usecase/
+    health/        handler.go, usecase.go, repository.go + impls
+  migrations/      goose migrations
+  testhelper/      shared setup for repository integration tests
 deploy/            docker-compose.yml, Caddyfile
 docs/              decisions/, prompts/
 mobile/            React Native app (phase 09)
 ```
 
+`health` is the one complete vertical slice in phase 01 (handler → usecase →
+repository) and is the template the later services follow. See
+[ADR 0005](docs/decisions/0005-clean-architecture-layout.md).
+
 ## Make targets
 
 | target | what it does |
 |---|---|
-| `make build` | build every binary into `backend/bin` |
+| `make build` | build every binary into `server/bin` |
 | `make test` | unit tests; integration tests skip without `TEST_DATABASE_URL` |
 | `make test-integration` | start the database, migrate it, run every test |
 | `make lint` | golangci-lint when installed, otherwise gofmt + go vet |
@@ -60,9 +79,10 @@ mobile/            React Native app (phase 09)
 
 These come from `CLAUDE.md` and are enforced here, not just documented.
 
-- **Only closed candles reach the strategy.** `UpsertCandle` rejects a candle
-  with `IsClosed == false`, and the `candles` table has a `CHECK (is_closed)`
-  constraint. Unclosed bars are display-only and stay in memory.
+- **Only closed candles reach the strategy.** `CandleUsecase.SaveCandle`
+  rejects a candle with `IsClosed == false`, and the `candles` table has a
+  `CHECK (is_closed)` constraint. Unclosed bars are display-only and stay in
+  memory.
 - **Every candle write is idempotent.** The primary key is
   `(symbol, market_type, timeframe, open_time)` and the insert is
   `ON CONFLICT ... DO UPDATE`, because a reconnect and a REST backfill routinely

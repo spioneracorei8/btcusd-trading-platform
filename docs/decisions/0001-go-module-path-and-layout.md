@@ -1,6 +1,7 @@
 # 0001 — Go module path and repository layout
 
-**Status:** accepted · **Date:** 2026-08-01 · **Phase:** 01
+**Status:** superseded in part by [0005](0005-clean-architecture-layout.md) — the module path stands, the layout moved to clean architecture and `backend/` is now `server/`
+**Original status:** accepted · **Date:** 2026-08-01 · **Phase:** 01
 
 ## Context
 
@@ -14,7 +15,7 @@ confirmed. The repository this code lives in is
 The module path is:
 
 ```
-github.com/spioneracorei8/btcusd-trading-platform/backend
+github.com/spioneracorei8/btcusd-trading-platform/server
 ```
 
 The path matches the actual repository rather than the placeholder

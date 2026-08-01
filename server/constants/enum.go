@@ -1,0 +1,199 @@
+// Package constants holds the enumerations, fixed values and sentinel errors
+// shared across every layer. It imports nothing from this project, so any
+// layer may depend on it without creating a cycle.
+package constants
+
+import (
+	"fmt"
+	"time"
+)
+
+// MarketType selects which Binance market a symbol is traded on.
+//
+// Futures logic (funding rate, leverage) is intentionally not implemented yet,
+// but the type exists from day one so no endpoint or symbol format ends up
+// hardcoded in calculation code.
+type MarketType string
+
+// Supported market types.
+const (
+	MarketTypeSpot    MarketType = "spot"
+	MarketTypeFutures MarketType = "futures"
+)
+
+// Valid reports whether m is a known market type.
+func (m MarketType) Valid() bool {
+	switch m {
+	case MarketTypeSpot, MarketTypeFutures:
+		return true
+	default:
+		return false
+	}
+}
+
+// String returns the wire/database representation of the market type.
+func (m MarketType) String() string { return string(m) }
+
+// ParseMarketType converts s into a MarketType, rejecting unknown values.
+func ParseMarketType(s string) (MarketType, error) {
+	m := MarketType(s)
+	if !m.Valid() {
+		return "", fmt.Errorf("unknown market type %q (want %q or %q)", s, MarketTypeSpot, MarketTypeFutures)
+	}
+	return m, nil
+}
+
+// Timeframe is a candle interval expressed with Binance's notation.
+type Timeframe string
+
+// Timeframes the platform is allowed to work with. 1m and 5m drive the
+// scalping strategies; 15m and 1h are used as trend filters.
+const (
+	Timeframe1m  Timeframe = "1m"
+	Timeframe3m  Timeframe = "3m"
+	Timeframe5m  Timeframe = "5m"
+	Timeframe15m Timeframe = "15m"
+	Timeframe30m Timeframe = "30m"
+	Timeframe1h  Timeframe = "1h"
+	Timeframe2h  Timeframe = "2h"
+	Timeframe4h  Timeframe = "4h"
+	Timeframe6h  Timeframe = "6h"
+	Timeframe12h Timeframe = "12h"
+	Timeframe1d  Timeframe = "1d"
+)
+
+// timeframeDurations is the single source of truth for valid timeframes.
+var timeframeDurations = map[Timeframe]time.Duration{
+	Timeframe1m:  time.Minute,
+	Timeframe3m:  3 * time.Minute,
+	Timeframe5m:  5 * time.Minute,
+	Timeframe15m: 15 * time.Minute,
+	Timeframe30m: 30 * time.Minute,
+	Timeframe1h:  time.Hour,
+	Timeframe2h:  2 * time.Hour,
+	Timeframe4h:  4 * time.Hour,
+	Timeframe6h:  6 * time.Hour,
+	Timeframe12h: 12 * time.Hour,
+	Timeframe1d:  24 * time.Hour,
+}
+
+// Valid reports whether t is a supported timeframe.
+func (t Timeframe) Valid() bool {
+	_, ok := timeframeDurations[t]
+	return ok
+}
+
+// Duration returns the wall-clock length of one candle of this timeframe.
+// It returns 0 for an unknown timeframe.
+func (t Timeframe) Duration() time.Duration { return timeframeDurations[t] }
+
+// String returns the wire/database representation of the timeframe.
+func (t Timeframe) String() string { return string(t) }
+
+// ParseTimeframe converts s into a Timeframe, rejecting unknown values.
+func ParseTimeframe(s string) (Timeframe, error) {
+	tf := Timeframe(s)
+	if !tf.Valid() {
+		return "", fmt.Errorf("unsupported timeframe %q", s)
+	}
+	return tf, nil
+}
+
+// Direction is the side a signal points to. The system never places orders;
+// a direction is advice for the owner, nothing more.
+type Direction string
+
+// Supported signal directions.
+const (
+	DirectionLong  Direction = "long"
+	DirectionShort Direction = "short"
+	DirectionFlat  Direction = "flat"
+)
+
+// Valid reports whether d is a known direction.
+func (d Direction) Valid() bool {
+	switch d {
+	case DirectionLong, DirectionShort, DirectionFlat:
+		return true
+	default:
+		return false
+	}
+}
+
+// String returns the wire/database representation of the direction.
+func (d Direction) String() string { return string(d) }
+
+// ParseDirection converts s into a Direction, rejecting unknown values.
+func ParseDirection(s string) (Direction, error) {
+	d := Direction(s)
+	if !d.Valid() {
+		return "", fmt.Errorf("unknown direction %q", s)
+	}
+	return d, nil
+}
+
+// NotificationChannel is a delivery target for a signal.
+type NotificationChannel string
+
+// Supported notification channels.
+const (
+	NotificationChannelFCM NotificationChannel = "fcm"
+)
+
+// String returns the wire/database representation of the channel.
+func (c NotificationChannel) String() string { return string(c) }
+
+// NotificationStatus is the delivery state of a notification attempt.
+type NotificationStatus string
+
+// Supported notification statuses.
+const (
+	NotificationStatusPending NotificationStatus = "pending"
+	NotificationStatusSent    NotificationStatus = "sent"
+	NotificationStatusFailed  NotificationStatus = "failed"
+)
+
+// Valid reports whether s is a known notification status.
+func (s NotificationStatus) Valid() bool {
+	switch s {
+	case NotificationStatusPending, NotificationStatusSent, NotificationStatusFailed:
+		return true
+	default:
+		return false
+	}
+}
+
+// String returns the wire/database representation of the status.
+func (s NotificationStatus) String() string { return string(s) }
+
+// ParseNotificationStatus converts s into a NotificationStatus, rejecting
+// unknown values.
+func ParseNotificationStatus(s string) (NotificationStatus, error) {
+	st := NotificationStatus(s)
+	if !st.Valid() {
+		return "", fmt.Errorf("unknown notification status %q", s)
+	}
+	return st, nil
+}
+
+// AppEnv is the deployment environment the process runs in.
+type AppEnv string
+
+// Supported application environments.
+const (
+	EnvDev  AppEnv = "dev"
+	EnvProd AppEnv = "prod"
+)
+
+// Valid reports whether e is a known environment.
+func (e AppEnv) Valid() bool {
+	switch e {
+	case EnvDev, EnvProd:
+		return true
+	default:
+		return false
+	}
+}
+
+// String returns the environment name.
+func (e AppEnv) String() string { return string(e) }

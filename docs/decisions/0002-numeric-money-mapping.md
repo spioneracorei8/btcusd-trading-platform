@@ -22,7 +22,7 @@ pseudo-version) and pulls `github.com/jackc/pgx v3` into the build.
 ## Decision
 
 Option 2. sqlc emits `pgtype.Numeric`, and
-`backend/internal/storage/convert.go` converts to and from `decimal.Decimal`.
+`server/database/convert.go` converts to and from `decimal.Decimal`.
 
 The conversion is exact in both directions and needs no rounding rule, because
 both types represent a value the same way:

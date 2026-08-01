@@ -5,8 +5,8 @@
 SHELL := /bin/bash
 .DEFAULT_GOAL := help
 
-BACKEND      := backend
-MIGRATIONS   := $(BACKEND)/migrations
+SERVER       := server
+MIGRATIONS   := $(SERVER)/migrations
 COMPOSE_FILE := deploy/docker-compose.yml
 
 # Pinned tool versions. They are run with `go run <pkg>@<version>` instead of
@@ -36,30 +36,30 @@ help: ## Show this help
 # ---------------------------------------------------------------------------
 
 .PHONY: build
-build: ## Build every binary into backend/bin
-	cd $(BACKEND) && go build -trimpath -o bin/ ./cmd/...
+build: ## Build every binary into server/bin
+	cd $(SERVER) && go build -trimpath -o bin/api . && go build -trimpath -o bin/ ./collector ./backtest
 
 .PHONY: test
 test: ## Run unit tests (integration tests skip without TEST_DATABASE_URL)
-	cd $(BACKEND) && go test ./...
+	cd $(SERVER) && go test ./...
 
 .PHONY: test-integration
 test-integration: ## Start the database, migrate it and run every test
 	$(COMPOSE) up -d postgres
 	$(MAKE) migrate-up
-	cd $(BACKEND) && TEST_DATABASE_URL="$(DATABASE_URL)" go test -count=1 ./...
+	cd $(SERVER) && TEST_DATABASE_URL="$(DATABASE_URL)" go test -count=1 ./...
 
 .PHONY: vet
 vet: ## Run go vet
-	cd $(BACKEND) && go vet ./...
+	cd $(SERVER) && go vet ./...
 
 .PHONY: fmt
 fmt: ## Format the Go sources
-	cd $(BACKEND) && go fmt ./...
+	cd $(SERVER) && go fmt ./...
 
 .PHONY: lint
 lint: ## Run golangci-lint when installed, otherwise gofmt + go vet
-	@cd $(BACKEND) && \
+	@cd $(SERVER) && \
 	if command -v golangci-lint >/dev/null 2>&1; then \
 		golangci-lint run ./...; \
 	else \
@@ -71,7 +71,7 @@ lint: ## Run golangci-lint when installed, otherwise gofmt + go vet
 
 .PHONY: tidy
 tidy: ## Tidy go.mod / go.sum
-	cd $(BACKEND) && go mod tidy
+	cd $(SERVER) && go mod tidy
 
 .PHONY: check
 check: build vet lint test ## Everything the definition of done requires
@@ -109,7 +109,7 @@ verify-hypertable: require-db-url ## Prove that candles really is a hypertable
 
 .PHONY: sqlc
 sqlc: ## Regenerate the sqlc query layer from the migrations
-	cd $(BACKEND) && $(SQLC) generate
+	cd $(SERVER) && $(SQLC) generate
 
 # ---------------------------------------------------------------------------
 # Docker

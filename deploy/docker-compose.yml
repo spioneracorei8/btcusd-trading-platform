@@ -35,10 +35,10 @@ services:
 
   api:
     build:
-      context: ../backend
+      context: ../server
       dockerfile: Dockerfile
       args:
-        CMD: api
+        CMD_PATH: .
     environment:
       APP_ENV: ${APP_ENV:-dev}
       LOG_LEVEL: ${LOG_LEVEL:-info}
@@ -63,10 +63,10 @@ services:
 
   collector:
     build:
-      context: ../backend
+      context: ../server
       dockerfile: Dockerfile
       args:
-        CMD: collector
+        CMD_PATH: ./collector
     environment:
       APP_ENV: ${APP_ENV:-dev}
       LOG_LEVEL: ${LOG_LEVEL:-info}

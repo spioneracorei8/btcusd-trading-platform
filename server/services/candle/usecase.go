@@ -1,0 +1,21 @@
+package candle
+
+import (
+	"context"
+
+	"github.com/spioneracorei8/btcusd-trading-platform/server/constants"
+	"github.com/spioneracorei8/btcusd-trading-platform/server/models"
+)
+
+// CandleUsecase holds the rules that apply to candles regardless of where
+// they are stored.
+//
+// The one rule that exists in phase 01 is the important one: a candle that is
+// still forming must never be persisted, because a flickering bar reaching
+// the strategies would make live signals and backtests disagree.
+type CandleUsecase interface {
+	SaveCandle(ctx context.Context, candle models.Candle) error
+	FetchCandles(ctx context.Context, params FetchCandlesParams) ([]models.Candle, error)
+	FetchLatestCandle(ctx context.Context, symbol string, marketType constants.MarketType, timeframe constants.Timeframe) (models.Candle, error)
+	CountCandles(ctx context.Context, symbol string, marketType constants.MarketType, timeframe constants.Timeframe) (int64, error)
+}
