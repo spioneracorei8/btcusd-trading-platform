@@ -35,9 +35,24 @@ work until the data grew, which is the worst time to discover the problem.
 
 ## Note on verification
 
-The hypertable path could not be executed while this phase was written: the
-development sandbox had no Docker daemon and no TimescaleDB build, only stock
-PostgreSQL 16. Everything else in the migrations was applied to a real
-PostgreSQL 16 and the storage tests were run against it. The two TimescaleDB
-statements (`CREATE EXTENSION` and the `DO` block) remain unexecuted and must be
-confirmed on first real `make migrate-up`.
+The development sandbox has no Docker daemon and no TimescaleDB build, only
+stock PostgreSQL 16, so `CREATE EXTENSION timescaledb` cannot run there.
+
+The `DO` block itself **has** been executed. Stub functions matching both real
+TimescaleDB signatures were defined in a local PostgreSQL 16 and the block was
+run against them twice:
+
+| `by_range` present | branch taken |
+|---|---|
+| yes | `create_hypertable(regclass, by_range(...), if_not_exists, migrate_data)` |
+| no  | `create_hypertable(table, column, chunk_time_interval, if_not_exists, migrate_data)` |
+
+That confirms the PL/pgSQL parses, goose passes it through intact, the branch
+detection works, and both argument lists match the signatures they target.
+What remains unverified is only `CREATE EXTENSION` itself and the real
+extension's behaviour, which `TestCandlesIsHypertable` and
+`make verify-hypertable` check on first deployment.
+
+The `by_range` lookup is deliberately **not** restricted to the `public`
+schema. Pinning it there would silently select the deprecated branch on an
+installation that puts TimescaleDB in another schema.

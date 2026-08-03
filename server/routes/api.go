@@ -18,10 +18,16 @@ type route struct {
 }
 
 // NewRoute builds the router wrapper and installs the shared middleware.
+//
+// Order matters. RequestLogger must sit outside Recoverer: it writes its
+// record after the inner handler returns, so if Recoverer were the outer one
+// a panicking request would unwind past the logger and never be logged at
+// all. With this order the recovered 500 is still counted and logged like any
+// other response.
 func NewRoute(router chi.Router, middl middleware.MyMiddleware) *route {
 	router.Use(middl.RequestID)
-	router.Use(middl.Recoverer)
 	router.Use(middl.RequestLogger)
+	router.Use(middl.Recoverer)
 
 	return &route{
 		router:     router,

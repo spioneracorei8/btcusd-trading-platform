@@ -60,3 +60,43 @@ func TestInsertSignalRejectsDuplicates(t *testing.T) {
 		t.Fatalf("second InsertSignal() returned %v, want ErrDuplicateSignal", err)
 	}
 }
+
+// TestInsertSignalSeparatesMarketTypes guards the other half of that rule:
+// BTCUSDT spot and BTCUSDT futures are different instruments, so the same bar
+// on each must produce two signals rather than one collision.
+func TestInsertSignalSeparatesMarketTypes(t *testing.T) {
+	pool := testhelper.NewTestPool(t)
+	const symbol = "TESTMARKETSPLIT"
+	testhelper.CleanupSymbol(t, pool, symbol)
+
+	repo := _signal_repo.NewSignalRepoImpl(pool)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	spot := models.Signal{
+		Symbol:          symbol,
+		MarketType:      constants.MarketTypeSpot,
+		Timeframe:       constants.Timeframe5m,
+		SignalTime:      time.Date(2026, 8, 1, 0, 5, 0, 0, time.UTC),
+		Direction:       constants.DirectionLong,
+		Strength:        decimal.RequireFromString("50.00"),
+		StrategyName:    "phase01-placeholder",
+		StrategyVersion: "v0",
+	}
+	if _, err := repo.InsertSignal(ctx, spot); err != nil {
+		t.Fatalf("spot InsertSignal() returned error: %v", err)
+	}
+
+	futures := spot
+	futures.MarketType = constants.MarketTypeFutures
+	stored, err := repo.InsertSignal(ctx, futures)
+	if err != nil {
+		if errors.Is(err, constants.ErrDuplicateSignal) {
+			t.Fatal("a futures signal was rejected as a duplicate of the spot signal for the same bar")
+		}
+		t.Fatalf("futures InsertSignal() returned error: %v", err)
+	}
+	if stored.MarketType != constants.MarketTypeFutures {
+		t.Errorf("MarketType = %q, want %q", stored.MarketType, constants.MarketTypeFutures)
+	}
+}

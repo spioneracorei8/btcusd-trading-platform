@@ -24,15 +24,9 @@ import (
 	"github.com/spioneracorei8/btcusd-trading-platform/server/middleware"
 	"github.com/spioneracorei8/btcusd-trading-platform/server/routes"
 
-	_candle_repo "github.com/spioneracorei8/btcusd-trading-platform/server/services/candle/repository"
-	_candle_us "github.com/spioneracorei8/btcusd-trading-platform/server/services/candle/usecase"
-	_datagap_repo "github.com/spioneracorei8/btcusd-trading-platform/server/services/datagap/repository"
-	_datagap_us "github.com/spioneracorei8/btcusd-trading-platform/server/services/datagap/usecase"
 	_health_handler "github.com/spioneracorei8/btcusd-trading-platform/server/services/health/handler"
 	_health_repo "github.com/spioneracorei8/btcusd-trading-platform/server/services/health/repository"
 	_health_us "github.com/spioneracorei8/btcusd-trading-platform/server/services/health/usecase"
-	_signal_repo "github.com/spioneracorei8/btcusd-trading-platform/server/services/signal/repository"
-	_signal_us "github.com/spioneracorei8/btcusd-trading-platform/server/services/signal/usecase"
 )
 
 // Server holds everything the API process needs to start.
@@ -65,20 +59,16 @@ func (s *Server) Start() error {
 	//==============================================================
 	// # REPOSITORIES
 	//==============================================================
+	// The API serves health only in phase 01. The candle, signal and data gap
+	// repositories exist and are tested, but nothing here consumes them yet:
+	// the collector wires them in phase 02. Constructing them now and throwing
+	// the result away would be dead code, not architecture.
 	healthRepo := _health_repo.NewHealthRepoImpl(pool)
-	candleRepo := _candle_repo.NewCandleRepoImpl(pool)
-	signalRepo := _signal_repo.NewSignalRepoImpl(pool)
-	dataGapRepo := _datagap_repo.NewDataGapRepoImpl(pool)
 
 	//==============================================================
 	// # USECASES
 	//==============================================================
 	healthUs := _health_us.NewHealthUsecaseImpl(healthRepo)
-	// Wired now so the layering is real rather than aspirational; the
-	// collector starts feeding them in phase 02.
-	_ = _candle_us.NewCandleUsecaseImpl(candleRepo)
-	_ = _signal_us.NewSignalUsecaseImpl(signalRepo)
-	_ = _datagap_us.NewDataGapUsecaseImpl(dataGapRepo)
 
 	//==============================================================
 	// # HANDLERS

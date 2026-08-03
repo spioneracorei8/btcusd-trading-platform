@@ -8,6 +8,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/shopspring/decimal"
+
+	"github.com/spioneracorei8/btcusd-trading-platform/server/helper"
 )
 
 // This file is the only place where database wire types meet model types.
@@ -70,7 +72,7 @@ func NullDecimalFromNumeric(n pgtype.Numeric) (decimal.NullDecimal, error) {
 // TimestamptzFromTime converts a Go time into the pgtype value pgx writes.
 // The value is normalised to UTC because every timestamp in this system is UTC.
 func TimestamptzFromTime(t time.Time) pgtype.Timestamptz {
-	return pgtype.Timestamptz{Time: t.UTC(), Valid: true}
+	return pgtype.Timestamptz{Time: helper.UTC(t), Valid: true}
 }
 
 // TimeFromTimestamptz converts a timestamptz column into a UTC time.
@@ -78,7 +80,7 @@ func TimeFromTimestamptz(ts pgtype.Timestamptz) time.Time {
 	if !ts.Valid {
 		return time.Time{}
 	}
-	return ts.Time.UTC()
+	return helper.UTC(ts.Time)
 }
 
 // TimePtrFromTimestamptz converts a nullable timestamptz column; SQL NULL
@@ -87,7 +89,7 @@ func TimePtrFromTimestamptz(ts pgtype.Timestamptz) *time.Time {
 	if !ts.Valid {
 		return nil
 	}
-	t := ts.Time.UTC()
+	t := helper.UTC(ts.Time)
 	return &t
 }
 

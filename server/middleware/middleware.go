@@ -38,15 +38,29 @@ func (m MyMiddleware) RequestLogger(next http.Handler) http.Handler {
 
 		next.ServeHTTP(ww, r)
 
-		m.logger.LogAttrs(r.Context(), levelForStatus(ww.Status()), "http request",
+		status := responseStatus(ww)
+
+		m.logger.LogAttrs(r.Context(), levelForStatus(status), "http request",
 			slog.String("method", r.Method),
 			slog.String("path", r.URL.Path),
-			slog.Int("status", ww.Status()),
+			slog.Int("status", status),
 			slog.Duration("duration", time.Since(start)),
 			slog.String("request_id", middleware.GetReqID(r.Context())),
 			slog.Int("bytes", ww.BytesWritten()),
 		)
 	})
+}
+
+// responseStatus reports the status the client actually received.
+//
+// The wrapper only records a code once something calls WriteHeader. A handler
+// that returns without writing still sends 200, so reporting the raw 0 would
+// put a status the client never saw into the log.
+func responseStatus(ww middleware.WrapResponseWriter) int {
+	if status := ww.Status(); status != 0 {
+		return status
+	}
+	return http.StatusOK
 }
 
 // levelForStatus keeps ordinary traffic at info level while making failures

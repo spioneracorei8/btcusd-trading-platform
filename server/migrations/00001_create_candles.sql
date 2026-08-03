@@ -42,12 +42,10 @@ BEGIN
         RAISE EXCEPTION 'timescaledb extension is required to create the candles hypertable';
     END IF;
 
-    IF EXISTS (
-        SELECT 1
-        FROM pg_proc p
-        JOIN pg_namespace n ON n.oid = p.pronamespace
-        WHERE p.proname = 'by_range' AND n.nspname = 'public'
-    ) THEN
+    -- Deliberately not restricted to the public schema: TimescaleDB can be
+    -- installed elsewhere, and pinning the lookup to public would silently
+    -- pick the deprecated branch on such an installation.
+    IF EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'by_range') THEN
         PERFORM create_hypertable(
             'candles'::regclass,
             by_range('open_time', INTERVAL '7 days'),
