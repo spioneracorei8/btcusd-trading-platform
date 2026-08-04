@@ -25,6 +25,18 @@ type Candle struct {
 	CreatedAt   pgtype.Timestamptz
 }
 
+type CollectorStatus struct {
+	Symbol             string
+	MarketType         string
+	WsConnected        bool
+	LastConnectedAt    pgtype.Timestamptz
+	LastDisconnectedAt pgtype.Timestamptz
+	LastDisconnectNote string
+	ReconnectCount     int32
+	StartedAt          pgtype.Timestamptz
+	UpdatedAt          pgtype.Timestamptz
+}
+
 type DataGap struct {
 	ID         int64
 	Symbol     string

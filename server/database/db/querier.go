@@ -16,8 +16,11 @@ type Querier interface {
 	// inclusive on open_time so a caller asking for a window gets exactly the
 	// bars whose open falls inside it.
 	GetCandles(ctx context.Context, arg GetCandlesParams) ([]Candle, error)
+	GetCollectorStatus(ctx context.Context, arg GetCollectorStatusParams) (CollectorStatus, error)
 	// Most recent stored candle, used to work out where a backfill must resume.
 	GetLatestCandle(ctx context.Context, arg GetLatestCandleParams) (Candle, error)
+	// Called on every heartbeat tick. Deliberately leaves started_at untouched.
+	HeartbeatCollector(ctx context.Context, arg HeartbeatCollectorParams) error
 	// Records a detected hole in the candle series so backfill can chase it and
 	// so a backtest can refuse to trust the period.
 	InsertGap(ctx context.Context, arg InsertGapParams) (DataGap, error)
@@ -25,6 +28,17 @@ type Querier interface {
 	// (strategy_name, strategy_version, symbol, timeframe, signal_time) makes a
 	// duplicate insert fail loudly rather than notify the owner twice.
 	InsertSignal(ctx context.Context, arg InsertSignalParams) (Signal, error)
+	// Called when the stream comes up.
+	MarkCollectorConnected(ctx context.Context, arg MarkCollectorConnectedParams) error
+	// Called when the stream goes down, with the reason kept for later.
+	MarkCollectorDisconnected(ctx context.Context, arg MarkCollectorDisconnectedParams) error
+	// Called once when the collector process starts.
+	//
+	// This is the only statement that writes started_at, so a heartbeat cannot
+	// disguise a crash loop as continuous uptime: a process that keeps restarting
+	// moves started_at forward every time, while one that has been up for days
+	// leaves it alone.
+	RegisterCollectorStart(ctx context.Context, arg RegisterCollectorStartParams) (CollectorStatus, error)
 	// Idempotent write of one closed candle. Re-delivering the same bar (after a
 	// reconnect or a REST backfill) updates it in place instead of duplicating it.
 	UpsertCandle(ctx context.Context, arg UpsertCandleParams) error
