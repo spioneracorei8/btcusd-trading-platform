@@ -142,6 +142,9 @@ btcusd-trading-platform/
 - `services/<domain>/*.go` (ไฟล์ interface) import ได้แค่ `models` + `constants`
 - implementation (`handler/`, `usecase/`, `repository/`) import interface ของ service ตัวเอง ไม่ import ของ layer อื่นข้ามชั้น
 - **usecase ห้ามรู้จัก pgx/SQL** — คุยผ่าน repository interface เท่านั้น
+- **client ที่ยิงออกนอก (Binance REST/WS) ก็คือ repository** ไม่ใช่ layer ใหม่
+  อยู่ที่ `services/<domain>/repository/<vendor>/` เช่น `services/market/repository/binance/`
+  DTO ของ vendor ห้ามหลุดออกนอก package นั้น — แปลงเป็น `models.*` ที่ขอบ package
 - `server/server.go` เป็นที่เดียวที่รู้ว่า implementation ตัวไหนมาต่อกับ interface ตัวไหน
 
 ทิศทาง dependency: `main → server → routes → handler → usecase → repository → database` ห้ามย้อนกลับ

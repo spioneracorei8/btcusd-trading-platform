@@ -1,5 +1,9 @@
 # Phase 01 — Skeleton, Config, Docker, Database
 
+> **อัปเดต 2026-08-03:** phase นี้เสร็จและ merge เข้า main แล้ว จากนั้นโครงสร้างถูกย้ายไป
+> clean architecture และเปลี่ยน `backend/` เป็น `server/` — path ในเอกสารนี้อัปเดตตามแล้ว
+> โครงสร้างจริงดูที่ `CLAUDE.md` section 5 และเหตุผลที่ `docs/decisions/0005-clean-architecture-layout.md`
+
 > อ่าน `CLAUDE.md` ให้จบก่อนเริ่ม
 > Phase นี้ **ยังไม่ต้องต่อ Binance และยังไม่ต้องคำนวณ indicator**
 > เป้าหมายคือได้โครงที่รันได้จริงและมี schema ที่ถูกต้อง
@@ -15,13 +19,13 @@
 ## 1. โครงสร้างโปรเจกต์
 
 สร้างตาม section 5 ของ `CLAUDE.md`
-- `go mod init` module name: `github.com/<user>/trading-platform/backend` (ถามชื่อ user ก่อน)
-- สร้าง `cmd/api`, `cmd/collector`, `cmd/backtest` โดย collector และ backtest ยังเป็น stub ที่ log แล้วออก
+- `go mod init` module name: `github.com/spioneracorei8/btcusd-trading-platform/server`
+- entry point: `main.go` (API), `collector/main.go`, `backtest/main.go` โดย collector และ backtest ยังเป็น stub ที่ log แล้วออก
 - `.gitignore`, `.env.example`, `Makefile` (target: `build`, `test`, `lint`, `migrate-up`, `migrate-down`, `sqlc`)
 
 ## 2. Config
 
-`internal/config`
+`config/env.go`
 - โหลดจาก environment variable ล้วน (12-factor) ไม่มีไฟล์ config
 - struct แยกกลุ่ม: `App`, `Database`, `Market`, `Notify`
 - ต้อง validate ตอน start ถ้าค่าจำเป็นหาย ให้ fail ทันทีพร้อมบอกชื่อ env ที่ขาด
@@ -84,13 +88,15 @@
 
 ## 5. Storage layer
 
+`database/` (pool, convert, sqlc) + `services/<domain>/repository/`
+
 - ใช้ pgx v5 pool + sqlc
 - เขียน query เริ่มต้น: `UpsertCandle`, `GetCandles(symbol, timeframe, from, to)`, `GetLatestCandle`, `InsertSignal`, `InsertGap`
 - `UpsertCandle` ต้องเป็น `ON CONFLICT ... DO UPDATE`
 
 ## 6. HTTP server
 
-`cmd/api` — ใช้ `net/http` + `chi` (chi อนุญาตให้ใช้ได้)
+`main.go` + `server/server.go` + `routes/api.go` + `services/health/` — ใช้ `net/http` + `chi` (chi อนุญาตให้ใช้ได้)
 - `GET /health` → 200 `{"status":"ok"}`
 - `GET /ready` → เช็ค DB ping ด้วย ถ้าไม่ผ่านคืน 503
 - graceful shutdown บน SIGTERM/SIGINT timeout 10 วินาที
