@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/spioneracorei8/btcusd-trading-platform/server/config"
 	"github.com/spioneracorei8/btcusd-trading-platform/server/constants"
@@ -80,6 +81,26 @@ func TestLoadFromDefaults(t *testing.T) {
 	if cfg.Notify.Enabled {
 		t.Error("Notify.Enabled = true, want false by default")
 	}
+
+	if cfg.Market.RESTBaseURL != constants.DefaultBinanceRESTBaseURL {
+		t.Errorf("Market.RESTBaseURL = %q, want %q", cfg.Market.RESTBaseURL, constants.DefaultBinanceRESTBaseURL)
+	}
+	if cfg.Market.WSBaseURL != constants.DefaultBinanceWSBaseURL {
+		t.Errorf("Market.WSBaseURL = %q, want %q", cfg.Market.WSBaseURL, constants.DefaultBinanceWSBaseURL)
+	}
+	wantFrom := time.Date(2023, 1, 1, 0, 0, 0, 0, time.UTC)
+	if !cfg.Market.BackfillFrom.Equal(wantFrom) {
+		t.Errorf("Market.BackfillFrom = %s, want %s", cfg.Market.BackfillFrom, wantFrom)
+	}
+	if cfg.Market.BackfillFrom.Location() != time.UTC {
+		t.Errorf("Market.BackfillFrom location = %v, want UTC", cfg.Market.BackfillFrom.Location())
+	}
+	if cfg.Market.GapcheckInterval != constants.DefaultGapcheckInterval {
+		t.Errorf("Market.GapcheckInterval = %s, want %s", cfg.Market.GapcheckInterval, constants.DefaultGapcheckInterval)
+	}
+	if cfg.Market.HeartbeatInterval != constants.DefaultHeartbeatInterval {
+		t.Errorf("Market.HeartbeatInterval = %s, want %s", cfg.Market.HeartbeatInterval, constants.DefaultHeartbeatInterval)
+	}
 }
 
 func TestLoadFromOverrides(t *testing.T) {
@@ -95,6 +116,8 @@ func TestLoadFromOverrides(t *testing.T) {
 	e["NOTIFY_ENABLED"] = "true"
 	e["FCM_PROJECT_ID"] = "btc-signals"
 	e["FCM_CREDENTIALS_FILE"] = "/run/secrets/fcm.json"
+	e["MARKET_GAPCHECK_INTERVAL"] = "30m"
+	e["BINANCE_REST_BASE_URL"] = "https://testnet.binance.vision/"
 
 	cfg, err := config.LoadFrom(env(e))
 	if err != nil {
@@ -121,6 +144,13 @@ func TestLoadFromOverrides(t *testing.T) {
 	}
 	if !cfg.Notify.Enabled || cfg.Notify.FCMProjectId != "btc-signals" {
 		t.Errorf("Notify = %+v, want enabled with project id", cfg.Notify)
+	}
+	if cfg.Market.GapcheckInterval != 30*time.Minute {
+		t.Errorf("Market.GapcheckInterval = %s, want 30m", cfg.Market.GapcheckInterval)
+	}
+	// A trailing slash must not survive, or joined paths grow a double slash.
+	if cfg.Market.RESTBaseURL != "https://testnet.binance.vision" {
+		t.Errorf("Market.RESTBaseURL = %q", cfg.Market.RESTBaseURL)
 	}
 }
 
@@ -189,6 +219,14 @@ func TestLoadFromInvalidValues(t *testing.T) {
 		{name: "fee too large", key: "FEE_TAKER_PCT", value: "100", wantKey: "FEE_TAKER_PCT"},
 		{name: "slippage negative", key: "SLIPPAGE_TICKS", value: "-1", wantKey: "SLIPPAGE_TICKS"},
 		{name: "notify enabled not a bool", key: "NOTIFY_ENABLED", value: "yes please", wantKey: "NOTIFY_ENABLED"},
+		{name: "rest url wrong scheme", key: "BINANCE_REST_BASE_URL", value: "ws://api.binance.com", wantKey: "BINANCE_REST_BASE_URL"},
+		{name: "rest url no host", key: "BINANCE_REST_BASE_URL", value: "https://", wantKey: "BINANCE_REST_BASE_URL"},
+		{name: "ws url wrong scheme", key: "BINANCE_WS_BASE_URL", value: "https://stream.binance.com", wantKey: "BINANCE_WS_BASE_URL"},
+		{name: "backfill not rfc3339", key: "MARKET_BACKFILL_FROM", value: "2023-01-01", wantKey: "MARKET_BACKFILL_FROM"},
+		{name: "backfill in the future", key: "MARKET_BACKFILL_FROM", value: "2999-01-01T00:00:00Z", wantKey: "MARKET_BACKFILL_FROM"},
+		{name: "gapcheck not a duration", key: "MARKET_GAPCHECK_INTERVAL", value: "15", wantKey: "MARKET_GAPCHECK_INTERVAL"},
+		{name: "gapcheck too short", key: "MARKET_GAPCHECK_INTERVAL", value: "1s", wantKey: "MARKET_GAPCHECK_INTERVAL"},
+		{name: "heartbeat too long", key: "COLLECTOR_HEARTBEAT_INTERVAL", value: "10m", wantKey: "COLLECTOR_HEARTBEAT_INTERVAL"},
 	}
 
 	for _, tt := range tests {

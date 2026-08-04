@@ -16,6 +16,25 @@ var (
 	ErrUnclosedCandle = errors.New("candle is not closed")
 )
 
+// Sentinel errors returned by the market data client.
+var (
+	// ErrRateLimited reports an HTTP 429 or 418 from Binance. It is never
+	// retried immediately; the caller must back off.
+	ErrRateLimited = errors.New("rate limited by the exchange")
+
+	// ErrStreamStalled reports that no message arrived within
+	// StreamStallTimeout. The socket may still look open.
+	ErrStreamStalled = errors.New("market data stream stalled")
+
+	// ErrStreamClosed reports an ordinary disconnect, including the 24 hour
+	// cycle Binance applies to every connection. It is expected, not a fault.
+	ErrStreamClosed = errors.New("market data stream closed")
+
+	// ErrUnexpectedPayload reports a message that does not match the shape the
+	// client expects.
+	ErrUnexpectedPayload = errors.New("unexpected market data payload")
+)
+
 // Sentinel errors returned while loading configuration.
 var (
 	// ErrMissingEnv reports a required environment variable that is unset or empty.

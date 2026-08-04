@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -55,6 +56,26 @@ type Market struct {
 	FeeTakerPct decimal.Decimal
 	// SlippageTicks is the assumed slippage of a fill, in price ticks.
 	SlippageTicks int
+
+	// RESTBaseURL and WSBaseURL are the exchange endpoints. They are
+	// configuration rather than constants so the futures endpoints can be
+	// swapped in later without touching a single call site.
+	RESTBaseURL string
+	WSBaseURL   string
+
+	// BackfillFrom is how far back history is fetched when a timeframe has no
+	// stored candle at all. Once anything is stored, backfill resumes from the
+	// latest open_time instead and this value is not consulted.
+	BackfillFrom time.Time
+
+	// GapcheckInterval is how often the collector scans for holes in the
+	// candle series.
+	GapcheckInterval time.Duration
+
+	// HeartbeatInterval is how often the collector writes its status row. The
+	// api reads that row to answer /internal/market/status, because the two
+	// run in separate containers and cannot share memory.
+	HeartbeatInterval time.Duration
 }
 
 // Notify holds push notification settings. Phase 01 only carries the values;
@@ -103,6 +124,12 @@ func LoadFrom(lookup helper.LookupFunc) (*Config, error) {
 			Timeframes:    l.timeframes("MARKET_TIMEFRAMES"),
 			FeeTakerPct:   l.feePct("FEE_TAKER_PCT"),
 			SlippageTicks: l.optionalInt("SLIPPAGE_TICKS", constants.DefaultSlippageTicks, 0, 1000),
+
+			RESTBaseURL:       l.baseURL("BINANCE_REST_BASE_URL", constants.DefaultBinanceRESTBaseURL, "https"),
+			WSBaseURL:         l.baseURL("BINANCE_WS_BASE_URL", constants.DefaultBinanceWSBaseURL, "wss"),
+			BackfillFrom:      l.timestamp("MARKET_BACKFILL_FROM", constants.DefaultMarketBackfillFrom),
+			GapcheckInterval:  l.duration("MARKET_GAPCHECK_INTERVAL", constants.DefaultGapcheckInterval, time.Minute, 24*time.Hour),
+			HeartbeatInterval: l.duration("COLLECTOR_HEARTBEAT_INTERVAL", constants.DefaultHeartbeatInterval, time.Second, time.Minute),
 		},
 		Notify: Notify{
 			Enabled:            l.optionalBool("NOTIFY_ENABLED", false),
@@ -293,6 +320,60 @@ func (l *loader) timeframes(key string) []constants.Timeframe {
 		l.invalidf(key, "no timeframe given")
 	}
 	return out
+}
+
+// baseURL validates an endpoint and strips any trailing slash, so call sites
+// can join paths without producing a double slash.
+func (l *loader) baseURL(key, def, wantScheme string) string {
+	raw := l.optionalString(key, def)
+
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		l.invalidf(key, "%q is not a URL: %s", raw, err)
+		return ""
+	}
+	if parsed.Scheme != wantScheme {
+		l.invalidf(key, "%q must use the %s scheme", raw, wantScheme)
+		return ""
+	}
+	if parsed.Host == "" {
+		l.invalidf(key, "%q has no host", raw)
+		return ""
+	}
+	return strings.TrimRight(raw, "/")
+}
+
+// timestamp parses an RFC3339 instant and normalises it to UTC.
+func (l *loader) timestamp(key, def string) time.Time {
+	raw := l.optionalString(key, def)
+
+	t, err := time.Parse(time.RFC3339, raw)
+	if err != nil {
+		l.invalidf(key, "%q is not an RFC3339 timestamp", raw)
+		return time.Time{}
+	}
+	if t.After(time.Now()) {
+		l.invalidf(key, "%s is in the future", raw)
+		return time.Time{}
+	}
+	return helper.UTC(t)
+}
+
+// duration parses a Go duration string and bounds it, so a typo like "15"
+// (which parses as 15ns) cannot turn a 15 minute ticker into a busy loop.
+func (l *loader) duration(key string, def, min, max time.Duration) time.Duration {
+	raw := l.optionalString(key, def.String())
+
+	d, err := time.ParseDuration(raw)
+	if err != nil {
+		l.invalidf(key, "%q is not a duration (want e.g. 15m, 30s)", raw)
+		return def
+	}
+	if d < min || d > max {
+		l.invalidf(key, "%s is outside %s-%s", d, min, max)
+		return def
+	}
+	return d
 }
 
 func (l *loader) feePct(key string) decimal.Decimal {
