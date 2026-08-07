@@ -117,6 +117,19 @@ const (
 	PoolMaxConnIdleTime = 30 * time.Minute
 )
 
+// Indicator warm-up.
+const (
+	// WarmupMultiplier scales an indicator's period into the number of
+	// candles required before it emits.
+	//
+	// EMA and Wilder-smoothed indicators never fully forget their seed, so an
+	// EMA(200) fed exactly 200 candles still carries most of its arbitrary
+	// starting mean. Emitting from there lets a backtest score its earliest
+	// bars against unconverged numbers and report the result as history.
+	// See docs/decisions/0007-indicator-warmup-multiplier.md.
+	WarmupMultiplier = 5
+)
+
 // Health check payload values.
 const (
 	StatusOK          = "ok"
