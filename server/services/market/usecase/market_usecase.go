@@ -77,7 +77,7 @@ func (u *marketUsecase) LatestOpenCandle(timeframe constants.Timeframe) (models.
 // and the bars missed while disconnected are filled before newer ones arrive.
 func (u *marketUsecase) Run(ctx context.Context) error {
 	if _, err := u.status.RegisterStart(ctx, u.cfg.Symbol, u.cfg.MarketType); err != nil {
-		return fmt.Errorf("register collector start: %w", err)
+		return err // the repository already names the operation
 	}
 
 	group, groupCtx := errgroup.WithContext(ctx)

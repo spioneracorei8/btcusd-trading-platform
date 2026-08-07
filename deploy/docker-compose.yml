@@ -33,10 +33,31 @@ services:
       - "127.0.0.1:${POSTGRES_HOST_PORT:-5432}:5432"
     restart: unless-stopped
 
+  # Applies the schema, then exits. Both api and collector wait for it to
+  # finish, so a fresh `compose up` on an empty volume produces a working
+  # stack with no manual step — the collector used to crash on a missing
+  # table instead, which on a VPS is far less obvious than it is locally.
+  #
+  # goose is idempotent, so running this on every startup is safe and intended.
+  migrate:
+    build:
+      context: ../server
+      dockerfile: Dockerfile
+      target: migrate
+    environment:
+      GOOSE_DRIVER: postgres
+      GOOSE_DBSTRING: postgres://${POSTGRES_USER:-trading}:${POSTGRES_PASSWORD:-trading}@postgres:5432/${POSTGRES_DB:-btcusd}?sslmode=disable
+      GOOSE_MIGRATION_DIR: /migrations
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
   api:
     build:
       context: ../server
       dockerfile: Dockerfile
+      target: app
       args:
         CMD_PATH: .
     environment:
@@ -61,6 +82,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     ports:
       # Caddy on the host terminates TLS and proxies to this port.
       - "127.0.0.1:${API_HOST_PORT:-8080}:8080"
@@ -70,6 +93,7 @@ services:
     build:
       context: ../server
       dockerfile: Dockerfile
+      target: app
       args:
         CMD_PATH: ./collector
     environment:
@@ -91,9 +115,9 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-    # Phase 01 collector logs its configuration and exits, so restarting it
-    # would just loop. It becomes a long-running worker in phase 02.
-    restart: "no"
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
 
 volumes:
   pgdata:

@@ -55,7 +55,7 @@ func (s *Server) Start() error {
 		ConnectTimeout: s.Config.Database.ConnectTimeout,
 	})
 	if err != nil {
-		return fmt.Errorf("create database pool: %w", err)
+		return err // database.NewPool already names the operation
 	}
 	defer pool.Close()
 

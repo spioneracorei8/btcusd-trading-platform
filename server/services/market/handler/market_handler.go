@@ -8,8 +8,8 @@ import (
 	"github.com/spioneracorei8/btcusd-trading-platform/server/constants"
 	"github.com/spioneracorei8/btcusd-trading-platform/server/helper"
 	"github.com/spioneracorei8/btcusd-trading-platform/server/models"
-	"github.com/spioneracorei8/btcusd-trading-platform/server/services/market"
 	_health_handler "github.com/spioneracorei8/btcusd-trading-platform/server/services/health/handler"
+	"github.com/spioneracorei8/btcusd-trading-platform/server/services/market"
 )
 
 type marketHandler struct {
@@ -36,7 +36,7 @@ type statusResponse struct {
 	Symbol     string `json:"symbol"`
 	MarketType string `json:"market_type"`
 
-	Collector collectorResponse  `json:"collector"`
+	Collector  collectorResponse   `json:"collector"`
 	Timeframes []timeframeResponse `json:"timeframes"`
 
 	// Stale is the combination worth paging on: connected but not advancing.
@@ -44,8 +44,8 @@ type statusResponse struct {
 }
 
 type collectorResponse struct {
-	Running     bool   `json:"running"`
-	WSConnected bool   `json:"ws_connected"`
+	Running     bool `json:"running"`
+	WSConnected bool `json:"ws_connected"`
 
 	// UptimeSeconds counts from the process start, HeartbeatAgeSeconds from
 	// the last published beat. Together they separate a collector that has

@@ -64,7 +64,7 @@ func run(cfg *config.Config, log *slog.Logger) error {
 		ConnectTimeout: cfg.Database.ConnectTimeout,
 	})
 	if err != nil {
-		return fmt.Errorf("create database pool: %w", err)
+		return err // database.NewPool already names the operation
 	}
 	defer pool.Close()
 
