@@ -11,6 +11,30 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const countUnfilledGaps = `-- name: CountUnfilledGaps :one
+SELECT count(*) FROM data_gaps
+WHERE symbol = $1
+  AND market_type = $2
+  AND timeframe = $3
+  AND filled_at IS NULL
+`
+
+type CountUnfilledGapsParams struct {
+	Symbol     string
+	MarketType string
+	Timeframe  string
+}
+
+// Every unfilled gap for a timeframe, including those that have exhausted
+// their retries: the status endpoint reports what is missing, not what is
+// still being chased.
+func (q *Queries) CountUnfilledGaps(ctx context.Context, arg CountUnfilledGapsParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countUnfilledGaps, arg.Symbol, arg.MarketType, arg.Timeframe)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const insertGap = `-- name: InsertGap :one
 INSERT INTO data_gaps (
     symbol, market_type, timeframe, gap_start, gap_end, note
@@ -18,7 +42,9 @@ INSERT INTO data_gaps (
     $1, $2, $3,
     $4, $5, $6
 )
-RETURNING id, symbol, market_type, timeframe, gap_start, gap_end, detected_at, filled_at, note
+ON CONFLICT (symbol, market_type, timeframe, gap_start, gap_end) DO UPDATE SET
+    symbol = EXCLUDED.symbol
+RETURNING id, symbol, market_type, timeframe, gap_start, gap_end, detected_at, filled_at, note, fill_attempts
 `
 
 type InsertGapParams struct {
@@ -32,6 +58,11 @@ type InsertGapParams struct {
 
 // Records a detected hole in the candle series so backfill can chase it and
 // so a backtest can refuse to trust the period.
+//
+// Detection runs on a ticker and re-finds an unfilled gap on every pass, so
+// this is an upsert: a repeated scan must not grow a duplicate row. The
+// existing row is returned untouched, preserving detected_at and the attempt
+// count.
 func (q *Queries) InsertGap(ctx context.Context, arg InsertGapParams) (DataGap, error) {
 	row := q.db.QueryRow(ctx, insertGap,
 		arg.Symbol,
@@ -52,6 +83,107 @@ func (q *Queries) InsertGap(ctx context.Context, arg InsertGapParams) (DataGap, 
 		&i.DetectedAt,
 		&i.FilledAt,
 		&i.Note,
+		&i.FillAttempts,
+	)
+	return i, err
+}
+
+const listUnfilledGaps = `-- name: ListUnfilledGaps :many
+SELECT id, symbol, market_type, timeframe, gap_start, gap_end, detected_at, filled_at, note, fill_attempts FROM data_gaps
+WHERE symbol = $1
+  AND market_type = $2
+  AND timeframe = $3
+  AND filled_at IS NULL
+  AND fill_attempts < $4::int
+ORDER BY gap_start
+`
+
+type ListUnfilledGapsParams struct {
+	Symbol      string
+	MarketType  string
+	Timeframe   string
+	MaxAttempts int32
+}
+
+// Gaps still awaiting a successful backfill, oldest first, excluding those
+// whose retry budget is spent.
+func (q *Queries) ListUnfilledGaps(ctx context.Context, arg ListUnfilledGapsParams) ([]DataGap, error) {
+	rows, err := q.db.Query(ctx, listUnfilledGaps,
+		arg.Symbol,
+		arg.MarketType,
+		arg.Timeframe,
+		arg.MaxAttempts,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []DataGap{}
+	for rows.Next() {
+		var i DataGap
+		if err := rows.Scan(
+			&i.ID,
+			&i.Symbol,
+			&i.MarketType,
+			&i.Timeframe,
+			&i.GapStart,
+			&i.GapEnd,
+			&i.DetectedAt,
+			&i.FilledAt,
+			&i.Note,
+			&i.FillAttempts,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const markGapFilled = `-- name: MarkGapFilled :exec
+UPDATE data_gaps SET
+    filled_at = now()
+WHERE id = $1
+`
+
+// Called once a range has been backfilled successfully.
+func (q *Queries) MarkGapFilled(ctx context.Context, id int64) error {
+	_, err := q.db.Exec(ctx, markGapFilled, id)
+	return err
+}
+
+const recordGapFillAttempt = `-- name: RecordGapFillAttempt :one
+UPDATE data_gaps SET
+    fill_attempts = fill_attempts + 1,
+    note          = $1
+WHERE id = $2
+RETURNING id, symbol, market_type, timeframe, gap_start, gap_end, detected_at, filled_at, note, fill_attempts
+`
+
+type RecordGapFillAttemptParams struct {
+	Note string
+	ID   int64
+}
+
+// Counts one failed attempt and records why. Returns the updated row so the
+// caller can see whether the retry budget is spent.
+func (q *Queries) RecordGapFillAttempt(ctx context.Context, arg RecordGapFillAttemptParams) (DataGap, error) {
+	row := q.db.QueryRow(ctx, recordGapFillAttempt, arg.Note, arg.ID)
+	var i DataGap
+	err := row.Scan(
+		&i.ID,
+		&i.Symbol,
+		&i.MarketType,
+		&i.Timeframe,
+		&i.GapStart,
+		&i.GapEnd,
+		&i.DetectedAt,
+		&i.FilledAt,
+		&i.Note,
+		&i.FillAttempts,
 	)
 	return i, err
 }

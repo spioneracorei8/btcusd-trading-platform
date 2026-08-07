@@ -27,5 +27,10 @@ type DataGap struct {
 	// FilledAt is nil until the gap has been backfilled successfully.
 	FilledAt *time.Time
 
+	// FillAttempts counts failed backfills. Past a bound the gap is left
+	// alone: some ranges genuinely do not exist, and retrying those for ever
+	// hides the ones that are actually recoverable.
+	FillAttempts int32
+
 	Note string
 }

@@ -158,3 +158,107 @@ func toCandleModel(row db.Candle) (models.Candle, error) {
 	}
 	return c, nil
 }
+
+// UpsertCandles writes many candles using one batched round trip per chunk.
+//
+// Backfilling three years of 1m candles is roughly 1.5 million rows; a
+// round trip each would take hours and hammer the database for no reason.
+func (r *candleRepository) UpsertCandles(ctx context.Context, candles []models.Candle) error {
+	for start := 0; start < len(candles); start += constants.UpsertBatchSize {
+		end := min(start+constants.UpsertBatchSize, len(candles))
+
+		if err := r.upsertChunk(ctx, candles[start:end]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// upsertChunk sends one batch and reports the first failure.
+func (r *candleRepository) upsertChunk(ctx context.Context, chunk []models.Candle) error {
+	params := make([]db.BatchUpsertCandleParams, 0, len(chunk))
+	for _, c := range chunk {
+		params = append(params, db.BatchUpsertCandleParams{
+			Symbol:      c.Symbol,
+			MarketType:  c.MarketType.String(),
+			Timeframe:   c.Timeframe.String(),
+			OpenTime:    database.TimestamptzFromTime(c.OpenTime),
+			CloseTime:   database.TimestamptzFromTime(c.CloseTime),
+			Open:        database.NumericFromDecimal(c.Open),
+			High:        database.NumericFromDecimal(c.High),
+			Low:         database.NumericFromDecimal(c.Low),
+			Close:       database.NumericFromDecimal(c.Close),
+			Volume:      database.NumericFromDecimal(c.Volume),
+			QuoteVolume: database.NumericFromDecimal(c.QuoteVolume),
+			TradeCount:  c.TradeCount,
+			IsClosed:    c.IsClosed,
+		})
+	}
+
+	results := r.queries.BatchUpsertCandle(ctx, params)
+
+	// Collect the first error rather than the last: later failures are
+	// usually consequences of the first.
+	var firstErr error
+	results.Exec(func(_ int, err error) {
+		if err != nil && firstErr == nil {
+			firstErr = err
+		}
+	})
+	if closeErr := results.Close(); closeErr != nil && firstErr == nil {
+		firstErr = closeErr
+	}
+
+	if firstErr != nil {
+		return fmt.Errorf("batch upsert %d candles: %w", len(chunk), firstErr)
+	}
+	return nil
+}
+
+// FindGaps returns the missing ranges in the stored sequence.
+func (r *candleRepository) FindGaps(ctx context.Context, symbol string, marketType constants.MarketType, timeframe constants.Timeframe) ([]candle.Gap, error) {
+	interval, err := database.IntervalFromDuration(timeframe.Duration())
+	if err != nil {
+		return nil, fmt.Errorf("find gaps: %w", err)
+	}
+
+	rows, err := r.queries.FindCandleGaps(ctx, db.FindCandleGapsParams{
+		Symbol:     symbol,
+		MarketType: marketType.String(),
+		Timeframe:  timeframe.String(),
+		Interval:   interval,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("find gaps: %w", err)
+	}
+
+	gaps := make([]candle.Gap, 0, len(rows))
+	for _, row := range rows {
+		gaps = append(gaps, candle.Gap{
+			Start: database.TimeFromTimestamptz(row.GapStart),
+			End:   database.TimeFromTimestamptz(row.GapEnd),
+		})
+	}
+	return gaps, nil
+}
+
+// FetchEarliestCandle returns the oldest stored candle for a series.
+func (r *candleRepository) FetchEarliestCandle(ctx context.Context, symbol string, marketType constants.MarketType, timeframe constants.Timeframe) (models.Candle, error) {
+	row, err := r.queries.GetEarliestCandle(ctx, db.GetEarliestCandleParams{
+		Symbol:     symbol,
+		MarketType: marketType.String(),
+		Timeframe:  timeframe.String(),
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return models.Candle{}, constants.ErrNotFound
+	}
+	if err != nil {
+		return models.Candle{}, fmt.Errorf("fetch earliest candle: %w", err)
+	}
+
+	c, err := toCandleModel(row)
+	if err != nil {
+		return models.Candle{}, fmt.Errorf("fetch earliest candle: %w", err)
+	}
+	return c, nil
+}

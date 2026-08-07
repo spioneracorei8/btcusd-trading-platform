@@ -9,29 +9,65 @@ import (
 )
 
 type Querier interface {
+	// The batched form of UpsertCandle, used by backfill.
+	//
+	// pgx sends the whole batch in one round trip, so a three year backfill costs
+	// thousands of round trips rather than millions. The conflict clause is
+	// identical to the single-row version: re-running a backfill over data that is
+	// already stored must change nothing.
+	BatchUpsertCandle(ctx context.Context, arg []BatchUpsertCandleParams) *BatchUpsertCandleBatchResults
 	// Row count for a symbol/market/timeframe; used by tests to prove that
 	// repeating an upsert does not create a second row.
 	CountCandles(ctx context.Context, arg CountCandlesParams) (int64, error)
+	// Every unfilled gap for a timeframe, including those that have exhausted
+	// their retries: the status endpoint reports what is missing, not what is
+	// still being chased.
+	CountUnfilledGaps(ctx context.Context, arg CountUnfilledGapsParams) (int64, error)
+	// Holes in the expected sequence, found with a window function.
+	//
+	// The diff is computed in the database on purpose: pulling three years of 1m
+	// candles into Go to difference them would move hundreds of megabytes to
+	// discover a handful of gaps.
+	//
+	// gap_start is the open time of the first MISSING candle and gap_end the open
+	// time of the first candle present again, which is the convention
+	// models.DataGap documents.
+	FindCandleGaps(ctx context.Context, arg FindCandleGapsParams) ([]FindCandleGapsRow, error)
 	// Closed candles in [from_time, to_time], oldest first. The bounds are
 	// inclusive on open_time so a caller asking for a window gets exactly the
 	// bars whose open falls inside it.
 	GetCandles(ctx context.Context, arg GetCandlesParams) ([]Candle, error)
 	GetCollectorStatus(ctx context.Context, arg GetCollectorStatusParams) (CollectorStatus, error)
+	// Oldest stored candle for a series, which bounds the expected sequence.
+	GetEarliestCandle(ctx context.Context, arg GetEarliestCandleParams) (Candle, error)
 	// Most recent stored candle, used to work out where a backfill must resume.
 	GetLatestCandle(ctx context.Context, arg GetLatestCandleParams) (Candle, error)
 	// Called on every heartbeat tick. Deliberately leaves started_at untouched.
 	HeartbeatCollector(ctx context.Context, arg HeartbeatCollectorParams) error
 	// Records a detected hole in the candle series so backfill can chase it and
 	// so a backtest can refuse to trust the period.
+	//
+	// Detection runs on a ticker and re-finds an unfilled gap on every pass, so
+	// this is an upsert: a repeated scan must not grow a duplicate row. The
+	// existing row is returned untouched, preserving detected_at and the attempt
+	// count.
 	InsertGap(ctx context.Context, arg InsertGapParams) (DataGap, error)
 	// Records one strategy decision. The unique constraint on
 	// (strategy_name, strategy_version, symbol, timeframe, signal_time) makes a
 	// duplicate insert fail loudly rather than notify the owner twice.
 	InsertSignal(ctx context.Context, arg InsertSignalParams) (Signal, error)
+	// Gaps still awaiting a successful backfill, oldest first, excluding those
+	// whose retry budget is spent.
+	ListUnfilledGaps(ctx context.Context, arg ListUnfilledGapsParams) ([]DataGap, error)
 	// Called when the stream comes up.
 	MarkCollectorConnected(ctx context.Context, arg MarkCollectorConnectedParams) error
 	// Called when the stream goes down, with the reason kept for later.
 	MarkCollectorDisconnected(ctx context.Context, arg MarkCollectorDisconnectedParams) error
+	// Called once a range has been backfilled successfully.
+	MarkGapFilled(ctx context.Context, id int64) error
+	// Counts one failed attempt and records why. Returns the updated row so the
+	// caller can see whether the retry budget is spent.
+	RecordGapFillAttempt(ctx context.Context, arg RecordGapFillAttemptParams) (DataGap, error)
 	// Called once when the collector process starts.
 	//
 	// This is the only statement that writes started_at, so a heartbeat cannot

@@ -36,6 +36,19 @@ func (s *spyCandleRepository) CountCandles(context.Context, string, constants.Ma
 	return 0, nil
 }
 
+func (s *spyCandleRepository) UpsertCandles(_ context.Context, candles []models.Candle) error {
+	s.upserted = append(s.upserted, candles...)
+	return nil
+}
+
+func (s *spyCandleRepository) FindGaps(context.Context, string, constants.MarketType, constants.Timeframe) ([]candle.Gap, error) {
+	return nil, nil
+}
+
+func (s *spyCandleRepository) FetchEarliestCandle(context.Context, string, constants.MarketType, constants.Timeframe) (models.Candle, error) {
+	return models.Candle{}, constants.ErrNotFound
+}
+
 func testCandle() models.Candle {
 	open := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
 	return models.Candle{
@@ -85,5 +98,57 @@ func TestSaveCandleStoresClosedCandle(t *testing.T) {
 	}
 	if !repo.upserted[0].IsClosed {
 		t.Error("an unclosed candle reached the repository")
+	}
+}
+
+// TestSaveCandlesRejectsBatchWithAnyUnclosedCandle covers the batch path used
+// by backfill. A batch is either wholly trustworthy or wholly rejected: one
+// forming bar buried in a thousand good ones must not slip through because
+// the faster route skipped the check.
+func TestSaveCandlesRejectsBatchWithAnyUnclosedCandle(t *testing.T) {
+	repo := &spyCandleRepository{}
+	us := _candle_us.NewCandleUsecaseImpl(repo)
+
+	batch := make([]models.Candle, 0, 100)
+	for i := range 100 {
+		c := testCandle()
+		c.OpenTime = c.OpenTime.Add(time.Duration(i) * time.Minute)
+		c.CloseTime = c.OpenTime.Add(time.Minute)
+		batch = append(batch, c)
+	}
+	// One forming bar, in the middle where a naive check would miss it.
+	batch[57].IsClosed = false
+
+	err := us.SaveCandles(context.Background(), batch)
+	if !errors.Is(err, constants.ErrUnclosedCandle) {
+		t.Fatalf("SaveCandles() returned %v, want ErrUnclosedCandle", err)
+	}
+	if len(repo.upserted) != 0 {
+		t.Errorf("%d candles were written despite the batch being rejected", len(repo.upserted))
+	}
+}
+
+func TestSaveCandlesStoresWholeBatch(t *testing.T) {
+	repo := &spyCandleRepository{}
+	us := _candle_us.NewCandleUsecaseImpl(repo)
+
+	batch := []models.Candle{testCandle(), testCandle(), testCandle()}
+	if err := us.SaveCandles(context.Background(), batch); err != nil {
+		t.Fatalf("SaveCandles() returned error: %v", err)
+	}
+	if len(repo.upserted) != len(batch) {
+		t.Errorf("wrote %d candles, want %d", len(repo.upserted), len(batch))
+	}
+}
+
+func TestSaveCandlesWithEmptyBatchIsANoop(t *testing.T) {
+	repo := &spyCandleRepository{}
+	us := _candle_us.NewCandleUsecaseImpl(repo)
+
+	if err := us.SaveCandles(context.Background(), nil); err != nil {
+		t.Fatalf("SaveCandles(nil) returned error: %v", err)
+	}
+	if len(repo.upserted) != 0 {
+		t.Errorf("an empty batch wrote %d candles", len(repo.upserted))
 	}
 }

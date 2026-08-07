@@ -15,6 +15,15 @@ import (
 // the strategies would make live signals and backtests disagree.
 type CandleUsecase interface {
 	SaveCandle(ctx context.Context, candle models.Candle) error
+
+	// SaveCandles persists many candles at once, applying the same
+	// closed-candle rule as SaveCandle to every one of them. Backfill goes
+	// through here rather than straight to the repository, so the rule cannot
+	// be bypassed by taking the faster path.
+	SaveCandles(ctx context.Context, candles []models.Candle) error
+
+	// FindGaps reports the missing ranges in a stored series.
+	FindGaps(ctx context.Context, symbol string, marketType constants.MarketType, timeframe constants.Timeframe) ([]Gap, error)
 	FetchCandles(ctx context.Context, params FetchCandlesParams) ([]models.Candle, error)
 	FetchLatestCandle(ctx context.Context, symbol string, marketType constants.MarketType, timeframe constants.Timeframe) (models.Candle, error)
 	CountCandles(ctx context.Context, symbol string, marketType constants.MarketType, timeframe constants.Timeframe) (int64, error)

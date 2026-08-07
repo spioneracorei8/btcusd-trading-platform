@@ -22,11 +22,31 @@ type FetchCandlesParams struct {
 	To   time.Time
 }
 
+// Gap is a hole found in the stored sequence.
+type Gap struct {
+	// Start is the open time of the first missing candle, End the open time
+	// of the first candle present again.
+	Start time.Time
+	End   time.Time
+}
+
 // CandleRepository stores and reads candles.
 type CandleRepository interface {
 	// UpsertCandle writes one closed candle, replacing any existing bar with
 	// the same (symbol, market_type, timeframe, open_time).
 	UpsertCandle(ctx context.Context, candle models.Candle) error
+
+	// UpsertCandles writes many candles in batches. Re-running it over data
+	// that is already stored changes nothing.
+	UpsertCandles(ctx context.Context, candles []models.Candle) error
+
+	// FindGaps returns the missing ranges in the stored sequence, computed in
+	// the database rather than by differencing the series in memory.
+	FindGaps(ctx context.Context, symbol string, marketType constants.MarketType, timeframe constants.Timeframe) ([]Gap, error)
+
+	// FetchEarliestCandle returns the oldest stored candle, or
+	// constants.ErrNotFound when the series is empty.
+	FetchEarliestCandle(ctx context.Context, symbol string, marketType constants.MarketType, timeframe constants.Timeframe) (models.Candle, error)
 
 	// FetchCandles returns the stored candles of a window, oldest first.
 	FetchCandles(ctx context.Context, params FetchCandlesParams) ([]models.Candle, error)

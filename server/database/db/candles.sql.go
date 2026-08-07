@@ -33,6 +33,71 @@ func (q *Queries) CountCandles(ctx context.Context, arg CountCandlesParams) (int
 	return count, err
 }
 
+const findCandleGaps = `-- name: FindCandleGaps :many
+WITH ordered AS (
+    SELECT
+        open_time,
+        LAG(open_time) OVER (ORDER BY open_time) AS previous_open_time
+    FROM candles
+    WHERE symbol = $2
+      AND market_type = $3
+      AND timeframe = $4
+)
+SELECT
+    (previous_open_time + $1::interval)::timestamptz AS gap_start,
+    open_time::timestamptz AS gap_end
+FROM ordered
+WHERE previous_open_time IS NOT NULL
+  AND open_time - previous_open_time > $1::interval
+ORDER BY gap_start
+`
+
+type FindCandleGapsParams struct {
+	Interval   pgtype.Interval
+	Symbol     string
+	MarketType string
+	Timeframe  string
+}
+
+type FindCandleGapsRow struct {
+	GapStart pgtype.Timestamptz
+	GapEnd   pgtype.Timestamptz
+}
+
+// Holes in the expected sequence, found with a window function.
+//
+// The diff is computed in the database on purpose: pulling three years of 1m
+// candles into Go to difference them would move hundreds of megabytes to
+// discover a handful of gaps.
+//
+// gap_start is the open time of the first MISSING candle and gap_end the open
+// time of the first candle present again, which is the convention
+// models.DataGap documents.
+func (q *Queries) FindCandleGaps(ctx context.Context, arg FindCandleGapsParams) ([]FindCandleGapsRow, error) {
+	rows, err := q.db.Query(ctx, findCandleGaps,
+		arg.Interval,
+		arg.Symbol,
+		arg.MarketType,
+		arg.Timeframe,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []FindCandleGapsRow{}
+	for rows.Next() {
+		var i FindCandleGapsRow
+		if err := rows.Scan(&i.GapStart, &i.GapEnd); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const getCandles = `-- name: GetCandles :many
 SELECT symbol, market_type, timeframe, open_time, close_time, open, high, low, close, volume, quote_volume, trade_count, is_closed, created_at FROM candles
 WHERE symbol = $1
@@ -93,6 +158,44 @@ func (q *Queries) GetCandles(ctx context.Context, arg GetCandlesParams) ([]Candl
 		return nil, err
 	}
 	return items, nil
+}
+
+const getEarliestCandle = `-- name: GetEarliestCandle :one
+SELECT symbol, market_type, timeframe, open_time, close_time, open, high, low, close, volume, quote_volume, trade_count, is_closed, created_at FROM candles
+WHERE symbol = $1
+  AND market_type = $2
+  AND timeframe = $3
+ORDER BY open_time
+LIMIT 1
+`
+
+type GetEarliestCandleParams struct {
+	Symbol     string
+	MarketType string
+	Timeframe  string
+}
+
+// Oldest stored candle for a series, which bounds the expected sequence.
+func (q *Queries) GetEarliestCandle(ctx context.Context, arg GetEarliestCandleParams) (Candle, error) {
+	row := q.db.QueryRow(ctx, getEarliestCandle, arg.Symbol, arg.MarketType, arg.Timeframe)
+	var i Candle
+	err := row.Scan(
+		&i.Symbol,
+		&i.MarketType,
+		&i.Timeframe,
+		&i.OpenTime,
+		&i.CloseTime,
+		&i.Open,
+		&i.High,
+		&i.Low,
+		&i.Close,
+		&i.Volume,
+		&i.QuoteVolume,
+		&i.TradeCount,
+		&i.IsClosed,
+		&i.CreatedAt,
+	)
+	return i, err
 }
 
 const getLatestCandle = `-- name: GetLatestCandle :one

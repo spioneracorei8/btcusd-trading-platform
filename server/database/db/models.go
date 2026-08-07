@@ -38,15 +38,16 @@ type CollectorStatus struct {
 }
 
 type DataGap struct {
-	ID         int64
-	Symbol     string
-	MarketType string
-	Timeframe  string
-	GapStart   pgtype.Timestamptz
-	GapEnd     pgtype.Timestamptz
-	DetectedAt pgtype.Timestamptz
-	FilledAt   pgtype.Timestamptz
-	Note       string
+	ID           int64
+	Symbol       string
+	MarketType   string
+	Timeframe    string
+	GapStart     pgtype.Timestamptz
+	GapEnd       pgtype.Timestamptz
+	DetectedAt   pgtype.Timestamptz
+	FilledAt     pgtype.Timestamptz
+	Note         string
+	FillAttempts int32
 }
 
 type Notification struct {

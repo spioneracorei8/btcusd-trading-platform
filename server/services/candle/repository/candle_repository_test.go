@@ -191,3 +191,164 @@ func TestCandlesIsHypertable(t *testing.T) {
 		t.Errorf("candles is not a hypertable (found %d entries)", count)
 	}
 }
+
+// TestUpsertCandlesIsIdempotent is the batch counterpart of the phase 01
+// acceptance check: re-running a backfill over stored data must change
+// nothing, because a restart mid-backfill re-fetches ranges it already has.
+func TestUpsertCandlesIsIdempotent(t *testing.T) {
+	pool := testhelper.NewTestPool(t)
+	const symbol = "TESTBATCH"
+	testhelper.CleanupSymbol(t, pool, symbol)
+
+	repo := _candle_repo.NewCandleRepoImpl(pool)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	// More than one chunk, so the chunking boundary is exercised too.
+	const count = constants.UpsertBatchSize + 250
+	start := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+
+	batch := make([]models.Candle, 0, count)
+	for i := range count {
+		batch = append(batch, testCandle(symbol, start.Add(time.Duration(i)*time.Minute)))
+	}
+
+	if err := repo.UpsertCandles(ctx, batch); err != nil {
+		t.Fatalf("first UpsertCandles() returned error: %v", err)
+	}
+	if err := repo.UpsertCandles(ctx, batch); err != nil {
+		t.Fatalf("second UpsertCandles() returned error: %v", err)
+	}
+
+	stored, err := repo.CountCandles(ctx, symbol, constants.MarketTypeSpot, constants.Timeframe1m)
+	if err != nil {
+		t.Fatalf("CountCandles() returned error: %v", err)
+	}
+	if stored != int64(count) {
+		t.Fatalf("after two identical batches there are %d rows, want %d", stored, count)
+	}
+
+	// Values must match too, not merely the row count.
+	got, err := repo.FetchLatestCandle(ctx, symbol, constants.MarketTypeSpot, constants.Timeframe1m)
+	if err != nil {
+		t.Fatalf("FetchLatestCandle() returned error: %v", err)
+	}
+	want := batch[len(batch)-1]
+	if !got.Close.Equal(want.Close) || !got.OpenTime.Equal(want.OpenTime) {
+		t.Errorf("last candle = %s at %s, want %s at %s",
+			got.Close, got.OpenTime, want.Close, want.OpenTime)
+	}
+}
+
+// TestFindGapsDetectsHolesAtEveryPosition covers the three placements that
+// break naive implementations: the start, the middle and the end of a series.
+func TestFindGapsDetectsHolesAtEveryPosition(t *testing.T) {
+	pool := testhelper.NewTestPool(t)
+	const symbol = "TESTGAPSCAN"
+	testhelper.CleanupSymbol(t, pool, symbol)
+
+	repo := _candle_repo.NewCandleRepoImpl(pool)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	start := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+
+	// Minutes 0..29 with three holes deliberately punched out.
+	missing := map[int]bool{
+		3:  true,                     // near the start
+		15: true, 16: true, 17: true, // a run in the middle
+		28: true, // near the end
+	}
+
+	batch := make([]models.Candle, 0, 30)
+	for i := range 30 {
+		if missing[i] {
+			continue
+		}
+		batch = append(batch, testCandle(symbol, start.Add(time.Duration(i)*time.Minute)))
+	}
+	if err := repo.UpsertCandles(ctx, batch); err != nil {
+		t.Fatalf("UpsertCandles() returned error: %v", err)
+	}
+
+	gaps, err := repo.FindGaps(ctx, symbol, constants.MarketTypeSpot, constants.Timeframe1m)
+	if err != nil {
+		t.Fatalf("FindGaps() returned error: %v", err)
+	}
+	if len(gaps) != 3 {
+		t.Fatalf("FindGaps() found %d gaps, want 3: %+v", len(gaps), gaps)
+	}
+
+	want := []candle.Gap{
+		{Start: start.Add(3 * time.Minute), End: start.Add(4 * time.Minute)},
+		{Start: start.Add(15 * time.Minute), End: start.Add(18 * time.Minute)},
+		{Start: start.Add(28 * time.Minute), End: start.Add(29 * time.Minute)},
+	}
+	for i, w := range want {
+		if !gaps[i].Start.Equal(w.Start) || !gaps[i].End.Equal(w.End) {
+			t.Errorf("gap %d = [%s, %s), want [%s, %s)",
+				i, gaps[i].Start, gaps[i].End, w.Start, w.End)
+		}
+	}
+}
+
+// TestFindGapsOnCompleteSeriesFindsNothing is the other half: a series with no
+// holes must report none, or every scan would chase phantom ranges for ever.
+func TestFindGapsOnCompleteSeriesFindsNothing(t *testing.T) {
+	pool := testhelper.NewTestPool(t)
+	const symbol = "TESTNOGAPS"
+	testhelper.CleanupSymbol(t, pool, symbol)
+
+	repo := _candle_repo.NewCandleRepoImpl(pool)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	start := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	batch := make([]models.Candle, 0, 60)
+	for i := range 60 {
+		batch = append(batch, testCandle(symbol, start.Add(time.Duration(i)*time.Minute)))
+	}
+	if err := repo.UpsertCandles(ctx, batch); err != nil {
+		t.Fatalf("UpsertCandles() returned error: %v", err)
+	}
+
+	gaps, err := repo.FindGaps(ctx, symbol, constants.MarketTypeSpot, constants.Timeframe1m)
+	if err != nil {
+		t.Fatalf("FindGaps() returned error: %v", err)
+	}
+	if len(gaps) != 0 {
+		t.Errorf("FindGaps() found %d gaps in a complete series: %+v", len(gaps), gaps)
+	}
+}
+
+func TestFetchEarliestCandle(t *testing.T) {
+	pool := testhelper.NewTestPool(t)
+	const symbol = "TESTEARLIEST"
+	testhelper.CleanupSymbol(t, pool, symbol)
+
+	repo := _candle_repo.NewCandleRepoImpl(pool)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	if _, err := repo.FetchEarliestCandle(ctx, symbol, constants.MarketTypeSpot, constants.Timeframe1m); !errors.Is(err, constants.ErrNotFound) {
+		t.Fatalf("FetchEarliestCandle() on an empty series returned %v, want ErrNotFound", err)
+	}
+
+	start := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	batch := []models.Candle{
+		testCandle(symbol, start.Add(2*time.Minute)),
+		testCandle(symbol, start),
+		testCandle(symbol, start.Add(time.Minute)),
+	}
+	if err := repo.UpsertCandles(ctx, batch); err != nil {
+		t.Fatalf("UpsertCandles() returned error: %v", err)
+	}
+
+	got, err := repo.FetchEarliestCandle(ctx, symbol, constants.MarketTypeSpot, constants.Timeframe1m)
+	if err != nil {
+		t.Fatalf("FetchEarliestCandle() returned error: %v", err)
+	}
+	if !got.OpenTime.Equal(start) {
+		t.Errorf("earliest OpenTime = %s, want %s", got.OpenTime, start)
+	}
+}

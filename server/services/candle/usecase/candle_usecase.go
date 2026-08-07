@@ -44,3 +44,29 @@ func (u *candleUsecase) FetchLatestCandle(ctx context.Context, symbol string, ma
 func (u *candleUsecase) CountCandles(ctx context.Context, symbol string, marketType constants.MarketType, timeframe constants.Timeframe) (int64, error) {
 	return u.candleRepository.CountCandles(ctx, symbol, marketType, timeframe)
 }
+
+// SaveCandles persists many candles, rejecting the whole batch if any one of
+// them is still forming.
+//
+// Backfill takes this path rather than calling the repository directly, so
+// the closed-candle rule cannot be bypassed by choosing the faster route. The
+// check runs before the first write: a batch is either wholly trustworthy or
+// wholly rejected, never half applied.
+func (u *candleUsecase) SaveCandles(ctx context.Context, candles []models.Candle) error {
+	if len(candles) == 0 {
+		return nil
+	}
+
+	for _, c := range candles {
+		if !c.IsClosed {
+			return fmt.Errorf("%w: %s %s %s at %s",
+				constants.ErrUnclosedCandle, c.Symbol, c.MarketType, c.Timeframe,
+				c.OpenTime.UTC().Format("2006-01-02T15:04:05Z"))
+		}
+	}
+	return u.candleRepository.UpsertCandles(ctx, candles)
+}
+
+func (u *candleUsecase) FindGaps(ctx context.Context, symbol string, marketType constants.MarketType, timeframe constants.Timeframe) ([]candle.Gap, error) {
+	return u.candleRepository.FindGaps(ctx, symbol, marketType, timeframe)
+}

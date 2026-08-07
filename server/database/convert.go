@@ -100,3 +100,19 @@ func UUIDFromPgtype(id pgtype.UUID) (uuid.UUID, error) {
 	}
 	return uuid.UUID(id.Bytes), nil
 }
+
+// IntervalFromDuration converts a Go duration into the pgtype value pgx
+// writes for an interval column.
+//
+// Timeframes are whole minutes or hours, so microsecond resolution is exact
+// here; a duration finer than a microsecond is rejected rather than silently
+// truncated.
+func IntervalFromDuration(d time.Duration) (pgtype.Interval, error) {
+	if d <= 0 {
+		return pgtype.Interval{}, fmt.Errorf("interval %s is not positive", d)
+	}
+	if d%time.Microsecond != 0 {
+		return pgtype.Interval{}, fmt.Errorf("interval %s is finer than a microsecond", d)
+	}
+	return pgtype.Interval{Microseconds: int64(d / time.Microsecond), Valid: true}, nil
+}
