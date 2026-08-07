@@ -49,6 +49,11 @@ func (s CollectorStatus) HeartbeatAge(now time.Time) time.Duration {
 type TimeframeStatus struct {
 	Timeframe constants.Timeframe
 
+	// EarliestOpenTime is the oldest stored candle. With LatestOpenTime and
+	// the target range it shows a long backfill advancing, which is the only
+	// way to tell progress from a stall.
+	EarliestOpenTime *time.Time
+
 	// LatestOpenTime is the open time of the newest stored candle, nil when
 	// the series is still empty.
 	LatestOpenTime *time.Time
@@ -58,6 +63,11 @@ type TimeframeStatus struct {
 
 	// UnfilledGaps counts data_gaps rows still awaiting a successful backfill.
 	UnfilledGaps int64
+
+	// BackfillFrom and BackfillTo bound the range the collector is working
+	// towards, so a user watching a three-year backfill can see where it is.
+	BackfillFrom time.Time
+	BackfillTo   time.Time
 }
 
 // MarketStatus is the body of GET /internal/market/status.
@@ -70,5 +80,10 @@ type MarketStatus struct {
 
 	// Stale reports the combination worth waking up for: the stream claims to
 	// be connected while the newest candle has gone cold.
-	Stale bool
+	//
+	// It is a pointer because "the check did not run" is a third answer,
+	// distinct from true and false. Outside the live state the question is
+	// meaningless — an old candle during a backfill is progress — so the
+	// result is nil rather than a false that looks like an all-clear.
+	Stale *bool
 }

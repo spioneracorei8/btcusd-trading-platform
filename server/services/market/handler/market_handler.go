@@ -40,38 +40,56 @@ type statusResponse struct {
 	Timeframes []timeframeResponse `json:"timeframes"`
 
 	// Stale is the combination worth paging on: connected but not advancing.
-	Stale bool `json:"stale"`
+	//
+	// Null means the check did not run, which is the honest answer outside the
+	// live state: during a backfill an old candle is progress, and a false
+	// there would read as an all-clear.
+	Stale *bool `json:"stale"`
 }
 
 type collectorResponse struct {
-	// State is the lifecycle phase. It is what makes the rest of this payload
-	// interpretable: an old newest candle is normal progress while
-	// backfilling and a silent failure while live.
+	// State is the lifecycle phase, including never_started when no collector
+	// has ever registered.
 	State string `json:"state"`
 
-	Running     bool `json:"running"`
-	WSConnected bool `json:"ws_connected"`
+	Running bool `json:"running"`
+
+	// Every measured field is a pointer. When no collector has registered,
+	// nothing was measured, and a zero would claim otherwise — "connected:
+	// false, reconnects: 0" reads like a healthy idle process rather than an
+	// absent one.
+	WSConnected *bool `json:"ws_connected"`
 
 	// UptimeSeconds counts from the process start, HeartbeatAgeSeconds from
 	// the last published beat. Together they separate a collector that has
 	// been up for days from one that is restarting every few seconds, and
 	// both from one that has died while still claiming to be connected.
-	UptimeSeconds       *int64 `json:"uptime_seconds,omitempty"`
-	HeartbeatAgeSeconds *int64 `json:"heartbeat_age_seconds,omitempty"`
+	UptimeSeconds       *int64 `json:"uptime_seconds"`
+	HeartbeatAgeSeconds *int64 `json:"heartbeat_age_seconds"`
 
-	StartedAt          *time.Time `json:"started_at,omitempty"`
-	StateChangedAt     *time.Time `json:"state_changed_at,omitempty"`
-	LastConnectedAt    *time.Time `json:"last_connected_at,omitempty"`
-	LastDisconnectedAt *time.Time `json:"last_disconnected_at,omitempty"`
+	StartedAt          *time.Time `json:"started_at"`
+	StateChangedAt     *time.Time `json:"state_changed_at"`
+	LastConnectedAt    *time.Time `json:"last_connected_at"`
+	LastDisconnectedAt *time.Time `json:"last_disconnected_at"`
 	LastDisconnectNote string     `json:"last_disconnect_note,omitempty"`
-	ReconnectCount     int32      `json:"reconnect_count"`
+	ReconnectCount     *int32     `json:"reconnect_count"`
 }
 
+// timeframeResponse keeps a stable shape: a timeframe with no data yet emits
+// null rather than dropping the field, so a consumer can rely on the keys
+// existing whatever the collector is doing.
 type timeframeResponse struct {
-	Timeframe        string     `json:"timeframe"`
-	LatestOpenTime   *time.Time `json:"latest_open_time,omitempty"`
-	LatestAgeSeconds *int64     `json:"latest_age_seconds,omitempty"`
+	Timeframe string `json:"timeframe"`
+
+	EarliestOpenTime *time.Time `json:"earliest_open_time"`
+	LatestOpenTime   *time.Time `json:"latest_open_time"`
+	LatestAgeSeconds *int64     `json:"latest_age_seconds"`
 	UnfilledGaps     int64      `json:"unfilled_gaps"`
+
+	// The window the collector is working towards, so a three-year backfill
+	// can be seen advancing rather than merely being behind.
+	BackfillFrom time.Time `json:"backfill_from"`
+	BackfillTo   time.Time `json:"backfill_to"`
 }
 
 // Status reports whether the market data is healthy right now.
@@ -97,26 +115,29 @@ func toStatusResponse(status models.MarketStatus, now time.Time) statusResponse 
 		Stale:      status.Stale,
 		Timeframes: make([]timeframeResponse, 0, len(status.Timeframes)),
 		Collector: collectorResponse{
-			State:              status.Collector.State.String(),
-			WSConnected:        status.Collector.WSConnected,
-			LastDisconnectNote: status.Collector.LastDisconnectNote,
-			ReconnectCount:     status.Collector.ReconnectCount,
-			LastConnectedAt:    status.Collector.LastConnectedAt,
-			LastDisconnectedAt: status.Collector.LastDisconnectedAt,
+			State: status.Collector.State.String(),
 		},
 	}
 
-	// A zero StartedAt means no collector has ever registered, which is
-	// different from one that started and then stopped reporting.
-	if !status.Collector.StartedAt.IsZero() {
+	// never_started is the absence of a collector, not a collector reporting
+	// zeroes. Leaving every measured field null keeps "nothing was measured"
+	// distinguishable from "measured, and it was zero".
+	if status.Collector.State != constants.CollectorNeverStarted {
+		wsConnected := status.Collector.WSConnected
+		reconnects := status.Collector.ReconnectCount
 		startedAt := helper.UTC(status.Collector.StartedAt)
 		uptime := int64(status.Collector.Uptime(now) / time.Second)
 		age := int64(status.Collector.HeartbeatAge(now) / time.Second)
 
 		resp.Collector.Running = true
+		resp.Collector.WSConnected = &wsConnected
+		resp.Collector.ReconnectCount = &reconnects
 		resp.Collector.StartedAt = &startedAt
 		resp.Collector.UptimeSeconds = &uptime
 		resp.Collector.HeartbeatAgeSeconds = &age
+		resp.Collector.LastConnectedAt = status.Collector.LastConnectedAt
+		resp.Collector.LastDisconnectedAt = status.Collector.LastDisconnectedAt
+		resp.Collector.LastDisconnectNote = status.Collector.LastDisconnectNote
 
 		if !status.Collector.StateChangedAt.IsZero() {
 			changedAt := helper.UTC(status.Collector.StateChangedAt)
@@ -127,9 +148,12 @@ func toStatusResponse(status models.MarketStatus, now time.Time) statusResponse 
 	for _, timeframe := range status.Timeframes {
 		resp.Timeframes = append(resp.Timeframes, timeframeResponse{
 			Timeframe:        timeframe.Timeframe.String(),
+			EarliestOpenTime: timeframe.EarliestOpenTime,
 			LatestOpenTime:   timeframe.LatestOpenTime,
 			LatestAgeSeconds: timeframe.LatestAgeSeconds,
 			UnfilledGaps:     timeframe.UnfilledGaps,
+			BackfillFrom:     timeframe.BackfillFrom,
+			BackfillTo:       timeframe.BackfillTo,
 		})
 	}
 	return resp

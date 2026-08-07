@@ -128,6 +128,16 @@ func (r *recordingCandleUsecase) FetchLatestCandle(context.Context, string, cons
 	return r.latest, nil
 }
 
+func (r *recordingCandleUsecase) FetchEarliestCandle(context.Context, string, constants.MarketType, constants.Timeframe) (models.Candle, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if !r.hasOne {
+		return models.Candle{}, constants.ErrNotFound
+	}
+	return r.latest, nil
+}
+
 func (r *recordingCandleUsecase) CountCandles(context.Context, string, constants.MarketType, constants.Timeframe) (int64, error) {
 	return 0, nil
 }
@@ -188,6 +198,11 @@ type stubStatusRepo struct {
 	starts   int
 	connects int
 	states   []constants.CollectorState
+
+	// notFound makes FetchStatus behave as it does before any collector has
+	// registered; fetchErr makes it fail outright.
+	notFound bool
+	fetchErr error
 }
 
 func (s *stubStatusRepo) RegisterStart(_ context.Context, symbol string, marketType constants.MarketType) (models.CollectorStatus, error) {
@@ -237,6 +252,12 @@ func (s *stubStatusRepo) SetState(_ context.Context, _ string, _ constants.Marke
 func (s *stubStatusRepo) FetchStatus(context.Context, string, constants.MarketType) (models.CollectorStatus, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.fetchErr != nil {
+		return models.CollectorStatus{}, s.fetchErr
+	}
+	if s.notFound {
+		return models.CollectorStatus{}, constants.ErrNotFound
+	}
 	return s.status, nil
 }
 
@@ -474,6 +495,7 @@ func TestStatusReportsUptimeAndFreshnessSeparately(t *testing.T) {
 	status := &stubStatusRepo{
 		status: models.CollectorStatus{
 			Symbol: "BTCUSDT", MarketType: constants.MarketTypeSpot,
+			State:       constants.CollectorLive,
 			WSConnected: true,
 			StartedAt:   now.Add(-72 * time.Hour), // up for three days
 			UpdatedAt:   now.Add(-2 * time.Second),
@@ -494,8 +516,8 @@ func TestStatusReportsUptimeAndFreshnessSeparately(t *testing.T) {
 	if age := got.Collector.HeartbeatAge(now); age != 2*time.Second {
 		t.Errorf("heartbeat age = %s, want 2s", age)
 	}
-	if got.Stale {
-		t.Error("a connected collector with a one-minute-old candle is not stale")
+	if got.Stale == nil || *got.Stale {
+		t.Errorf("Stale = %v, want false: a live collector with a one-minute-old candle is fine", got.Stale)
 	}
 	if len(got.Timeframes) != 1 || got.Timeframes[0].LatestOpenTime == nil {
 		t.Fatalf("timeframe status is incomplete: %+v", got.Timeframes)
@@ -509,6 +531,7 @@ func TestStatusFlagsStaleWhenConnectedButNotAdvancing(t *testing.T) {
 
 	status := &stubStatusRepo{
 		status: models.CollectorStatus{
+			State:       constants.CollectorLive,
 			WSConnected: true,
 			StartedAt:   now.Add(-time.Hour),
 			UpdatedAt:   now.Add(-time.Second), // collector is alive
@@ -526,18 +549,21 @@ func TestStatusFlagsStaleWhenConnectedButNotAdvancing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Status() returned error: %v", err)
 	}
-	if !got.Stale {
-		t.Error("connected with a 10 minute old candle must be reported stale")
+	if got.Stale == nil || !*got.Stale {
+		t.Errorf("Stale = %v, want true: live and connected with a 10 minute old candle", got.Stale)
 	}
 }
 
-// TestStatusIsNotStaleWhenDisconnected checks the other half: a known outage
-// is ordinary, and flagging it as stale would bury the real signal.
-func TestStatusIsNotStaleWhenDisconnected(t *testing.T) {
+// TestStatusHasNoStaleAnswerWhenDisconnected checks the other half. The
+// staleness question is specifically "connected, yet not advancing"; with no
+// connection it has no answer, so the result is null rather than a false that
+// would read as an all-clear.
+func TestStatusHasNoStaleAnswerWhenDisconnected(t *testing.T) {
 	now := time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC)
 
 	status := &stubStatusRepo{
 		status: models.CollectorStatus{
+			State:       constants.CollectorLive,
 			WSConnected: false,
 			StartedAt:   now.Add(-time.Hour),
 			UpdatedAt:   now.Add(-time.Second),
@@ -551,8 +577,8 @@ func TestStatusIsNotStaleWhenDisconnected(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Status() returned error: %v", err)
 	}
-	if got.Stale {
-		t.Error("a disconnected collector is not stale, it is disconnected")
+	if got.Stale != nil {
+		t.Errorf("Stale = %v, want null: a disconnected collector is not stale, it is disconnected", *got.Stale)
 	}
 }
 
@@ -596,6 +622,90 @@ func TestBufferedCandlesSurviveDisconnect(t *testing.T) {
 			t.Fatalf("candles were stored out of order at %d: %s after %s",
 				i, stored[i].OpenTime, stored[i-1].OpenTime)
 		}
+	}
+}
+
+// TestStatusReportsNeverStartedWithoutError is fix 2: an absent
+// collector_status row is a valid state, not a failure.
+//
+// A dead collector is the single most important thing this endpoint has to be
+// able to say. Returning 500 sent the reader back to the container logs —
+// exactly the workflow the endpoint exists to replace.
+func TestStatusReportsNeverStartedWithoutError(t *testing.T) {
+	now := time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC)
+
+	status := &stubStatusRepo{notFound: true}
+	// The candles table is independent of collector liveness, so per-timeframe
+	// data must still render.
+	candles := &recordingCandleUsecase{hasOne: true, latest: makeCandle(now.Add(-time.Minute), true)}
+
+	us := _market_us.NewMarketUsecaseImpl(testConfig(), silentLogger(), &fakeMarketData{now: now}, status, candles, &stubGapUsecase{})
+
+	got, err := us.Status(context.Background(), now)
+	if err != nil {
+		t.Fatalf("Status() returned error for an empty collector_status: %v", err)
+	}
+	if got.Collector.State != constants.CollectorNeverStarted {
+		t.Errorf("State = %q, want %q", got.Collector.State, constants.CollectorNeverStarted)
+	}
+	if got.Stale != nil {
+		t.Errorf("Stale = %v, want null: no collector ran, so no check ran", *got.Stale)
+	}
+	if len(got.Timeframes) != 1 || got.Timeframes[0].LatestOpenTime == nil {
+		t.Errorf("per-timeframe data must still render from candles: %+v", got.Timeframes)
+	}
+}
+
+// TestStatusDatabaseFailureIsStillAnError keeps 500 reserved for genuine
+// failures, so making the absent row a valid state did not swallow real ones.
+func TestStatusDatabaseFailureIsStillAnError(t *testing.T) {
+	now := time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC)
+
+	status := &stubStatusRepo{fetchErr: errors.New("connection refused")}
+	us := _market_us.NewMarketUsecaseImpl(testConfig(), silentLogger(), &fakeMarketData{now: now}, status, &recordingCandleUsecase{}, &stubGapUsecase{})
+
+	if _, err := us.Status(context.Background(), now); err == nil {
+		t.Fatal("an unreachable database must still be an error")
+	}
+}
+
+// TestStaleIsNullOutsideLive is fix 3: during a backfill the newest candle is
+// legitimately years old, and reporting false there is indistinguishable from
+// a genuine all-clear.
+func TestStaleIsNullOutsideLive(t *testing.T) {
+	now := time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC)
+
+	for _, state := range []constants.CollectorState{
+		constants.CollectorStarting,
+		constants.CollectorBackfilling,
+		constants.CollectorReconnecting,
+	} {
+		t.Run(state.String(), func(t *testing.T) {
+			status := &stubStatusRepo{
+				status: models.CollectorStatus{
+					State:       state,
+					WSConnected: true,
+					StartedAt:   now.Add(-time.Hour),
+					UpdatedAt:   now.Add(-time.Second),
+				},
+			}
+			// Deliberately ancient, the way a mid-backfill series looks.
+			candles := &recordingCandleUsecase{
+				hasOne: true,
+				latest: makeCandle(now.Add(-3*365*24*time.Hour), true),
+			}
+
+			us := _market_us.NewMarketUsecaseImpl(testConfig(), silentLogger(), &fakeMarketData{now: now}, status, candles, &stubGapUsecase{})
+
+			got, err := us.Status(context.Background(), now)
+			if err != nil {
+				t.Fatalf("Status() returned error: %v", err)
+			}
+			if got.Stale != nil {
+				t.Errorf("Stale = %v in state %s, want null: the check does not apply here",
+					*got.Stale, state)
+			}
+		})
 	}
 }
 

@@ -26,5 +26,9 @@ type CandleUsecase interface {
 	FindGaps(ctx context.Context, symbol string, marketType constants.MarketType, timeframe constants.Timeframe) ([]Gap, error)
 	FetchCandles(ctx context.Context, params FetchCandlesParams) ([]models.Candle, error)
 	FetchLatestCandle(ctx context.Context, symbol string, marketType constants.MarketType, timeframe constants.Timeframe) (models.Candle, error)
+
+	// FetchEarliestCandle returns the oldest stored candle, which bounds how
+	// far a backfill has reached.
+	FetchEarliestCandle(ctx context.Context, symbol string, marketType constants.MarketType, timeframe constants.Timeframe) (models.Candle, error)
 	CountCandles(ctx context.Context, symbol string, marketType constants.MarketType, timeframe constants.Timeframe) (int64, error)
 }

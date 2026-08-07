@@ -70,3 +70,7 @@ func (u *candleUsecase) SaveCandles(ctx context.Context, candles []models.Candle
 func (u *candleUsecase) FindGaps(ctx context.Context, symbol string, marketType constants.MarketType, timeframe constants.Timeframe) ([]candle.Gap, error) {
 	return u.candleRepository.FindGaps(ctx, symbol, marketType, timeframe)
 }
+
+func (u *candleUsecase) FetchEarliestCandle(ctx context.Context, symbol string, marketType constants.MarketType, timeframe constants.Timeframe) (models.Candle, error) {
+	return u.candleRepository.FetchEarliestCandle(ctx, symbol, marketType, timeframe)
+}
