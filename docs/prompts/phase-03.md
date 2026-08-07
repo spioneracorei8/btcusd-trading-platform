@@ -234,11 +234,33 @@ No test may hit the network or the database. All fixtures live in `testdata/`.
 
 ---
 
+## Decisions taken (2026-08-04)
+
+Both open questions are settled; record them in `docs/decisions/` when
+implementing.
+
+1. **VWAP resets daily at 00:00 UTC**, driven by the candle's `open_time`, never
+   wall-clock. Crypto has no session and UTC midnight is the convention charting
+   tools use. The known cost is that the first bars of each UTC day are computed
+   over a small sample and are correspondingly noisy.
+2. **Reference implementation: TA-Lib 0.7.1**, verified empirically rather than
+   assumed:
+   - RSI matches a hand-rolled **Wilder** implementation to 7e-15, while the
+     SMA-based variant differs by 2.77 on the same series. TA-Lib is Wilder, which
+     is what §4 requires.
+   - EMA seeds with the **SMA of the first `period` values**, exactly as §4
+     specifies, matching to 0.00e+00.
+   - TA-Lib has **no VWAP**, so the reference script computes it directly from the
+     agreed daily-reset rule.
+3. **Fixture series is synthetic and deterministic** (seeded), covering trend,
+   chop, flat and gap regimes. Binance is unreachable from the build environment
+   (`api.binance.com` and `data.binance.vision` both fail), and phase 02 has not
+   yet stored real candles. What the verification actually needs is that the same
+   series passes through TA-Lib and through this implementation; the origin of the
+   bars does not affect whether the maths agrees. Regenerate against real candles
+   once the collector has run — the indicator code does not change.
+
 ## How to start
 
-Two things need my input before you write code:
-
-1. The VWAP reset decision (§4) — do not guess
-2. Confirmation of the reference library you intend to use for fixtures, and which RSI variant it implements
-
-Raise both, then summarise your implementation plan as a numbered list and wait for approval. Commit in small conventional-commit increments.
+Summarise your implementation plan as a numbered list and wait for approval.
+Commit in small conventional-commit increments.
