@@ -75,6 +75,9 @@ type Querier interface {
 	// moves started_at forward every time, while one that has been up for days
 	// leaves it alone.
 	RegisterCollectorStart(ctx context.Context, arg RegisterCollectorStartParams) (CollectorStatus, error)
+	// Records a lifecycle transition. state_changed_at only moves when the state
+	// actually changes, so the time spent in a state is measurable.
+	SetCollectorState(ctx context.Context, arg SetCollectorStateParams) error
 	// Idempotent write of one closed candle. Re-delivering the same bar (after a
 	// reconnect or a REST backfill) updates it in place instead of duplicating it.
 	UpsertCandle(ctx context.Context, arg UpsertCandleParams) error

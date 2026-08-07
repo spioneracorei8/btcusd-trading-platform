@@ -10,7 +10,7 @@ import (
 )
 
 const getCollectorStatus = `-- name: GetCollectorStatus :one
-SELECT symbol, market_type, ws_connected, last_connected_at, last_disconnected_at, last_disconnect_note, reconnect_count, started_at, updated_at FROM collector_status
+SELECT symbol, market_type, ws_connected, last_connected_at, last_disconnected_at, last_disconnect_note, reconnect_count, started_at, updated_at, state, state_changed_at FROM collector_status
 WHERE symbol = $1
   AND market_type = $2
 `
@@ -33,6 +33,8 @@ func (q *Queries) GetCollectorStatus(ctx context.Context, arg GetCollectorStatus
 		&i.ReconnectCount,
 		&i.StartedAt,
 		&i.UpdatedAt,
+		&i.State,
+		&i.StateChangedAt,
 	)
 	return i, err
 }
@@ -103,18 +105,20 @@ func (q *Queries) MarkCollectorDisconnected(ctx context.Context, arg MarkCollect
 
 const registerCollectorStart = `-- name: RegisterCollectorStart :one
 INSERT INTO collector_status (
-    symbol, market_type, ws_connected, started_at, updated_at
+    symbol, market_type, ws_connected, state, state_changed_at, started_at, updated_at
 ) VALUES (
-    $1, $2, false, now(), now()
+    $1, $2, false, 'starting', now(), now(), now()
 )
 ON CONFLICT (symbol, market_type) DO UPDATE SET
     ws_connected         = false,
     last_disconnected_at = NULL,
     last_disconnect_note = '',
     reconnect_count      = 0,
+    state                = 'starting',
+    state_changed_at     = now(),
     started_at           = now(),
     updated_at           = now()
-RETURNING symbol, market_type, ws_connected, last_connected_at, last_disconnected_at, last_disconnect_note, reconnect_count, started_at, updated_at
+RETURNING symbol, market_type, ws_connected, last_connected_at, last_disconnected_at, last_disconnect_note, reconnect_count, started_at, updated_at, state, state_changed_at
 `
 
 type RegisterCollectorStartParams struct {
@@ -141,6 +145,30 @@ func (q *Queries) RegisterCollectorStart(ctx context.Context, arg RegisterCollec
 		&i.ReconnectCount,
 		&i.StartedAt,
 		&i.UpdatedAt,
+		&i.State,
+		&i.StateChangedAt,
 	)
 	return i, err
+}
+
+const setCollectorState = `-- name: SetCollectorState :exec
+UPDATE collector_status SET
+    state            = $1,
+    state_changed_at = CASE WHEN state IS DISTINCT FROM $1 THEN now() ELSE state_changed_at END,
+    updated_at       = now()
+WHERE symbol = $2
+  AND market_type = $3
+`
+
+type SetCollectorStateParams struct {
+	State      string
+	Symbol     string
+	MarketType string
+}
+
+// Records a lifecycle transition. state_changed_at only moves when the state
+// actually changes, so the time spent in a state is measurable.
+func (q *Queries) SetCollectorState(ctx context.Context, arg SetCollectorStateParams) error {
+	_, err := q.db.Exec(ctx, setCollectorState, arg.State, arg.Symbol, arg.MarketType)
+	return err
 }

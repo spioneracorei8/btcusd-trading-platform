@@ -197,3 +197,57 @@ func (e AppEnv) Valid() bool {
 
 // String returns the environment name.
 func (e AppEnv) String() string { return string(e) }
+
+// CollectorState is which phase of its lifecycle the collector is in.
+//
+// It exists because "the newest candle is three years old" means completely
+// different things depending on the phase: during a backfill it is normal
+// progress, while live it means ingestion has silently stopped. Without the
+// state, the status endpoint cannot tell those apart and reports the same
+// numbers for both.
+type CollectorState string
+
+// Collector lifecycle states.
+const (
+	// CollectorNeverStarted is reported when no collector has ever registered.
+	// It is a valid state, not an error: a dead collector is the single most
+	// important thing the status endpoint has to be able to say.
+	CollectorNeverStarted CollectorState = "never_started"
+
+	// CollectorStarting is the process up but not yet backfilling.
+	CollectorStarting CollectorState = "starting"
+
+	// CollectorBackfilling is historical backfill in progress.
+	CollectorBackfilling CollectorState = "backfilling"
+
+	// CollectorLive is backfill complete and the stream being consumed. This
+	// is the only state in which staleness is a meaningful question.
+	CollectorLive CollectorState = "live"
+
+	// CollectorReconnecting is the stream dropped, with backoff or reconnect
+	// backfill in progress.
+	CollectorReconnecting CollectorState = "reconnecting"
+)
+
+// Valid reports whether s is a known collector state.
+func (s CollectorState) Valid() bool {
+	switch s {
+	case CollectorNeverStarted, CollectorStarting, CollectorBackfilling,
+		CollectorLive, CollectorReconnecting:
+		return true
+	default:
+		return false
+	}
+}
+
+// String returns the wire/database representation of the state.
+func (s CollectorState) String() string { return string(s) }
+
+// ParseCollectorState converts s into a CollectorState, rejecting unknown values.
+func ParseCollectorState(s string) (CollectorState, error) {
+	state := CollectorState(s)
+	if !state.Valid() {
+		return "", fmt.Errorf("unknown collector state %q", s)
+	}
+	return state, nil
+}

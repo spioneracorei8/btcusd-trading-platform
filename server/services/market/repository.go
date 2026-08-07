@@ -85,6 +85,9 @@ type CollectorStatusRepository interface {
 	// MarkDisconnected records the stream going down, with the reason.
 	MarkDisconnected(ctx context.Context, symbol string, marketType constants.MarketType, note string) error
 
+	// SetState records a lifecycle transition.
+	SetState(ctx context.Context, symbol string, marketType constants.MarketType, state constants.CollectorState) error
+
 	// FetchStatus reads the current row, returning constants.ErrNotFound when
 	// the collector has never started.
 	FetchStatus(ctx context.Context, symbol string, marketType constants.MarketType) (models.CollectorStatus, error)

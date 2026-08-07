@@ -35,6 +35,8 @@ type CollectorStatus struct {
 	ReconnectCount     int32
 	StartedAt          pgtype.Timestamptz
 	UpdatedAt          pgtype.Timestamptz
+	State              string
+	StateChangedAt     pgtype.Timestamptz
 }
 
 type DataGap struct {

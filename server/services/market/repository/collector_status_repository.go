@@ -111,9 +111,16 @@ func toCollectorStatusModel(row db.CollectorStatus) (models.CollectorStatus, err
 		return models.CollectorStatus{}, fmt.Errorf("collector status %s: %w", row.Symbol, err)
 	}
 
+	state, err := constants.ParseCollectorState(row.State)
+	if err != nil {
+		return models.CollectorStatus{}, fmt.Errorf("collector status %s: %w", row.Symbol, err)
+	}
+
 	return models.CollectorStatus{
 		Symbol:             row.Symbol,
 		MarketType:         marketType,
+		State:              state,
+		StateChangedAt:     database.TimeFromTimestamptz(row.StateChangedAt),
 		WSConnected:        row.WsConnected,
 		LastConnectedAt:    database.TimePtrFromTimestamptz(row.LastConnectedAt),
 		LastDisconnectedAt: database.TimePtrFromTimestamptz(row.LastDisconnectedAt),
@@ -122,4 +129,17 @@ func toCollectorStatusModel(row db.CollectorStatus) (models.CollectorStatus, err
 		StartedAt:          database.TimeFromTimestamptz(row.StartedAt),
 		UpdatedAt:          database.TimeFromTimestamptz(row.UpdatedAt),
 	}, nil
+}
+
+// SetState records a lifecycle transition.
+func (r *collectorStatusRepository) SetState(ctx context.Context, symbol string, marketType constants.MarketType, state constants.CollectorState) error {
+	err := r.queries.SetCollectorState(ctx, db.SetCollectorStateParams{
+		Symbol:     symbol,
+		MarketType: marketType.String(),
+		State:      state.String(),
+	})
+	if err != nil {
+		return fmt.Errorf("set collector state to %s: %w", state, err)
+	}
+	return nil
 }

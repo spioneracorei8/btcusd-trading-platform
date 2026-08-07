@@ -187,6 +187,7 @@ type stubStatusRepo struct {
 	status   models.CollectorStatus
 	starts   int
 	connects int
+	states   []constants.CollectorState
 }
 
 func (s *stubStatusRepo) RegisterStart(_ context.Context, symbol string, marketType constants.MarketType) (models.CollectorStatus, error) {
@@ -196,6 +197,7 @@ func (s *stubStatusRepo) RegisterStart(_ context.Context, symbol string, marketT
 	s.starts++
 	s.status = models.CollectorStatus{
 		Symbol: symbol, MarketType: marketType,
+		State:     constants.CollectorStarting,
 		StartedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(),
 	}
 	return s.status, nil
@@ -224,10 +226,25 @@ func (s *stubStatusRepo) MarkDisconnected(_ context.Context, _ string, _ constan
 	return nil
 }
 
+func (s *stubStatusRepo) SetState(_ context.Context, _ string, _ constants.MarketType, state constants.CollectorState) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.status.State = state
+	s.states = append(s.states, state)
+	return nil
+}
+
 func (s *stubStatusRepo) FetchStatus(context.Context, string, constants.MarketType) (models.CollectorStatus, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.status, nil
+}
+
+// recordedStates returns the transitions seen so far.
+func (s *stubStatusRepo) recordedStates() []constants.CollectorState {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]constants.CollectorState(nil), s.states...)
 }
 
 // ---------------------------------------------------------------------------
@@ -579,5 +596,45 @@ func TestBufferedCandlesSurviveDisconnect(t *testing.T) {
 			t.Fatalf("candles were stored out of order at %d: %s after %s",
 				i, stored[i].OpenTime, stored[i-1].OpenTime)
 		}
+	}
+}
+
+// TestRunPublishesLifecycleTransitions covers the states moving in the order
+// the collector actually goes through them.
+func TestRunPublishesLifecycleTransitions(t *testing.T) {
+	start := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+
+	data := &fakeMarketData{
+		stream: []market.StreamedKline{{Candle: makeCandle(start, true)}},
+		now:    start,
+	}
+	status := &stubStatusRepo{}
+
+	us := _market_us.NewMarketUsecaseImpl(testConfig(), silentLogger(), data, status,
+		&recordingCandleUsecase{}, &stubGapUsecase{})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	_ = us.Run(ctx)
+
+	states := status.recordedStates()
+	if len(states) < 2 {
+		t.Fatalf("recorded %d transitions, want at least backfilling then live: %v", len(states), states)
+	}
+	if states[0] != constants.CollectorBackfilling {
+		t.Errorf("first transition is %q, want %q", states[0], constants.CollectorBackfilling)
+	}
+
+	sawLive := false
+	for _, state := range states {
+		if state == constants.CollectorLive {
+			sawLive = true
+		}
+		if !state.Valid() {
+			t.Errorf("published an unknown state %q", state)
+		}
+	}
+	if !sawLive {
+		t.Errorf("never reached %q: %v", constants.CollectorLive, states)
 	}
 }

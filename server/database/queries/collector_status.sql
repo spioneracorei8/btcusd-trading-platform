@@ -6,15 +6,17 @@
 -- moves started_at forward every time, while one that has been up for days
 -- leaves it alone.
 INSERT INTO collector_status (
-    symbol, market_type, ws_connected, started_at, updated_at
+    symbol, market_type, ws_connected, state, state_changed_at, started_at, updated_at
 ) VALUES (
-    sqlc.arg(symbol), sqlc.arg(market_type), false, now(), now()
+    sqlc.arg(symbol), sqlc.arg(market_type), false, 'starting', now(), now(), now()
 )
 ON CONFLICT (symbol, market_type) DO UPDATE SET
     ws_connected         = false,
     last_disconnected_at = NULL,
     last_disconnect_note = '',
     reconnect_count      = 0,
+    state                = 'starting',
+    state_changed_at     = now(),
     started_at           = now(),
     updated_at           = now()
 RETURNING *;
@@ -49,5 +51,15 @@ WHERE symbol = sqlc.arg(symbol)
 
 -- name: GetCollectorStatus :one
 SELECT * FROM collector_status
+WHERE symbol = sqlc.arg(symbol)
+  AND market_type = sqlc.arg(market_type);
+
+-- name: SetCollectorState :exec
+-- Records a lifecycle transition. state_changed_at only moves when the state
+-- actually changes, so the time spent in a state is measurable.
+UPDATE collector_status SET
+    state            = sqlc.arg(state),
+    state_changed_at = CASE WHEN state IS DISTINCT FROM sqlc.arg(state) THEN now() ELSE state_changed_at END,
+    updated_at       = now()
 WHERE symbol = sqlc.arg(symbol)
   AND market_type = sqlc.arg(market_type);

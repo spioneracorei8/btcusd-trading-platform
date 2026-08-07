@@ -162,6 +162,95 @@ func TestMarkConnectedAndDisconnected(t *testing.T) {
 	}
 }
 
+// TestSetStateMovesStateChangedAtOnlyOnChange covers the persistence half of
+// the lifecycle state: the api reads this row rather than the collector's
+// memory, so a transition that never reaches the row is invisible.
+//
+// state_changed_at must move on a real transition and stand still on a repeat,
+// otherwise "how long has it been backfilling" resets on every write.
+func TestSetStateMovesStateChangedAtOnlyOnChange(t *testing.T) {
+	pool := testhelper.NewTestPool(t)
+	const symbol = "TESTSETSTATE"
+	cleanupCollectorStatus(t, pool, symbol)
+
+	repo := _market_repo.NewCollectorStatusRepoImpl(pool)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	started, err := repo.RegisterStart(ctx, symbol, constants.MarketTypeSpot)
+	if err != nil {
+		t.Fatalf("RegisterStart() returned error: %v", err)
+	}
+	// A fresh process is starting, whatever the previous run ended on.
+	if started.State != constants.CollectorStarting {
+		t.Errorf("State = %s after RegisterStart(), want %s", started.State, constants.CollectorStarting)
+	}
+
+	time.Sleep(10 * time.Millisecond)
+	if err := repo.SetState(ctx, symbol, constants.MarketTypeSpot, constants.CollectorBackfilling); err != nil {
+		t.Fatalf("SetState(backfilling) returned error: %v", err)
+	}
+	backfilling, err := repo.FetchStatus(ctx, symbol, constants.MarketTypeSpot)
+	if err != nil {
+		t.Fatalf("FetchStatus() returned error: %v", err)
+	}
+	if backfilling.State != constants.CollectorBackfilling {
+		t.Errorf("State = %s, want %s", backfilling.State, constants.CollectorBackfilling)
+	}
+	if !backfilling.StateChangedAt.After(started.StateChangedAt) {
+		t.Errorf("StateChangedAt did not move on a transition: still %s", backfilling.StateChangedAt)
+	}
+	// The lifecycle state is not the process lifetime; it must not disturb it.
+	if !backfilling.StartedAt.Equal(started.StartedAt) {
+		t.Errorf("SetState moved started_at: %s -> %s", started.StartedAt, backfilling.StartedAt)
+	}
+
+	time.Sleep(10 * time.Millisecond)
+	if err := repo.SetState(ctx, symbol, constants.MarketTypeSpot, constants.CollectorBackfilling); err != nil {
+		t.Fatalf("repeated SetState(backfilling) returned error: %v", err)
+	}
+	repeated, err := repo.FetchStatus(ctx, symbol, constants.MarketTypeSpot)
+	if err != nil {
+		t.Fatalf("FetchStatus() returned error: %v", err)
+	}
+	if !repeated.StateChangedAt.Equal(backfilling.StateChangedAt) {
+		t.Errorf("StateChangedAt moved on a repeated write: %s -> %s",
+			backfilling.StateChangedAt, repeated.StateChangedAt)
+	}
+}
+
+// TestSetStateRejectsUnknownState proves the CHECK constraint is doing its
+// job: the column is text, so without it a typo would be stored happily and
+// only fail much later when the api parsed the row back.
+func TestSetStateRejectsUnknownState(t *testing.T) {
+	pool := testhelper.NewTestPool(t)
+	const symbol = "TESTBADSTATE"
+	cleanupCollectorStatus(t, pool, symbol)
+
+	repo := _market_repo.NewCollectorStatusRepoImpl(pool)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	if _, err := repo.RegisterStart(ctx, symbol, constants.MarketTypeSpot); err != nil {
+		t.Fatalf("RegisterStart() returned error: %v", err)
+	}
+
+	_, err := pool.Exec(ctx,
+		"UPDATE collector_status SET state = 'nonsense' WHERE symbol = $1", symbol)
+	if err == nil {
+		t.Fatal("the database accepted a state outside the enum")
+	}
+
+	// never_started is the absence of a row, so storing it would be a lie the
+	// constraint must also refuse.
+	_, err = pool.Exec(ctx,
+		"UPDATE collector_status SET state = $2 WHERE symbol = $1",
+		symbol, constants.CollectorNeverStarted.String())
+	if err == nil {
+		t.Error("the database accepted never_started as a stored state")
+	}
+}
+
 func TestFetchStatusWithoutCollector(t *testing.T) {
 	pool := testhelper.NewTestPool(t)
 

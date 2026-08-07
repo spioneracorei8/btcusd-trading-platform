@@ -38,6 +38,7 @@ type marketUsecase struct {
 
 	cache   *LatestCandleCache
 	backoff *binance.Backoff
+	state   *stateMachine
 
 	// now is injectable so tests can control the clock.
 	now func() time.Time
@@ -61,6 +62,7 @@ func NewMarketUsecaseImpl(
 		gaps:       gaps,
 		cache:      NewLatestCandleCache(),
 		backoff:    binance.NewBackoff(),
+		state:      newStateMachine(time.Now().UTC()),
 		now:        func() time.Time { return time.Now().UTC() },
 	}
 }
@@ -105,11 +107,13 @@ func (u *marketUsecase) ingestLoop(ctx context.Context) error {
 		// Backfill before every connection, not only the first: the bars
 		// missed while disconnected must land before the live feed resumes,
 		// or the series would gain a hole that only the next scan notices.
+		u.setState(ctx, constants.CollectorBackfilling)
 		if err := u.Backfill(ctx); err != nil {
 			if ctx.Err() != nil {
 				return nil
 			}
 			u.log.ErrorContext(ctx, "backfill failed, retrying after backoff", "error", err)
+			u.setState(ctx, constants.CollectorReconnecting)
 			if waitErr := u.waitBackoff(ctx); waitErr != nil {
 				return nil
 			}
@@ -123,6 +127,7 @@ func (u *marketUsecase) ingestLoop(ctx context.Context) error {
 		firstConnection = false
 
 		u.logDisconnect(ctx, streamErr)
+		u.setState(ctx, constants.CollectorReconnecting)
 		if err := u.waitBackoff(ctx); err != nil {
 			return nil
 		}
@@ -137,6 +142,7 @@ func (u *marketUsecase) stream(ctx context.Context, firstConnection bool) error 
 		u.log.WarnContext(ctx, "could not record the connection", "error", err)
 	}
 	u.backoff.Reset()
+	u.setState(ctx, constants.CollectorLive)
 	u.log.InfoContext(ctx, "market data stream connected",
 		"symbol", u.cfg.Symbol,
 		"timeframes", timeframeNames(u.cfg.Timeframes),
@@ -288,7 +294,10 @@ func (u *marketUsecase) heartbeatLoop(ctx context.Context) error {
 // checkStaleness reports the combination no other check catches: the stream
 // says it is connected while the newest candle has gone cold.
 func (u *marketUsecase) checkStaleness(ctx context.Context, connected bool) {
-	if !connected {
+	// Only meaningful once live. A years-old candle during a backfill is
+	// progress, and logging it as an error would train the reader to ignore
+	// the one case that matters.
+	if !connected || u.state.state() != constants.CollectorLive {
 		return
 	}
 

@@ -12,6 +12,12 @@ type CollectorStatus struct {
 	Symbol     string
 	MarketType constants.MarketType
 
+	// State is the lifecycle phase. It decides whether staleness is even a
+	// meaningful question: an old newest candle is normal progress while
+	// backfilling and a silent failure while live.
+	State          constants.CollectorState
+	StateChangedAt time.Time
+
 	// WSConnected is only meaningful next to a fresh UpdatedAt. A collector
 	// that died mid-connection leaves this true forever.
 	WSConnected bool

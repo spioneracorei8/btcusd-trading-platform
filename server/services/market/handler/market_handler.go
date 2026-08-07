@@ -44,6 +44,11 @@ type statusResponse struct {
 }
 
 type collectorResponse struct {
+	// State is the lifecycle phase. It is what makes the rest of this payload
+	// interpretable: an old newest candle is normal progress while
+	// backfilling and a silent failure while live.
+	State string `json:"state"`
+
 	Running     bool `json:"running"`
 	WSConnected bool `json:"ws_connected"`
 
@@ -55,6 +60,7 @@ type collectorResponse struct {
 	HeartbeatAgeSeconds *int64 `json:"heartbeat_age_seconds,omitempty"`
 
 	StartedAt          *time.Time `json:"started_at,omitempty"`
+	StateChangedAt     *time.Time `json:"state_changed_at,omitempty"`
 	LastConnectedAt    *time.Time `json:"last_connected_at,omitempty"`
 	LastDisconnectedAt *time.Time `json:"last_disconnected_at,omitempty"`
 	LastDisconnectNote string     `json:"last_disconnect_note,omitempty"`
@@ -91,6 +97,7 @@ func toStatusResponse(status models.MarketStatus, now time.Time) statusResponse 
 		Stale:      status.Stale,
 		Timeframes: make([]timeframeResponse, 0, len(status.Timeframes)),
 		Collector: collectorResponse{
+			State:              status.Collector.State.String(),
 			WSConnected:        status.Collector.WSConnected,
 			LastDisconnectNote: status.Collector.LastDisconnectNote,
 			ReconnectCount:     status.Collector.ReconnectCount,
@@ -110,6 +117,11 @@ func toStatusResponse(status models.MarketStatus, now time.Time) statusResponse 
 		resp.Collector.StartedAt = &startedAt
 		resp.Collector.UptimeSeconds = &uptime
 		resp.Collector.HeartbeatAgeSeconds = &age
+
+		if !status.Collector.StateChangedAt.IsZero() {
+			changedAt := helper.UTC(status.Collector.StateChangedAt)
+			resp.Collector.StateChangedAt = &changedAt
+		}
 	}
 
 	for _, timeframe := range status.Timeframes {
