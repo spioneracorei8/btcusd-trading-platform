@@ -10,6 +10,7 @@ import (
 
 	"github.com/spioneracorei8/btcusd-trading-platform/server/middleware"
 	"github.com/spioneracorei8/btcusd-trading-platform/server/services/health"
+	"github.com/spioneracorei8/btcusd-trading-platform/server/services/market"
 )
 
 type route struct {
@@ -39,4 +40,13 @@ func NewRoute(router chi.Router, middl middleware.MyMiddleware) *route {
 func (r *route) RegisterHealthHandler(handler health.HealthHandler) {
 	r.router.Get("/health", handler.Liveness)
 	r.router.Get("/ready", handler.Readiness)
+}
+
+// RegisterMarketHandler mounts the market data status endpoint.
+//
+// It sits under /internal because it exposes operational detail rather than
+// anything a client should depend on. There is no auth yet: the api listens on
+// loopback behind the VPS firewall.
+func (r *route) RegisterMarketHandler(handler market.MarketHandler) {
+	r.router.Get("/internal/market/status", handler.Status)
 }

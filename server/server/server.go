@@ -24,9 +24,17 @@ import (
 	"github.com/spioneracorei8/btcusd-trading-platform/server/middleware"
 	"github.com/spioneracorei8/btcusd-trading-platform/server/routes"
 
+	_candle_repo "github.com/spioneracorei8/btcusd-trading-platform/server/services/candle/repository"
+	_candle_us "github.com/spioneracorei8/btcusd-trading-platform/server/services/candle/usecase"
+	_datagap_repo "github.com/spioneracorei8/btcusd-trading-platform/server/services/datagap/repository"
+	_datagap_us "github.com/spioneracorei8/btcusd-trading-platform/server/services/datagap/usecase"
 	_health_handler "github.com/spioneracorei8/btcusd-trading-platform/server/services/health/handler"
 	_health_repo "github.com/spioneracorei8/btcusd-trading-platform/server/services/health/repository"
 	_health_us "github.com/spioneracorei8/btcusd-trading-platform/server/services/health/usecase"
+	_market_handler "github.com/spioneracorei8/btcusd-trading-platform/server/services/market/handler"
+	_market_repo "github.com/spioneracorei8/btcusd-trading-platform/server/services/market/repository"
+	"github.com/spioneracorei8/btcusd-trading-platform/server/services/market/repository/binance"
+	_market_us "github.com/spioneracorei8/btcusd-trading-platform/server/services/market/usecase"
 )
 
 // Server holds everything the API process needs to start.
@@ -59,27 +67,49 @@ func (s *Server) Start() error {
 	//==============================================================
 	// # REPOSITORIES
 	//==============================================================
-	// The API serves health only in phase 01. The candle, signal and data gap
-	// repositories exist and are tested, but nothing here consumes them yet:
-	// the collector wires them in phase 02. Constructing them now and throwing
-	// the result away would be dead code, not architecture.
 	healthRepo := _health_repo.NewHealthRepoImpl(pool)
+	candleRepo := _candle_repo.NewCandleRepoImpl(pool)
+	dataGapRepo := _datagap_repo.NewDataGapRepoImpl(pool)
+	collectorStatusRepo := _market_repo.NewCollectorStatusRepoImpl(pool)
+
+	// The api reads market data status but never ingests: only the collector
+	// opens a stream. This client exists so the usecase is complete, and its
+	// REST half is unused here.
+	marketDataRepo := binance.NewMarketDataRepoImpl(binance.Options{
+		RESTBaseURL: s.Config.Market.RESTBaseURL,
+		WSBaseURL:   s.Config.Market.WSBaseURL,
+	})
 
 	//==============================================================
 	// # USECASES
 	//==============================================================
 	healthUs := _health_us.NewHealthUsecaseImpl(healthRepo)
+	candleUs := _candle_us.NewCandleUsecaseImpl(candleRepo)
+	dataGapUs := _datagap_us.NewDataGapUsecaseImpl(dataGapRepo)
+	marketUs := _market_us.NewMarketUsecaseImpl(
+		_market_us.Config{
+			Symbol:            s.Config.Market.Symbol,
+			MarketType:        s.Config.Market.Type,
+			Timeframes:        s.Config.Market.Timeframes,
+			BackfillFrom:      s.Config.Market.BackfillFrom,
+			GapcheckInterval:  s.Config.Market.GapcheckInterval,
+			HeartbeatInterval: s.Config.Market.HeartbeatInterval,
+		},
+		s.Logger, marketDataRepo, collectorStatusRepo, candleUs, dataGapUs,
+	)
 
 	//==============================================================
 	// # HANDLERS
 	//==============================================================
 	healthHandler := _health_handler.NewHealthHandlerImpl(healthUs, s.Logger)
+	marketHandler := _market_handler.NewMarketHandlerImpl(marketUs, s.Logger)
 
 	//==============================================================
 	// # API
 	//==============================================================
 	route := routes.NewRoute(router, middl)
 	route.RegisterHealthHandler(healthHandler)
+	route.RegisterMarketHandler(marketHandler)
 
 	// A database that is not up yet must not stop the API from starting:
 	// /ready is what reports the truth about it.
