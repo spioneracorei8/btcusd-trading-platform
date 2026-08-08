@@ -12,9 +12,13 @@ Read [`CLAUDE.md`](CLAUDE.md) before writing any code. Phase prompts live in
 
 ## Status
 
-Phase 01 of 09 — skeleton, config, Docker, database schema. Market data,
-indicators, the backtest engine and strategies are not implemented yet; the
-`collector` and `backtest` binaries log their configuration and exit.
+Phases 01–04 of 09 are merged: skeleton and schema, market data ingestion,
+the indicator engine, and the backtest engine.
+
+The backtest engine is deliberately built **before** any strategy. Without a
+measuring instrument there is no way to tell whether a strategy works, so
+`backtest --list-strategies` reports an empty registry on purpose; strategies
+arrive in phase 06.
 
 ## Quick start
 
@@ -72,6 +76,10 @@ server/
     signal/        repository.go, usecase.go + repository/, usecase/
     datagap/       repository.go, usecase.go + repository/, usecase/
     health/        handler.go, usecase.go, repository.go + impls
+    market/        Binance client + ingestion (phase 02)
+    indicator/     EMA, RSI, ATR, VWAP (phase 03)
+    strategy/      strategy.go — the interface only, no implementations
+    backtest/      backtest.go, outage.go + usecase/, report/ (phase 04)
   migrations/      goose migrations
   testhelper/      shared setup for repository integration tests
 deploy/            docker-compose.yml, Caddyfile
@@ -97,6 +105,7 @@ repository) and is the template the later services follow. See
 | `make up` / `make down` / `make logs` | manage the compose stack |
 | `make engine` | show which container engine the targets will use |
 | `make adminer` / `make adminer-stop` | database browser on `127.0.0.1:8081` |
+| `go run ./backtest --help` | backtest CLI flags |
 | `make check` | build + vet + lint + test |
 
 ## Design rules that shape the code
@@ -114,7 +123,17 @@ These come from `CLAUDE.md` and are enforced here, not just documented.
 - **No float64 for money.** Prices and volumes are `decimal.Decimal` end to end;
   see [ADR 0002](docs/decisions/0002-numeric-money-mapping.md).
 - **Fees and slippage are configuration from day one** (`FEE_TAKER_PCT`,
-  `SLIPPAGE_TICKS`), so no backtest can accidentally report gross results.
+  `SLIPPAGE_TICKS`, `MARKET_TICK_SIZE`), so no backtest can accidentally report
+  gross results. The backtest report leads with net return and shows total
+  costs on their own line.
+- **Look-ahead is impossible to express, not merely forbidden.**
+  `strategy.BarContext` carries the closed bar, its indicator snapshot and a
+  copy of the position — no series, no index, no clock. A probe strategy that
+  reaches for future data is compiled by the test suite and must fail to build;
+  see [ADR 0011](docs/decisions/0011-look-ahead-is-structural.md).
+- **A backtest refuses to run over data it does not trust.** Unfilled gaps halt
+  the run by default, and known exchange outages are excluded under every
+  policy; see [ADR 0013](docs/decisions/0013-untradeable-windows.md).
 - **Every timestamp is UTC**, normalised on the way into and out of the database.
 - **Spot vs futures is a config enum**, not a hardcoded endpoint, so the choice
   stays open.
