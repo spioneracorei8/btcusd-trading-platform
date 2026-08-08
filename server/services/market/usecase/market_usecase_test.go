@@ -14,6 +14,7 @@ import (
 	"github.com/spioneracorei8/btcusd-trading-platform/server/constants"
 	"github.com/spioneracorei8/btcusd-trading-platform/server/models"
 	"github.com/spioneracorei8/btcusd-trading-platform/server/services/candle"
+	"github.com/spioneracorei8/btcusd-trading-platform/server/services/datagap"
 	"github.com/spioneracorei8/btcusd-trading-platform/server/services/market"
 	_market_us "github.com/spioneracorei8/btcusd-trading-platform/server/services/market/usecase"
 )
@@ -142,6 +143,10 @@ func (r *recordingCandleUsecase) CountCandles(context.Context, string, constants
 	return 0, nil
 }
 
+func (r *recordingCandleUsecase) StreamCandles(context.Context, candle.FetchCandlesParams, func(models.Candle) error) error {
+	return nil
+}
+
 func (r *recordingCandleUsecase) FindGaps(context.Context, string, constants.MarketType, constants.Timeframe) ([]candle.Gap, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -189,6 +194,10 @@ func (s *stubGapUsecase) RecordFillAttempt(_ context.Context, id int64, note str
 
 func (s *stubGapUsecase) CountUnfilled(context.Context, string, constants.MarketType, constants.Timeframe) (int64, error) {
 	return 0, nil
+}
+
+func (s *stubGapUsecase) ListUnfilledInRange(context.Context, datagap.GapRangeParams) ([]models.DataGap, error) {
+	return nil, nil
 }
 
 // stubStatusRepo records collector status without a database.

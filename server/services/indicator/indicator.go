@@ -65,17 +65,11 @@ type Value struct {
 
 // Snapshot is one row of indicator values at a candle close.
 //
-// It is a plain value type with no pointers and no behaviour: it is what
-// phases 04 and 06 consume, and a shared map or slice inside it would let a
-// later mutation rewrite a snapshot somebody already took.
-type Snapshot struct {
-	OpenTime time.Time
-
-	EMA  float64
-	RSI  float64
-	ATR  float64
-	VWAP float64
-}
+// It lives in models rather than here because the backtest and live strategy
+// interfaces carry it, and CLAUDE.md §5 allows a service's interface file to
+// import models and constants only. Defining it there keeps one definition
+// instead of a duplicate that would drift.
+type Snapshot = models.IndicatorSnapshot
 
 // MaxWarmupPeriod reports the longest warm-up across a set of indicators.
 //

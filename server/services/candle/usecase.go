@@ -25,6 +25,15 @@ type CandleUsecase interface {
 	// FindGaps reports the missing ranges in a stored series.
 	FindGaps(ctx context.Context, symbol string, marketType constants.MarketType, timeframe constants.Timeframe) ([]Gap, error)
 	FetchCandles(ctx context.Context, params FetchCandlesParams) ([]models.Candle, error)
+
+	// StreamCandles calls onCandle for every stored candle in a window,
+	// oldest first, reading the series in pages so it is never all resident.
+	//
+	// This is how the backtest engine replays history: a callback rather than
+	// a returned slice because the point is that the slice must not exist.
+	// Returning an error from onCandle stops the scan and is returned as-is,
+	// so a caller can end a run early without it looking like a read failure.
+	StreamCandles(ctx context.Context, params FetchCandlesParams, onCandle func(models.Candle) error) error
 	FetchLatestCandle(ctx context.Context, symbol string, marketType constants.MarketType, timeframe constants.Timeframe) (models.Candle, error)
 
 	// FetchEarliestCandle returns the oldest stored candle, which bounds how

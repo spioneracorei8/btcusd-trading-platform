@@ -37,6 +37,17 @@ type Querier interface {
 	// inclusive on open_time so a caller asking for a window gets exactly the
 	// bars whose open falls inside it.
 	GetCandles(ctx context.Context, arg GetCandlesParams) ([]Candle, error)
+	// One page of a keyset scan, oldest first.
+	//
+	// The backtest engine streams three years of 1m candles — roughly 1.5 million
+	// rows — and must not hold them all. Keyset paging on open_time is used rather
+	// than OFFSET because OFFSET re-scans everything it skips, so the last page of
+	// a long run would cost far more than the first.
+	//
+	// after_time is exclusive, so passing the previous page's last open_time
+	// continues exactly where it stopped. to_time stays inclusive, matching
+	// GetCandles.
+	GetCandlesAfter(ctx context.Context, arg GetCandlesAfterParams) ([]Candle, error)
 	GetCollectorStatus(ctx context.Context, arg GetCollectorStatusParams) (CollectorStatus, error)
 	// Oldest stored candle for a series, which bounds the expected sequence.
 	GetEarliestCandle(ctx context.Context, arg GetEarliestCandleParams) (Candle, error)
@@ -59,6 +70,18 @@ type Querier interface {
 	// Gaps still awaiting a successful backfill, oldest first, excluding those
 	// whose retry budget is spent.
 	ListUnfilledGaps(ctx context.Context, arg ListUnfilledGapsParams) ([]DataGap, error)
+	// Every unfilled gap overlapping a window, oldest first.
+	//
+	// Deliberately unlike ListUnfilledGaps, which excludes gaps whose retry budget
+	// is spent because it feeds the backfill worker. A backtest wants the
+	// opposite: a gap that has exhausted its retries is the one least likely ever
+	// to be filled and the one that most needs to stop a run.
+	//
+	// Overlap, not containment: a gap straddling either edge of the window still
+	// leaves the requested range incomplete. gap_end is the open time of the first
+	// candle present again, so it is an exclusive bound and the comparison
+	// against from_time is strict.
+	ListUnfilledGapsInRange(ctx context.Context, arg ListUnfilledGapsInRangeParams) ([]DataGap, error)
 	// Called when the stream comes up.
 	MarkCollectorConnected(ctx context.Context, arg MarkCollectorConnectedParams) error
 	// Called when the stream goes down, with the reason kept for later.

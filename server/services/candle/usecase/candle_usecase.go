@@ -3,6 +3,7 @@ package usecase
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/spioneracorei8/btcusd-trading-platform/server/constants"
 	"github.com/spioneracorei8/btcusd-trading-platform/server/models"
@@ -35,6 +36,48 @@ func (u *candleUsecase) SaveCandle(ctx context.Context, c models.Candle) error {
 
 func (u *candleUsecase) FetchCandles(ctx context.Context, params candle.FetchCandlesParams) ([]models.Candle, error) {
 	return u.candleRepository.FetchCandles(ctx, params)
+}
+
+// StreamCandles replays a window one candle at a time, paging underneath.
+//
+// The loop is deliberately dull. The keyset cursor is the previous page's
+// last open_time, which the repository treats as exclusive, so a page that
+// comes back short or empty ends the scan without needing a count.
+func (u *candleUsecase) StreamCandles(ctx context.Context, params candle.FetchCandlesParams, onCandle func(models.Candle) error) error {
+	page := candle.FetchCandlePageParams{
+		Symbol:     params.Symbol,
+		MarketType: params.MarketType,
+		Timeframe:  params.Timeframe,
+		To:         params.To,
+		PageSize:   constants.CandlePageSize,
+	}
+
+	// From is inclusive on the interface but After is exclusive underneath, so
+	// the cursor starts one instant earlier to keep the first candle.
+	page.After = params.From.Add(-time.Nanosecond)
+
+	for {
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("stream candles: %w", err)
+		}
+
+		candles, err := u.candleRepository.FetchCandlePage(ctx, page)
+		if err != nil {
+			return err // the repository already names the operation
+		}
+		if len(candles) == 0 {
+			return nil
+		}
+
+		for _, c := range candles {
+			// Returned unwrapped: a caller stopping its own scan is not a
+			// read failure and must stay comparable with errors.Is.
+			if err := onCandle(c); err != nil {
+				return err
+			}
+		}
+		page.After = candles[len(candles)-1].OpenTime
+	}
 }
 
 func (u *candleUsecase) FetchLatestCandle(ctx context.Context, symbol string, marketType constants.MarketType, timeframe constants.Timeframe) (models.Candle, error) {

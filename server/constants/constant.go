@@ -14,6 +14,15 @@ const (
 	DefaultFeeTakerPct   = "0.05"
 	DefaultSlippageTicks = 1
 
+	// DefaultMarketTickSize is the smallest price increment of the
+	// instrument, which is what turns DefaultSlippageTicks into money.
+	//
+	// 0.01 is the BTCUSDT spot tick. It is configuration rather than a
+	// constant for the same reason the fee is: a different symbol or the
+	// futures book has a different tick, and a backtest that silently used
+	// the wrong one would misprice every fill it simulated.
+	DefaultMarketTickSize = "0.01"
+
 	DefaultDatabaseMaxConns = 10
 
 	// Binance public market-data endpoints. No API key is used anywhere in
@@ -44,6 +53,12 @@ const (
 	// during backfill. A row-at-a-time loop over years of 1m candles is not
 	// acceptable.
 	UpsertBatchSize = 1000
+
+	// CandlePageSize is how many candles a keyset scan reads per round trip
+	// when replaying a series. It trades round trips against resident memory:
+	// at this size a backtest over years of 1m candles holds kilobytes rather
+	// than the hundreds of megabytes the whole series would occupy.
+	CandlePageSize = 1000
 
 	// ClosedCandleBufferSize bounds the channel between the WebSocket reader
 	// and the writer. When it fills the reader blocks: dropping a candle

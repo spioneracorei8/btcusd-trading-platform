@@ -114,3 +114,23 @@ WHERE symbol = sqlc.arg(symbol)
   AND timeframe = sqlc.arg(timeframe)
 ORDER BY open_time
 LIMIT 1;
+
+-- name: GetCandlesAfter :many
+-- One page of a keyset scan, oldest first.
+--
+-- The backtest engine streams three years of 1m candles — roughly 1.5 million
+-- rows — and must not hold them all. Keyset paging on open_time is used rather
+-- than OFFSET because OFFSET re-scans everything it skips, so the last page of
+-- a long run would cost far more than the first.
+--
+-- after_time is exclusive, so passing the previous page's last open_time
+-- continues exactly where it stopped. to_time stays inclusive, matching
+-- GetCandles.
+SELECT * FROM candles
+WHERE symbol = sqlc.arg(symbol)
+  AND market_type = sqlc.arg(market_type)
+  AND timeframe = sqlc.arg(timeframe)
+  AND open_time > sqlc.arg(after_time)
+  AND open_time <= sqlc.arg(to_time)
+ORDER BY open_time
+LIMIT sqlc.arg(page_size)::int;

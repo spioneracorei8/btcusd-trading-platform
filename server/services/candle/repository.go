@@ -22,6 +22,23 @@ type FetchCandlesParams struct {
 	To   time.Time
 }
 
+// FetchCandlePageParams selects one page of a keyset scan.
+type FetchCandlePageParams struct {
+	Symbol     string
+	MarketType constants.MarketType
+	Timeframe  constants.Timeframe
+
+	// After is exclusive and To inclusive: passing the previous page's last
+	// open_time as After resumes exactly where the scan stopped, without the
+	// overlap an inclusive bound would produce. A zero After starts at the
+	// beginning of the series.
+	After time.Time
+	To    time.Time
+
+	// PageSize caps the rows returned. Zero means constants.CandlePageSize.
+	PageSize int
+}
+
 // Gap is a hole found in the stored sequence.
 type Gap struct {
 	// Start is the open time of the first missing candle, End the open time
@@ -50,6 +67,14 @@ type CandleRepository interface {
 
 	// FetchCandles returns the stored candles of a window, oldest first.
 	FetchCandles(ctx context.Context, params FetchCandlesParams) ([]models.Candle, error)
+
+	// FetchCandlePage returns one page of a keyset scan, oldest first.
+	//
+	// It exists because the backtest engine replays years of 1m candles —
+	// around 1.5 million rows for three years — and holding them in a slice
+	// would not fit on the deployment target. Callers page by passing the
+	// previous page's last open_time as After; an empty result ends the scan.
+	FetchCandlePage(ctx context.Context, params FetchCandlePageParams) ([]models.Candle, error)
 
 	// FetchLatestCandle returns the newest stored candle for a series, or
 	// constants.ErrNotFound when the series is still empty.

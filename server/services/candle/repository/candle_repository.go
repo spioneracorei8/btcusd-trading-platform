@@ -78,6 +78,36 @@ func (r *candleRepository) FetchCandles(ctx context.Context, params candle.Fetch
 	return out, nil
 }
 
+// FetchCandlePage reads one page of a keyset scan.
+func (r *candleRepository) FetchCandlePage(ctx context.Context, params candle.FetchCandlePageParams) ([]models.Candle, error) {
+	pageSize := params.PageSize
+	if pageSize <= 0 {
+		pageSize = constants.CandlePageSize
+	}
+
+	rows, err := r.queries.GetCandlesAfter(ctx, db.GetCandlesAfterParams{
+		Symbol:     params.Symbol,
+		MarketType: params.MarketType.String(),
+		Timeframe:  params.Timeframe.String(),
+		AfterTime:  database.TimestamptzFromTime(params.After),
+		ToTime:     database.TimestamptzFromTime(params.To),
+		PageSize:   int32(pageSize),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("fetch candle page: %w", err)
+	}
+
+	out := make([]models.Candle, 0, len(rows))
+	for _, row := range rows {
+		c, err := toCandleModel(row)
+		if err != nil {
+			return nil, fmt.Errorf("fetch candle page: %w", err)
+		}
+		out = append(out, c)
+	}
+	return out, nil
+}
+
 func (r *candleRepository) FetchLatestCandle(ctx context.Context, symbol string, marketType constants.MarketType, timeframe constants.Timeframe) (models.Candle, error) {
 	row, err := r.queries.GetLatestCandle(ctx, db.GetLatestCandleParams{
 		Symbol:     symbol,

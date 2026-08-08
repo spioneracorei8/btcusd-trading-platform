@@ -51,3 +51,24 @@ WHERE symbol = sqlc.arg(symbol)
   AND market_type = sqlc.arg(market_type)
   AND timeframe = sqlc.arg(timeframe)
   AND filled_at IS NULL;
+
+-- name: ListUnfilledGapsInRange :many
+-- Every unfilled gap overlapping a window, oldest first.
+--
+-- Deliberately unlike ListUnfilledGaps, which excludes gaps whose retry budget
+-- is spent because it feeds the backfill worker. A backtest wants the
+-- opposite: a gap that has exhausted its retries is the one least likely ever
+-- to be filled and the one that most needs to stop a run.
+--
+-- Overlap, not containment: a gap straddling either edge of the window still
+-- leaves the requested range incomplete. gap_end is the open time of the first
+-- candle present again, so it is an exclusive bound and the comparison
+-- against from_time is strict.
+SELECT * FROM data_gaps
+WHERE symbol = sqlc.arg(symbol)
+  AND market_type = sqlc.arg(market_type)
+  AND timeframe = sqlc.arg(timeframe)
+  AND filled_at IS NULL
+  AND gap_start <= sqlc.arg(to_time)
+  AND gap_end > sqlc.arg(from_time)
+ORDER BY gap_start;

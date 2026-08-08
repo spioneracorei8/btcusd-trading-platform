@@ -15,8 +15,16 @@ import (
 )
 
 // spyCandleRepository records what the usecase asked it to do.
+//
+// series and pageRequests exist for the keyset scan: they let a paging bug be
+// caught without a database, which matters because a cursor that skipped or
+// repeated a bar would corrupt every backtest run over that series.
 type spyCandleRepository struct {
 	upserted []models.Candle
+
+	series       []models.Candle
+	pageRequests []candle.FetchCandlePageParams
+	pageErr      error
 }
 
 func (s *spyCandleRepository) UpsertCandle(_ context.Context, c models.Candle) error {
@@ -26,6 +34,30 @@ func (s *spyCandleRepository) UpsertCandle(_ context.Context, c models.Candle) e
 
 func (s *spyCandleRepository) FetchCandles(context.Context, candle.FetchCandlesParams) ([]models.Candle, error) {
 	return nil, nil
+}
+
+// FetchCandlePage serves series the way the SQL does: After exclusive, To
+// inclusive, capped at PageSize, oldest first.
+func (s *spyCandleRepository) FetchCandlePage(_ context.Context, params candle.FetchCandlePageParams) ([]models.Candle, error) {
+	s.pageRequests = append(s.pageRequests, params)
+	if s.pageErr != nil {
+		return nil, s.pageErr
+	}
+
+	page := make([]models.Candle, 0, params.PageSize)
+	for _, c := range s.series {
+		if !c.OpenTime.After(params.After) {
+			continue
+		}
+		if !params.To.IsZero() && c.OpenTime.After(params.To) {
+			break
+		}
+		page = append(page, c)
+		if params.PageSize > 0 && len(page) == params.PageSize {
+			break
+		}
+	}
+	return page, nil
 }
 
 func (s *spyCandleRepository) FetchLatestCandle(context.Context, string, constants.MarketType, constants.Timeframe) (models.Candle, error) {
@@ -150,5 +182,124 @@ func TestSaveCandlesWithEmptyBatchIsANoop(t *testing.T) {
 	}
 	if len(repo.upserted) != 0 {
 		t.Errorf("an empty batch wrote %d candles", len(repo.upserted))
+	}
+}
+
+// makeSeries builds n consecutive 1m candles from start.
+func makeSeries(start time.Time, n int) []models.Candle {
+	series := make([]models.Candle, 0, n)
+	for i := range n {
+		c := testCandle()
+		c.OpenTime = start.Add(time.Duration(i) * time.Minute)
+		c.CloseTime = c.OpenTime.Add(time.Minute)
+		series = append(series, c)
+	}
+	return series
+}
+
+// TestStreamCandlesDeliversEveryBarExactlyOnce is the property the backtest
+// engine depends on completely.
+//
+// The series is deliberately not a multiple of the page size, so the last
+// partial page is exercised. A cursor off by one bar in either direction —
+// skipping the first candle of each page, or repeating the last — would still
+// produce a plausible-looking run and a wrong result, so this asserts the
+// exact sequence rather than only the count.
+func TestStreamCandlesDeliversEveryBarExactlyOnce(t *testing.T) {
+	start := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	const bars = 2503
+
+	repo := &spyCandleRepository{series: makeSeries(start, bars)}
+	us := _candle_us.NewCandleUsecaseImpl(repo)
+
+	var seen []time.Time
+	err := us.StreamCandles(context.Background(), candle.FetchCandlesParams{
+		Symbol:     "BTCUSDT",
+		MarketType: constants.MarketTypeSpot,
+		Timeframe:  constants.Timeframe1m,
+		From:       start,
+		To:         start.Add(time.Duration(bars) * time.Minute),
+	}, func(c models.Candle) error {
+		seen = append(seen, c.OpenTime)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("StreamCandles() returned error: %v", err)
+	}
+
+	if len(seen) != bars {
+		t.Fatalf("streamed %d candles, want %d", len(seen), bars)
+	}
+	for i, openTime := range seen {
+		want := start.Add(time.Duration(i) * time.Minute)
+		if !openTime.Equal(want) {
+			t.Fatalf("candle %d has open time %s, want %s", i, openTime, want)
+		}
+	}
+
+	// More than one page must actually have been read, or the test would pass
+	// on an implementation that never pages at all.
+	if len(repo.pageRequests) < 2 {
+		t.Errorf("made %d page requests, want several: the scan did not page", len(repo.pageRequests))
+	}
+}
+
+// TestStreamCandlesIncludesTheFirstBar guards the inclusive/exclusive seam.
+// From is inclusive on the interface but the underlying cursor is exclusive,
+// so an off-by-one here would silently drop the opening bar of every run.
+func TestStreamCandlesIncludesTheFirstBar(t *testing.T) {
+	start := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+
+	repo := &spyCandleRepository{series: makeSeries(start, 3)}
+	us := _candle_us.NewCandleUsecaseImpl(repo)
+
+	var first time.Time
+	count := 0
+	err := us.StreamCandles(context.Background(), candle.FetchCandlesParams{
+		From: start,
+		To:   start.Add(2 * time.Minute),
+	}, func(c models.Candle) error {
+		if count == 0 {
+			first = c.OpenTime
+		}
+		count++
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("StreamCandles() returned error: %v", err)
+	}
+	if count != 3 {
+		t.Fatalf("streamed %d candles, want 3", count)
+	}
+	if !first.Equal(start) {
+		t.Errorf("first candle is %s, want the bar at From (%s)", first, start)
+	}
+}
+
+// TestStreamCandlesStopsOnCallbackError checks that a caller ending its own
+// scan gets its error back unwrapped, so errors.Is still matches. The engine
+// uses this to stop at a gap boundary without it looking like a read failure.
+func TestStreamCandlesStopsOnCallbackError(t *testing.T) {
+	start := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	stop := errors.New("caller is done")
+
+	repo := &spyCandleRepository{series: makeSeries(start, 500)}
+	us := _candle_us.NewCandleUsecaseImpl(repo)
+
+	seen := 0
+	err := us.StreamCandles(context.Background(), candle.FetchCandlesParams{From: start, To: start.Add(500 * time.Minute)},
+		func(models.Candle) error {
+			seen++
+			if seen == 4 {
+				return stop
+			}
+			return nil
+		})
+
+	if !errors.Is(err, stop) {
+		t.Fatalf("StreamCandles() returned %v, want the callback's own error", err)
+	}
+	if seen != 4 {
+		t.Errorf("callback ran %d times, want 4: the scan did not stop", seen)
 	}
 }

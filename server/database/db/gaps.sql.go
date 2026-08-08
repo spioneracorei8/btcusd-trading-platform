@@ -143,6 +143,73 @@ func (q *Queries) ListUnfilledGaps(ctx context.Context, arg ListUnfilledGapsPara
 	return items, nil
 }
 
+const listUnfilledGapsInRange = `-- name: ListUnfilledGapsInRange :many
+SELECT id, symbol, market_type, timeframe, gap_start, gap_end, detected_at, filled_at, note, fill_attempts FROM data_gaps
+WHERE symbol = $1
+  AND market_type = $2
+  AND timeframe = $3
+  AND filled_at IS NULL
+  AND gap_start <= $4
+  AND gap_end > $5
+ORDER BY gap_start
+`
+
+type ListUnfilledGapsInRangeParams struct {
+	Symbol     string
+	MarketType string
+	Timeframe  string
+	ToTime     pgtype.Timestamptz
+	FromTime   pgtype.Timestamptz
+}
+
+// Every unfilled gap overlapping a window, oldest first.
+//
+// Deliberately unlike ListUnfilledGaps, which excludes gaps whose retry budget
+// is spent because it feeds the backfill worker. A backtest wants the
+// opposite: a gap that has exhausted its retries is the one least likely ever
+// to be filled and the one that most needs to stop a run.
+//
+// Overlap, not containment: a gap straddling either edge of the window still
+// leaves the requested range incomplete. gap_end is the open time of the first
+// candle present again, so it is an exclusive bound and the comparison
+// against from_time is strict.
+func (q *Queries) ListUnfilledGapsInRange(ctx context.Context, arg ListUnfilledGapsInRangeParams) ([]DataGap, error) {
+	rows, err := q.db.Query(ctx, listUnfilledGapsInRange,
+		arg.Symbol,
+		arg.MarketType,
+		arg.Timeframe,
+		arg.ToTime,
+		arg.FromTime,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []DataGap{}
+	for rows.Next() {
+		var i DataGap
+		if err := rows.Scan(
+			&i.ID,
+			&i.Symbol,
+			&i.MarketType,
+			&i.Timeframe,
+			&i.GapStart,
+			&i.GapEnd,
+			&i.DetectedAt,
+			&i.FilledAt,
+			&i.Note,
+			&i.FillAttempts,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const markGapFilled = `-- name: MarkGapFilled :exec
 UPDATE data_gaps SET
     filled_at = now()

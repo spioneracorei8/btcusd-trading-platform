@@ -21,4 +21,9 @@ type DataGapUsecase interface {
 
 	// CountUnfilled reports how much data is still missing for a timeframe.
 	CountUnfilled(ctx context.Context, symbol string, marketType constants.MarketType, timeframe constants.Timeframe) (int64, error)
+
+	// ListUnfilledInRange returns every unfilled gap overlapping a window,
+	// including those whose retries are exhausted. It is what a backtest
+	// consults before agreeing to report a number over that period.
+	ListUnfilledInRange(ctx context.Context, params GapRangeParams) ([]models.DataGap, error)
 }

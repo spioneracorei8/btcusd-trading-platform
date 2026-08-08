@@ -56,6 +56,9 @@ type Market struct {
 	FeeTakerPct decimal.Decimal
 	// SlippageTicks is the assumed slippage of a fill, in price ticks.
 	SlippageTicks int
+	// TickSize is what one of those ticks is worth in quote currency. Without
+	// it SlippageTicks is a count with no unit and no fill can be priced.
+	TickSize decimal.Decimal
 
 	// RESTBaseURL and WSBaseURL are the exchange endpoints. They are
 	// configuration rather than constants so the futures endpoints can be
@@ -124,6 +127,7 @@ func LoadFrom(lookup helper.LookupFunc) (*Config, error) {
 			Timeframes:    l.timeframes("MARKET_TIMEFRAMES"),
 			FeeTakerPct:   l.feePct("FEE_TAKER_PCT"),
 			SlippageTicks: l.optionalInt("SLIPPAGE_TICKS", constants.DefaultSlippageTicks, 0, 1000),
+			TickSize:      l.tickSize("MARKET_TICK_SIZE"),
 
 			RESTBaseURL:       l.baseURL("BINANCE_REST_BASE_URL", constants.DefaultBinanceRESTBaseURL, "https"),
 			WSBaseURL:         l.baseURL("BINANCE_WS_BASE_URL", constants.DefaultBinanceWSBaseURL, "wss"),
@@ -385,6 +389,27 @@ func (l *loader) feePct(key string) decimal.Decimal {
 	}
 	if d.IsNegative() || d.GreaterThanOrEqual(decimal.NewFromInt(100)) {
 		l.invalidf(key, "%s is outside 0-100 (percent)", d)
+		return decimal.Zero
+	}
+	return d
+}
+
+// tickSize parses the instrument's price increment.
+//
+// Zero is rejected rather than treated as "no slippage": a zero tick makes
+// SLIPPAGE_TICKS silently free, which is precisely the flattering-by-default
+// behaviour CLAUDE.md §3.4 exists to prevent. Slippage is disabled by setting
+// SLIPPAGE_TICKS to 0, visibly, not by nulling the unit it is measured in.
+func (l *loader) tickSize(key string) decimal.Decimal {
+	v := l.optionalString(key, constants.DefaultMarketTickSize)
+
+	d, err := decimal.NewFromString(v)
+	if err != nil {
+		l.invalidf(key, "%q is not a decimal number", v)
+		return decimal.Zero
+	}
+	if !d.IsPositive() {
+		l.invalidf(key, "%s is not a positive price increment", d)
 		return decimal.Zero
 	}
 	return d

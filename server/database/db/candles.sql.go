@@ -160,6 +160,78 @@ func (q *Queries) GetCandles(ctx context.Context, arg GetCandlesParams) ([]Candl
 	return items, nil
 }
 
+const getCandlesAfter = `-- name: GetCandlesAfter :many
+SELECT symbol, market_type, timeframe, open_time, close_time, open, high, low, close, volume, quote_volume, trade_count, is_closed, created_at FROM candles
+WHERE symbol = $1
+  AND market_type = $2
+  AND timeframe = $3
+  AND open_time > $4
+  AND open_time <= $5
+ORDER BY open_time
+LIMIT $6::int
+`
+
+type GetCandlesAfterParams struct {
+	Symbol     string
+	MarketType string
+	Timeframe  string
+	AfterTime  pgtype.Timestamptz
+	ToTime     pgtype.Timestamptz
+	PageSize   int32
+}
+
+// One page of a keyset scan, oldest first.
+//
+// The backtest engine streams three years of 1m candles — roughly 1.5 million
+// rows — and must not hold them all. Keyset paging on open_time is used rather
+// than OFFSET because OFFSET re-scans everything it skips, so the last page of
+// a long run would cost far more than the first.
+//
+// after_time is exclusive, so passing the previous page's last open_time
+// continues exactly where it stopped. to_time stays inclusive, matching
+// GetCandles.
+func (q *Queries) GetCandlesAfter(ctx context.Context, arg GetCandlesAfterParams) ([]Candle, error) {
+	rows, err := q.db.Query(ctx, getCandlesAfter,
+		arg.Symbol,
+		arg.MarketType,
+		arg.Timeframe,
+		arg.AfterTime,
+		arg.ToTime,
+		arg.PageSize,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Candle{}
+	for rows.Next() {
+		var i Candle
+		if err := rows.Scan(
+			&i.Symbol,
+			&i.MarketType,
+			&i.Timeframe,
+			&i.OpenTime,
+			&i.CloseTime,
+			&i.Open,
+			&i.High,
+			&i.Low,
+			&i.Close,
+			&i.Volume,
+			&i.QuoteVolume,
+			&i.TradeCount,
+			&i.IsClosed,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const getEarliestCandle = `-- name: GetEarliestCandle :one
 SELECT symbol, market_type, timeframe, open_time, close_time, open, high, low, close, volume, quote_volume, trade_count, is_closed, created_at FROM candles
 WHERE symbol = $1

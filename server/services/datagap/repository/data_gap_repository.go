@@ -131,3 +131,27 @@ func (r *dataGapRepository) CountUnfilled(ctx context.Context, symbol string, ma
 	}
 	return n, nil
 }
+
+// ListUnfilledInRange returns every unfilled gap overlapping a window.
+func (r *dataGapRepository) ListUnfilledInRange(ctx context.Context, params datagap.GapRangeParams) ([]models.DataGap, error) {
+	rows, err := r.queries.ListUnfilledGapsInRange(ctx, db.ListUnfilledGapsInRangeParams{
+		Symbol:     params.Symbol,
+		MarketType: params.MarketType.String(),
+		Timeframe:  params.Timeframe.String(),
+		FromTime:   database.TimestamptzFromTime(params.From),
+		ToTime:     database.TimestamptzFromTime(params.To),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list unfilled gaps in range: %w", err)
+	}
+
+	gaps := make([]models.DataGap, 0, len(rows))
+	for _, row := range rows {
+		gap, err := toDataGapModel(row)
+		if err != nil {
+			return nil, fmt.Errorf("list unfilled gaps in range: %w", err)
+		}
+		gaps = append(gaps, gap)
+	}
+	return gaps, nil
+}

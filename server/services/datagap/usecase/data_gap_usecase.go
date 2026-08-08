@@ -34,3 +34,8 @@ func (u *dataGapUsecase) RecordFillAttempt(ctx context.Context, id int64, note s
 func (u *dataGapUsecase) CountUnfilled(ctx context.Context, symbol string, marketType constants.MarketType, timeframe constants.Timeframe) (int64, error) {
 	return u.dataGapRepository.CountUnfilled(ctx, symbol, marketType, timeframe)
 }
+
+// ListUnfilledInRange returns every unfilled gap overlapping a window.
+func (u *dataGapUsecase) ListUnfilledInRange(ctx context.Context, params datagap.GapRangeParams) ([]models.DataGap, error) {
+	return u.dataGapRepository.ListUnfilledInRange(ctx, params)
+}
