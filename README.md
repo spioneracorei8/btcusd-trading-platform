@@ -20,6 +20,7 @@ indicators, the backtest engine and strategies are not implemented yet; the
 
 ```bash
 cp .env.example .env      # then edit the password before any real deployment
+make engine               # check which container engine will be used
 make up                   # build and start postgres + migrate + api + collector
 curl localhost:8080/health
 ```
@@ -34,6 +35,17 @@ To browse the data by hand:
 make adminer              # http://127.0.0.1:8081, server "postgres"
 make adminer-stop         # when finished
 ```
+
+### podman or docker
+
+Both work — the compose file is the same for either. The Makefile picks podman
+when it is installed and falls back to docker, which `make engine` prints.
+
+Worth checking once, because the two engines keep entirely separate container
+and volume namespaces: a target that runs under docker while the stack lives
+under podman does not fail, it quietly builds a second, empty stack beside the
+real one. Pin the choice in `.env` with `CONTAINER_ENGINE=podman` (or `docker`)
+if the guess is wrong for your machine.
 
 ## Layout
 
@@ -83,6 +95,7 @@ repository) and is the template the later services follow. See
 | `make verify-hypertable` | prove `candles` really is a hypertable |
 | `make sqlc` | regenerate the query layer from the migrations |
 | `make up` / `make down` / `make logs` | manage the compose stack |
+| `make engine` | show which container engine the targets will use |
 | `make adminer` / `make adminer-stop` | database browser on `127.0.0.1:8081` |
 | `make check` | build + vet + lint + test |
 

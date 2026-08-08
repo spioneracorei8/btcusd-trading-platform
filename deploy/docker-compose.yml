@@ -1,8 +1,13 @@
 # Production-shaped compose file: images are built, no source is mounted.
 #
-# Defaults are baked in so `docker compose up` works with no .env at all.
+# Works under podman and docker alike; nothing here is engine-specific. Note
+# that the two keep separate container and volume namespaces, so every command
+# against this file has to use the same one — `make engine` reports which the
+# Makefile picked.
+#
+# Defaults are baked in so `<engine> compose up` works with no .env at all.
 # Override them from the repository root .env with:
-#   docker compose --env-file .env -f deploy/docker-compose.yml up
+#   podman compose --env-file .env -f deploy/docker-compose.yml up
 # which is what `make up` does.
 
 name: btcusd-trading-platform

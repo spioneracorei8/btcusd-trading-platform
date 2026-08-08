@@ -24,7 +24,20 @@ include .env
 export
 endif
 
-COMPOSE := docker compose $(if $(wildcard ./.env),--env-file .env,) -f $(COMPOSE_FILE)
+# Container engine. Both podman and docker provide a `compose` subcommand and
+# read the same compose file, but they keep entirely separate container and
+# volume namespaces: running one target under docker while the stack lives
+# under podman silently builds a second, empty stack next to the real one
+# rather than failing.
+#
+# podman wins the auto-detection because a machine with only docker has no
+# podman to find, while a podman host often has the docker CLI installed as a
+# shim. Override it when that guess is wrong:
+#   make up CONTAINER_ENGINE=docker
+# or set CONTAINER_ENGINE in .env to make the choice stick.
+CONTAINER_ENGINE ?= $(shell command -v podman >/dev/null 2>&1 && echo podman || echo docker)
+
+COMPOSE := $(CONTAINER_ENGINE) compose $(if $(wildcard ./.env),--env-file .env,) -f $(COMPOSE_FILE)
 
 .PHONY: help
 help: ## Show this help
@@ -103,7 +116,7 @@ migrate-status: require-db-url ## Show which migrations are applied
 
 .PHONY: verify-hypertable
 verify-hypertable: require-db-url ## Prove that candles really is a hypertable
-	@docker run --rm -i --network host postgres:16-alpine \
+	@$(CONTAINER_ENGINE) run --rm -i --network host docker.io/library/postgres:16-alpine \
 		psql "$(DATABASE_URL)" -c \
 		"SELECT hypertable_name FROM timescaledb_information.hypertables WHERE hypertable_name = 'candles';"
 
@@ -112,8 +125,14 @@ sqlc: ## Regenerate the sqlc query layer from the migrations
 	cd $(SERVER) && $(SQLC) generate
 
 # ---------------------------------------------------------------------------
-# Docker
+# Containers
 # ---------------------------------------------------------------------------
+
+.PHONY: engine
+engine: ## Show which container engine these targets will use
+	@echo "CONTAINER_ENGINE = $(CONTAINER_ENGINE)"
+	@$(CONTAINER_ENGINE) --version
+	@echo "compose command  = $(COMPOSE)"
 
 .PHONY: up
 up: ## Build and start the stack
@@ -134,6 +153,8 @@ ps: ## Show the container status
 .PHONY: adminer
 adminer: ## Start Adminer to browse the database, then print its URL
 	$(COMPOSE) --profile tools up -d adminer
+	@echo
+	@echo "Engine:    $(CONTAINER_ENGINE)"
 	@echo "Adminer:   http://127.0.0.1:$(or $(ADMINER_HOST_PORT),8081)"
 	@echo "System:    PostgreSQL"
 	@echo "Server:    postgres        (pre-filled)"
