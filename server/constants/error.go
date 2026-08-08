@@ -16,6 +16,22 @@ var (
 	ErrUnclosedCandle = errors.New("candle is not closed")
 )
 
+// Sentinel errors returned by the backtest engine.
+var (
+	// ErrDataIncomplete reports that the requested range has unfilled gaps
+	// and the run refused to proceed. It is a refusal, not a fault: a number
+	// computed over missing bars is worse than no number at all.
+	ErrDataIncomplete = errors.New("candle data is incomplete for the requested range")
+
+	// ErrShortOnSpot reports a short entry on a spot market. A spot backtest
+	// that shorts is fiction, so this is a hard error rather than a warning.
+	ErrShortOnSpot = errors.New("cannot short on a spot market")
+
+	// ErrNoCandles reports that the requested range contains no stored
+	// candles at all, so there was nothing to measure.
+	ErrNoCandles = errors.New("no candles stored for the requested range")
+)
+
 // Sentinel errors returned by the market data client.
 var (
 	// ErrRateLimited reports an HTTP 429 or 418 from Binance. It is never

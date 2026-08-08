@@ -1,0 +1,45 @@
+// This file is not Go source. It is a probe: a strategy that tries every way
+// a look-ahead could be smuggled through BarContext. TestLookAheadDoesNotCompile
+// copies it into a temporary package and asserts that `go build` fails.
+//
+// It is stored with a .txt extension so the toolchain never sees it during a
+// normal build or vet. A build tag would not be enough — `go vet ./...` still
+// parses tagged files, and this one is meant not to parse against the real
+// interface at all.
+//
+// If this ever compiles, phase-04 §1 is not satisfied: BarContext has grown a
+// field that lets a strategy see past its own decision point, and the interface
+// needs to change rather than the rule being written down somewhere.
+package probe
+
+import (
+	"github.com/spioneracorei8/btcusd-trading-platform/server/services/strategy"
+)
+
+type peeker struct{}
+
+func (peeker) OnBar(bar strategy.BarContext) []strategy.Intent {
+	// 1. A slice of the whole series would allow indexing past the current bar.
+	_ = bar.Candles
+
+	// 2. An index into a series would allow the same thing more subtly.
+	_ = bar.Index
+
+	// 3. A reader would let the strategy fetch anything it liked, including
+	//    bars that have not happened yet.
+	_ = bar.Candles.Next()
+
+	// 4. A clock would let a live strategy behave differently from a replay,
+	//    which shows up later as an unreproducible backtest rather than as an
+	//    error.
+	_ = bar.Now
+
+	// 5. The future bar, named outright.
+	_ = bar.NextCandle
+
+	return nil
+}
+
+func (peeker) WarmupPeriod() int { return 0 }
+func (peeker) Name() string      { return "peeker" }
+func (peeker) Version() string   { return "v1" }
