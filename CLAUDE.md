@@ -120,9 +120,9 @@ btcusd-trading-platform/
 │   ├── server/             # server.go — ต่อ repo → usecase → handler
 │   ├── database/           # pgx pool, convert, db/ (sqlc generated), queries/
 │   ├── services/
-│   │   └── <domain>/       # candle, signal, datagap, health,
-│   │       ├── handler.go        #   ต่อไป: market, indicator, trend,
-│   │       ├── handler/          #   strategy, notify
+│   │   └── <domain>/       # ทำแล้ว: candle, signal, datagap, health,
+│   │       ├── handler.go        #   market, indicator, strategy, backtest
+│   │       ├── handler/          # ต่อไป: trend, notify
 │   │       ├── repository.go
 │   │       ├── repository/
 │   │       ├── usecase.go
@@ -140,8 +140,20 @@ btcusd-trading-platform/
 - `constants` ห้าม import package อื่นในโปรเจกต์
 - `models` import ได้แค่ `constants`
 - `services/<domain>/*.go` (ไฟล์ interface) import ได้แค่ `models` + `constants`
+  - **ข้อยกเว้นเดียว: contract package** — service ที่ไม่มี implementation เลย
+    (ไม่มี `handler/`, `usecase/`, `repository/`) ถือเป็น contract อยู่ระดับ
+    เดียวกับ `models` service อื่น import ได้ ตอนนี้มีตัวเดียวคือ
+    `services/strategy` ถ้าวันไหนมันมี subpackage ข้อยกเว้นนี้หมดอายุทันที
+    ต้องกลับ dependency ใหม่ (ดู ADR 0014)
+  - ถ้า type ตัวไหนต้องข้าม service ให้ย้ายไป `models` เช่น
+    `indicator.Snapshot` → `models.IndicatorSnapshot` เพราะ
+    `strategy.BarContext` ต้องถือมัน
 - implementation (`handler/`, `usecase/`, `repository/`) import interface ของ service ตัวเอง ไม่ import ของ layer อื่นข้ามชั้น
 - **usecase ห้ามรู้จัก pgx/SQL** — คุยผ่าน repository interface เท่านั้น
+- **usecase เรียก usecase ของ service อื่นได้** (แนวขวาง ไม่ใช่ย้อนกลับ)
+  เช่น market และ backtest เรียก `candle.CandleUsecase`
+  แต่ **ห้ามเรียก repository ของ service อื่นข้ามหัว usecase** เพราะจะข้ามกฎ
+  ที่อยู่ตรงกลาง — เช่นกฎ "candle ที่ยังไม่ปิดห้ามเก็บ"
 - **client ที่ยิงออกนอก (Binance REST/WS) ก็คือ repository** ไม่ใช่ layer ใหม่
   อยู่ที่ `services/<domain>/repository/<vendor>/` เช่น `services/market/repository/binance/`
   DTO ของ vendor ห้ามหลุดออกนอก package นั้น — แปลงเป็น `models.*` ที่ขอบ package

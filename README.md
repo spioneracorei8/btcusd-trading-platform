@@ -51,11 +51,51 @@ under podman does not fail, it quietly builds a second, empty stack beside the
 real one. Pin the choice in `.env` with `CONTAINER_ENGINE=podman` (or `docker`)
 if the guess is wrong for your machine.
 
-## Layout
+## Architecture
 
 Clean architecture: a service declares its interfaces at the package root and
 keeps the implementations in subpackages, so a usecase depends on
-`CandleRepository`, never on the SQL behind it.
+`CandleRepository` and never on the SQL behind it.
+
+```
+ entry point        main.go · collector/ · backtest/
+       │            build config, wire everything, run
+       ▼
+ routes → handler   HTTP in, HTTP out. No rules live here.
+       │
+       ▼
+ usecase            the rules. Knows no SQL, no HTTP, no vendor.
+       │
+       ▼
+ repository         the outward edge: PostgreSQL, and Binance.
+       │
+       ▼
+ database           pgx pool, sqlc output, wire-type conversion
+```
+
+Dependencies point one way and nothing below reaches back up.
+
+**An outbound client is a repository, not a new layer.** `services/market/`
+talks to Binance over WebSocket and REST from `repository/binance/`, because
+an exchange is the same kind of thing as a database: an edge the system reads
+from. Binance's DTOs stop at that package and become `models.*`. This is why
+the backtest engine, which consumes `candle.CandleUsecase`, never learns that
+Binance exists — live and replay differ only in where candles come from.
+
+**The rules live in the usecase.** "An unclosed candle is never stored" is in
+`candle.CandleUsecase`, not the repository: it is a statement about what the
+system may reason over, not about how rows are written. The backtest engine
+takes the usecase rather than the repository for the same reason — it must not
+be able to reach around the rule by taking the faster route.
+
+Four rules are checkable mechanically, and all four currently hold:
+
+| rule | why |
+|---|---|
+| `constants` imports nothing from the project | any layer can depend on it without a cycle |
+| `models` imports only `constants` | an entity cannot drag a layer in behind it |
+| no `usecase/` package imports pgx | the rules stay testable without a database |
+| a service's interface file imports only `models` + `constants` | one documented exception, see [ADR 0014](docs/decisions/0014-clean-architecture-in-practice.md) |
 
 ```
 server/
@@ -87,9 +127,23 @@ docs/              decisions/, prompts/
 mobile/            React Native app (phase 09)
 ```
 
-`health` is the one complete vertical slice in phase 01 (handler → usecase →
-repository) and is the template the later services follow. See
-[ADR 0005](docs/decisions/0005-clean-architecture-layout.md).
+`health` is the one complete vertical slice (handler → usecase → repository)
+and is the template the later services follow.
+
+Two services deliberately break the shape, both documented in
+[ADR 0014](docs/decisions/0014-clean-architecture-in-practice.md):
+
+- **`strategy/`** is a contract package, not a service. It holds no
+  implementations and none are coming — phase 04 built the measuring
+  instrument before there was anything to measure — so it sits beside `models`
+  and `constants` in the dependency graph rather than above them.
+- **`backtest/report/`** renders for a CLI, not for HTTP. It does a handler's
+  job but is not called `handler/`, because that name means HTTP everywhere
+  else here and reusing it would make the convention useless as a signal.
+
+The choice itself is [ADR 0005](docs/decisions/0005-clean-architecture-layout.md);
+[ADR 0014](docs/decisions/0014-clean-architecture-in-practice.md) records how it
+held up over four phases, including what it costs.
 
 ## Make targets
 
