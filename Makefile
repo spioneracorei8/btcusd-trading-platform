@@ -130,3 +130,16 @@ logs: ## Follow the container logs
 .PHONY: ps
 ps: ## Show the container status
 	$(COMPOSE) ps
+
+.PHONY: adminer
+adminer: ## Start Adminer to browse the database, then print its URL
+	$(COMPOSE) --profile tools up -d adminer
+	@echo "Adminer:   http://127.0.0.1:$(or $(ADMINER_HOST_PORT),8081)"
+	@echo "System:    PostgreSQL"
+	@echo "Server:    postgres        (pre-filled)"
+	@echo "Username:  $(or $(POSTGRES_USER),trading)"
+	@echo "Database:  $(or $(POSTGRES_DB),btcusd)"
+
+.PHONY: adminer-stop
+adminer-stop: ## Stop and remove Adminer, leaving the rest of the stack up
+	$(COMPOSE) --profile tools rm -sf adminer

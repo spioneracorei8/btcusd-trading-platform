@@ -20,9 +20,19 @@ indicators, the backtest engine and strategies are not implemented yet; the
 
 ```bash
 cp .env.example .env      # then edit the password before any real deployment
-make up                   # build and start postgres + api + collector
-make migrate-up           # create the tables and the candles hypertable
+make up                   # build and start postgres + migrate + api + collector
 curl localhost:8080/health
+```
+
+The schema is applied by the `migrate` service, which runs before `api` and
+`collector` start; `make migrate-up` is only needed against a database outside
+the compose stack.
+
+To browse the data by hand:
+
+```bash
+make adminer              # http://127.0.0.1:8081, server "postgres"
+make adminer-stop         # when finished
 ```
 
 ## Layout
@@ -73,6 +83,7 @@ repository) and is the template the later services follow. See
 | `make verify-hypertable` | prove `candles` really is a hypertable |
 | `make sqlc` | regenerate the query layer from the migrations |
 | `make up` / `make down` / `make logs` | manage the compose stack |
+| `make adminer` / `make adminer-stop` | database browser on `127.0.0.1:8081` |
 | `make check` | build + vet + lint + test |
 
 ## Design rules that shape the code

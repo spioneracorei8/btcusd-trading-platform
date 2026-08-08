@@ -53,6 +53,31 @@ services:
         condition: service_healthy
     restart: "no"
 
+  # Web UI for reading the database by hand: candles, gaps, collector_status.
+  #
+  # Behind the `tools` profile, so a plain `compose up` does not start it. It
+  # is a browsing tool, not part of the system — the stack that runs on the VPS
+  # unattended stays exactly the four services above, and a full SQL console
+  # does not sit there for months waiting to be forgotten about. Start it with
+  # `make adminer` when it is wanted.
+  adminer:
+    profiles: ["tools"]
+    image: adminer:5-standalone
+    environment:
+      # Pre-fills the server field, so only the credentials have to be typed.
+      ADMINER_DEFAULT_SERVER: postgres
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      # Loopback only, exactly like postgres itself. Reaching this from
+      # anywhere else is an SSH tunnel:
+      #   ssh -L 8081:127.0.0.1:8081 <vps>
+      # Adminer's login form is the only thing between a visitor and the whole
+      # database, so it must never be published on a public interface.
+      - "127.0.0.1:${ADMINER_HOST_PORT:-8081}:8080"
+    restart: unless-stopped
+
   api:
     build:
       context: ../server
