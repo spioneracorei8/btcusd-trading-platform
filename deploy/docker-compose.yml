@@ -67,7 +67,7 @@ services:
   # `make adminer` when it is wanted.
   adminer:
     profiles: ["tools"]
-    image: adminer:5-standalone
+    image: docker.io/library/adminer:latest
     environment:
       # Pre-fills the server field, so only the credentials have to be typed.
       ADMINER_DEFAULT_SERVER: postgres
