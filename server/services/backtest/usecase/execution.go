@@ -112,19 +112,27 @@ func (p *openPosition) slippageCost(costs backtest.Costs) decimal.Decimal {
 
 // equityAt marks the position to market without closing it.
 //
-// The exit fee is subtracted even though the position is still open. The
-// equity curve answers "what is the account worth if it stops here", and a
-// curve that ignored the cost of getting out would overstate every point and
-// understate every drawdown — the one statistic that most needs to be
-// pessimistic.
-func (p *openPosition) equityAt(price decimal.Decimal, costs backtest.Costs) decimal.Decimal {
+// The full cost of getting out is subtracted even though the position is
+// still open: the fee, and the slippage the exit fill would suffer. The curve
+// answers "what is the account worth if it stops here", and getting out is
+// part of stopping. A curve that counted only the fee would overstate every
+// point and understate every drawdown — the statistic that most needs to be
+// pessimistic — and would disagree with the trade the engine actually books
+// when the position does close at that price.
+func (p *openPosition) equityAt(reference decimal.Decimal, costs backtest.Costs) decimal.Decimal {
 	if !p.isOpen() {
-		return p.equityAtEntry
+		// Unreachable through markEquity, which checks first. Guarded anyway:
+		// a nil receiver here would panic, and CLAUDE.md §4 rules panics out
+		// of business logic.
+		return decimal.Zero
 	}
-	exitFee := feeOn(price.Mul(p.size), costs)
+
+	fill := fillPrice(reference, p.direction == constants.DirectionShort, costs)
+	exitFee := feeOn(fill.Mul(p.size), costs)
+
 	return p.equityAtEntry.
 		Sub(p.entryFee).
-		Add(p.realisedPnL(price)).
+		Add(p.realisedPnL(fill)).
 		Sub(exitFee)
 }
 

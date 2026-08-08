@@ -258,20 +258,31 @@ func (r *runner) onCandle(bar models.Candle) error {
 		return nil
 	}
 
-	// 1. Fill what the previous bar asked for, at this bar's open.
+	// 1. A gap has no candles in it — that is what makes it a gap — so the
+	//    stream jumps over the hole rather than offering a bar inside it.
+	//    Detecting the jump is the only way a real gap can force a position
+	//    out; waiting to be handed an excluded bar works for an outage, where
+	//    the candles exist, and never fires for missing data.
+	if r.position.isOpen() && !r.lastTradeableTime.IsZero() &&
+		r.excluded.crossedBetween(r.lastTradeableTime, bar.OpenTime) {
+		r.forceClose(bar)
+		r.pending = nil
+	}
+
+	// 2. Fill what the previous bar asked for, at this bar's open.
 	if err := r.applyPending(bar); err != nil {
 		return err
 	}
 
-	// 2. Levels are checked against this bar's range, after any entry that
+	// 3. Levels are checked against this bar's range, after any entry that
 	//    just filled on its open — an entry and its stop can resolve within
 	//    the same bar, and pretending otherwise would hide the worst case.
 	r.checkLevels(bar)
 
-	// 3. Mark the account to this bar's close.
+	// 4. Mark the account to this bar's close.
 	r.markEquity(bar)
 
-	// 4. Only now does the strategy see the bar, with the position state as
+	// 5. Only now does the strategy see the bar, with the position state as
 	//    it stands after everything above.
 	r.pending = r.params.Strategy.OnBar(strategy.BarContext{
 		Candle:     bar,
@@ -311,6 +322,12 @@ func (r *runner) positionView() strategy.Position {
 }
 
 // applyPending fills the previous bar's intents at this bar's open.
+//
+// Entries and exits are resolved first, then any levels in the same batch are
+// attached to whatever position now exists. The order is what makes
+// "enter with a stop" work: a strategy returning EnterLong and SetStop
+// together is asking for a protected position, and arming the stop a bar
+// later would leave it exposed through exactly the move it was placed for.
 func (r *runner) applyPending(bar models.Candle) error {
 	intents := r.pending
 	r.pending = nil
@@ -338,14 +355,37 @@ func (r *runner) applyPending(bar models.Candle) error {
 			}
 
 		case strategy.IntentSetStop, strategy.IntentSetTarget:
-			// Levels are applied on the bar that asked for them, not here.
+			// Attached below, once the entries in this batch have filled.
 
 		default:
 			return fmt.Errorf("backtest: %s returned an unknown intent %q",
 				r.params.Strategy.Name(), intent.Kind)
 		}
 	}
+
+	r.attachLevels(intents)
 	return nil
+}
+
+// attachLevels sets the stop and target carried by a batch of intents.
+//
+// Silently dropping them when no position is open would be the worst
+// available behaviour: the strategy would appear to be running protected
+// while it was not, and the backtest would report the unprotected result as
+// though it were the strategy's own.
+func (r *runner) attachLevels(intents []strategy.Intent) {
+	if !r.position.isOpen() {
+		return
+	}
+
+	for _, intent := range intents {
+		switch intent.Kind {
+		case strategy.IntentSetStop:
+			r.position.stop = intent.Price
+		case strategy.IntentSetTarget:
+			r.position.target = intent.Price
+		}
+	}
 }
 
 // applyLevelIntents attaches stops and targets requested by this bar.
@@ -353,23 +393,15 @@ func (r *runner) applyPending(bar models.Candle) error {
 // They take effect immediately rather than at the next open because a level
 // is a threshold, not a fill: waiting a bar to arm a stop would let a position
 // sit unprotected through exactly the move the stop was placed for.
+//
+// When no position is open the level intents are deliberately left in pending.
+// They belong to an entry in the same batch that has not filled yet, and
+// applyPending attaches them the moment it does.
 func (r *runner) applyLevelIntents() {
 	if !r.position.isOpen() {
 		return
 	}
-
-	remaining := r.pending[:0]
-	for _, intent := range r.pending {
-		switch intent.Kind {
-		case strategy.IntentSetStop:
-			r.position.stop = intent.Price
-		case strategy.IntentSetTarget:
-			r.position.target = intent.Price
-		default:
-			remaining = append(remaining, intent)
-		}
-	}
-	r.pending = remaining
+	r.attachLevels(r.pending)
 }
 
 // openAt opens a position at this bar's open, if none is held.
@@ -497,6 +529,9 @@ func (r *runner) forceClose(bar models.Candle) {
 }
 
 // markEquity appends this bar's account value to the curve.
+//
+// The close is the reference, not the fill: equityAt applies the slippage an
+// exit would suffer, so the curve and a trade closed at that same price agree.
 func (r *runner) markEquity(bar models.Candle) {
 	equity := r.equity
 	if r.position.isOpen() {

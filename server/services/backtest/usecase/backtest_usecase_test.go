@@ -586,3 +586,171 @@ func TestZeroCostRunStillLosesNothing(t *testing.T) {
 			finalEquity, initialEquity)
 	}
 }
+
+// enterWithStop asks to enter and attaches its levels in the same call, which
+// is the natural way to express "enter with protection".
+type enterWithStop struct {
+	stop   decimal.Decimal
+	target decimal.Decimal
+	done   bool
+}
+
+func (s *enterWithStop) OnBar(bar strategy.BarContext) []strategy.Intent {
+	if s.done || bar.Position.IsOpen() {
+		return nil
+	}
+	s.done = true
+	return []strategy.Intent{
+		strategy.EnterLong("in"),
+		strategy.SetStop(s.stop, "protect"),
+		strategy.SetTarget(s.target, "take"),
+	}
+}
+func (s *enterWithStop) WarmupPeriod() int { return 0 }
+func (s *enterWithStop) Name() string      { return "enter_with_stop" }
+func (s *enterWithStop) Version() string   { return "v1" }
+
+// TestLevelsSetAlongsideAnEntryAreArmedWhenItFills is a regression test for a
+// silent loss of protection.
+//
+// A strategy returning EnterLong and SetStop together is asking for a
+// protected position. The levels used to be applied only to an already-open
+// position, so on the bar the entry was requested there was nothing to attach
+// them to, and by the time the entry filled a bar later they had been dropped
+// on the floor. The position ran with no stop at all while the strategy — and
+// the report — showed nothing wrong.
+//
+// The series here falls straight through the stop, so an unarmed stop is
+// visible as an exit for the wrong reason at the wrong price.
+func TestLevelsSetAlongsideAnEntryAreArmedWhenItFills(t *testing.T) {
+	first := firstScoredIndex(t)
+
+	series := flatSeries(first+2, "100")
+	crashBar := seriesStart.Add(time.Duration(first+2) * time.Minute)
+	series = append(series,
+		bar(crashBar, "100", "100", "80", "80"),
+		bar(crashBar.Add(time.Minute), "80", "80", "80", "80"),
+	)
+
+	strat := &enterWithStop{
+		stop:   decimal.RequireFromString("95"),
+		target: decimal.RequireFromString("105"),
+	}
+	params := scoredParams(t, series, strat)
+	params.To = series[len(series)-1].OpenTime
+	result := runEngine(t, &fakeCandles{series: series}, nil, params)
+
+	if len(result.Trades) != 1 {
+		t.Fatalf("produced %d trades, want 1", len(result.Trades))
+	}
+	trade := result.Trades[0]
+
+	if trade.ExitReason != backtest.ExitStop {
+		t.Fatalf("exit reason is %q, want %q: the stop attached to the entry never armed",
+			trade.ExitReason, backtest.ExitStop)
+	}
+	// Filled at the stop less slippage, not at the bar's low.
+	wantExit := decimal.RequireFromString("95").Sub(testCosts().SlippageAmount())
+	if !trade.ExitPrice.Equal(wantExit) {
+		t.Errorf("exit filled at %s, want %s", trade.ExitPrice, wantExit)
+	}
+}
+
+// TestLevelsAreVisibleToTheStrategyOnTheBarAfterTheFill checks the position
+// view reflects what was attached, so a strategy can tell whether its own
+// protection is in place rather than having to assume it.
+func TestLevelsAreVisibleToTheStrategyOnTheBarAfterTheFill(t *testing.T) {
+	first := firstScoredIndex(t)
+	series := flatSeries(first+6, "100")
+
+	strat := &enterWithStop{
+		stop:   decimal.RequireFromString("90"),
+		target: decimal.RequireFromString("110"),
+	}
+	// Wrap it so what the strategy was shown can be inspected afterwards.
+	seen := &recordingStrategy{onEachBar: strat.OnBar}
+	params := scoredParams(t, series, seen)
+	runEngine(t, &fakeCandles{series: series}, nil, params)
+
+	armed := false
+	for _, bar := range seen.bars {
+		if bar.Position.IsOpen() && !bar.Position.Stop.IsZero() {
+			armed = true
+			if !bar.Position.Stop.Equal(decimal.RequireFromString("90")) {
+				t.Errorf("the strategy sees a stop of %s, want 90", bar.Position.Stop)
+			}
+			if !bar.Position.Target.Equal(decimal.RequireFromString("110")) {
+				t.Errorf("the strategy sees a target of %s, want 110", bar.Position.Target)
+			}
+			break
+		}
+	}
+	if !armed {
+		t.Error("the strategy never saw its own stop attached to the open position")
+	}
+}
+
+// TestNetPnLReconcilesWithTheEquityCurve is the accounting invariant the whole
+// report rests on: every trade's net, summed, must equal what the account
+// actually gained or lost.
+//
+// The two are computed by different paths — trades from gross less costs, the
+// curve from the fills themselves — so agreement is evidence rather than
+// restatement. A disagreement means the report is describing a different run
+// from the one the engine simulated.
+func TestNetPnLReconcilesWithTheEquityCurve(t *testing.T) {
+	for _, series := range [][]models.Candle{
+		flatSeries(80, "100"),
+		risingSeries(80, 100),
+	} {
+		result := runEngine(t, &fakeCandles{series: series}, nil,
+			scoredParams(t, series, &alternating{everyN: 4}))
+
+		if len(result.Trades) == 0 {
+			t.Fatal("no trades, so nothing was reconciled")
+		}
+
+		summed := decimal.Zero
+		for _, trade := range result.Trades {
+			summed = summed.Add(trade.NetPnL)
+
+			// Each trade must also be internally consistent.
+			if !trade.NetPnL.Equal(trade.GrossPnL.Sub(trade.Costs)) {
+				t.Errorf("trade net %s does not equal gross %s less costs %s",
+					trade.NetPnL, trade.GrossPnL, trade.Costs)
+			}
+			if !trade.Costs.Equal(trade.Fees.Add(trade.Slippage)) {
+				t.Errorf("trade costs %s do not equal fees %s plus slippage %s",
+					trade.Costs, trade.Fees, trade.Slippage)
+			}
+		}
+
+		final := result.Equity[len(result.Equity)-1].Equity
+		if !final.Sub(initialEquity).Equal(summed) {
+			t.Errorf("the account moved by %s but the trades sum to %s",
+				final.Sub(initialEquity), summed)
+		}
+	}
+}
+
+// TestAlternatingProducesExactlyThePredictedTradeCount is the phase-04 §7
+// requirement that the count be predictable rather than merely plausible.
+func TestAlternatingProducesExactlyThePredictedTradeCount(t *testing.T) {
+	const everyN = 5
+	series := flatSeries(103, "100")
+
+	result := runEngine(t, &fakeCandles{series: series}, nil,
+		scoredParams(t, series, &alternating{everyN: everyN}))
+
+	// The strategy acts on every everyN-th bar it is shown, alternating enter
+	// and exit. A trade is one of each, and a final open position is closed by
+	// the engine at the end of the run — so the count is the number of entries.
+	scored := int(result.BarsEvaluated)
+	actions := scored / everyN
+	wantTrades := (actions + 1) / 2
+
+	if len(result.Trades) != wantTrades {
+		t.Errorf("produced %d trades over %d scored bars acting every %d, want %d",
+			len(result.Trades), scored, everyN, wantTrades)
+	}
+}

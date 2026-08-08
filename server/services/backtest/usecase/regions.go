@@ -69,3 +69,29 @@ func (e excludedRegions) tradeableAt(t time.Time) bool {
 	}
 	return true
 }
+
+// crossedBetween reports whether an excluded region lies between two
+// consecutive evaluated bars.
+//
+// # Why this is not the same question as tradeableAt
+//
+// tradeableAt only fires on a bar the engine actually sees, which is enough
+// for an exchange outage — the candles exist, they simply record a period
+// nobody could trade. A data gap is the opposite: the candles are *missing*,
+// that being what makes it a gap. The stream therefore jumps straight from
+// the bar before the hole to the bar after it, no bar inside the region is
+// ever offered, and a check that waits to be handed one waits forever.
+//
+// Without this, a position would be carried across the hole and the price
+// move on the far side booked as profit from a trade that was never
+// supervised — under GapSkip, the mode whose entire promise is to exclude it.
+func (e excludedRegions) crossedBetween(previous, current time.Time) bool {
+	for _, r := range e.regions {
+		// The region began after the last bar we saw and before this one, so
+		// the run stepped over it.
+		if r.start.After(previous) && r.start.Before(current) {
+			return true
+		}
+	}
+	return false
+}

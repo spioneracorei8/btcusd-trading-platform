@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/shopspring/decimal"
+
 	"github.com/spioneracorei8/btcusd-trading-platform/server/constants"
 	"github.com/spioneracorei8/btcusd-trading-platform/server/models"
 	"github.com/spioneracorei8/btcusd-trading-platform/server/services/backtest"
@@ -271,5 +273,114 @@ func TestGapErrorIsReportedNotSwallowed(t *testing.T) {
 	_, err := newEngine(candles, gaps).Run(context.Background(), scoredParams(t, series, alwaysFlat{}))
 	if err == nil {
 		t.Fatal("Run() succeeded despite being unable to check for gaps")
+	}
+}
+
+// seriesWithHole builds a series that actually stops for holeBars minutes,
+// which is what a real data gap looks like: the candles are absent.
+//
+// The price on the far side is far above the near side, so a position carried
+// across the hole books an obvious and entirely fictional profit.
+func seriesWithHole(t *testing.T, before, holeBars, after int) (series []models.Candle, gapStart, gapEnd time.Time) {
+	t.Helper()
+
+	at := seriesStart
+	for range before {
+		series = append(series, bar(at, "100", "100", "100", "100"))
+		at = at.Add(time.Minute)
+	}
+	gapStart = at
+	at = at.Add(time.Duration(holeBars) * time.Minute)
+	gapEnd = at
+	for range after {
+		series = append(series, bar(at, "200", "200", "200", "200"))
+		at = at.Add(time.Minute)
+	}
+	return series, gapStart, gapEnd
+}
+
+// TestRealGapForcesThePositionOut is a regression test for a bug that made
+// --allow-gaps=skip do nothing at all for the case it exists for.
+//
+// The original check asked "is this bar inside an excluded region", which is
+// the right question for an exchange outage — the candles exist and record a
+// period nobody could trade. It is the wrong question for a data gap, where
+// the candles are missing by definition: the stream jumps from the bar before
+// the hole to the bar after it, no bar inside the region is ever offered, and
+// a check waiting to be handed one waits forever.
+//
+// The result was a position carried straight across a 30 minute hole, booking
+// the 100% move on the far side as profit, under the very policy whose promise
+// is to exclude it.
+func TestRealGapForcesThePositionOut(t *testing.T) {
+	warmup := warmupBars(t)
+	series, gapStart, gapEnd := seriesWithHole(t, warmup+10, 30, 10)
+
+	gaps := &fakeGaps{gaps: []models.DataGap{{
+		Id: 1, Symbol: testSymbol, MarketType: constants.MarketTypeSpot,
+		Timeframe: constants.Timeframe1m,
+		GapStart:  gapStart, GapEnd: gapEnd,
+		Note: "no klines returned for this range",
+	}}}
+
+	params := scoredParams(t, series, buyAndHold{})
+	params.To = series[len(series)-1].OpenTime
+	params.GapPolicy = backtest.GapSkip
+
+	result := runEngine(t, &fakeCandles{series: series}, gaps, params)
+
+	var forced *backtest.Trade
+	for i := range result.Trades {
+		if result.Trades[i].ForcedByGap {
+			forced = &result.Trades[i]
+			break
+		}
+	}
+	if forced == nil {
+		t.Fatalf("no trade was force-closed; the position was carried across the hole.\ntrades: %+v",
+			result.Trades)
+	}
+	if forced.ExitReason != backtest.ExitGapForced {
+		t.Errorf("exit reason is %q, want %q", forced.ExitReason, backtest.ExitGapForced)
+	}
+	if !forced.ExitTime.Before(gapStart) {
+		t.Errorf("forced exit is timed at %s, want a bar before the hole began at %s",
+			forced.ExitTime.Format(time.RFC3339), gapStart.Format(time.RFC3339))
+	}
+
+	// The exit price must come from the near side of the hole. Anything at or
+	// near 200 means the far side was used, which is the fiction being
+	// prevented.
+	if forced.ExitPrice.GreaterThan(decimal.RequireFromString("150")) {
+		t.Errorf("forced exit filled at %s, which is the price on the far side of the hole",
+			forced.ExitPrice)
+	}
+}
+
+// TestRealGapIsCrossedFreelyUnderIgnore is the other half: --allow-gaps=ignore
+// means exactly what it says. The run proceeds across the hole and the report
+// carries the stamp; it does not quietly behave like skip.
+func TestRealGapIsCrossedFreelyUnderIgnore(t *testing.T) {
+	warmup := warmupBars(t)
+	series, gapStart, gapEnd := seriesWithHole(t, warmup+10, 30, 10)
+
+	gaps := &fakeGaps{gaps: []models.DataGap{{
+		Id: 1, Symbol: testSymbol, MarketType: constants.MarketTypeSpot,
+		Timeframe: constants.Timeframe1m, GapStart: gapStart, GapEnd: gapEnd,
+	}}}
+
+	params := scoredParams(t, series, buyAndHold{})
+	params.To = series[len(series)-1].OpenTime
+	params.GapPolicy = backtest.GapIgnore
+
+	result := runEngine(t, &fakeCandles{series: series}, gaps, params)
+
+	for _, trade := range result.Trades {
+		if trade.ForcedByGap {
+			t.Errorf("a trade was force-closed under ignore; that is what skip is for")
+		}
+	}
+	if !result.DataIncomplete {
+		t.Error("the run is not stamped incomplete")
 	}
 }
