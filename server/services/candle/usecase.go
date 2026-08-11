@@ -7,6 +7,20 @@ import (
 	"github.com/spioneracorei8/btcusd-trading-platform/server/models"
 )
 
+// CandleCursor reads a stored series forward, one candle at a time.
+//
+// It holds no database resource between calls — it pages through the
+// repository — so there is nothing to close and no lifetime to manage.
+type CandleCursor interface {
+	// Next returns the following candle. ok is false once the window is
+	// exhausted, which is the end of the series and not an error.
+	//
+	// A cursor only ever moves forward. There is deliberately no rewind: the
+	// engine replays history in one direction, and a cursor that could go back
+	// would let a caller re-read a bar it had already acted on.
+	Next(ctx context.Context) (candle models.Candle, ok bool, err error)
+}
+
 // CandleUsecase holds the rules that apply to candles regardless of where
 // they are stored.
 //
@@ -25,6 +39,15 @@ type CandleUsecase interface {
 	// FindGaps reports the missing ranges in a stored series.
 	FindGaps(ctx context.Context, symbol string, marketType constants.MarketType, timeframe constants.Timeframe) ([]Gap, error)
 	FetchCandles(ctx context.Context, params FetchCandlesParams) ([]models.Candle, error)
+
+	// OpenCursor returns a forward-only reader over a window, paging
+	// underneath exactly as StreamCandles does.
+	//
+	// StreamCandles pushes; this pulls. The multi-timeframe trend filter needs
+	// several series advanced in lockstep against one another, which a
+	// callback cannot express: with push, each series drives its own loop and
+	// nothing can hold one back to wait for another.
+	OpenCursor(params FetchCandlesParams) CandleCursor
 
 	// StreamCandles calls onCandle for every stored candle in a window,
 	// oldest first, reading the series in pages so it is never all resident.

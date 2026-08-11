@@ -39,6 +39,7 @@ type Document struct {
 	Stamp          string `json:"stamp,omitempty"`
 
 	Strategy    strategyDoc    `json:"strategy"`
+	TrendFilter trendFilterDoc `json:"trend_filter"`
 	Run         runDoc         `json:"run"`
 	Costs       costsDoc       `json:"costs"`
 	Bars        barsDoc        `json:"bars"`
@@ -55,6 +56,16 @@ type Document struct {
 type strategyDoc struct {
 	Name    string `json:"name"`
 	Version string `json:"version"`
+}
+
+// trendFilterDoc records what vetoed the run. Enabled is explicit rather than
+// implied by an empty name: "no filter" and "a filter that reported nothing"
+// are different findings and must not read the same.
+type trendFilterDoc struct {
+	Enabled       bool   `json:"enabled"`
+	Name          string `json:"name"`
+	Version       string `json:"version"`
+	Configuration string `json:"configuration"`
 }
 
 type runDoc struct {
@@ -86,6 +97,12 @@ type barsDoc struct {
 	// StopAndTargetBothReachable is the count of bars resolved by the
 	// stop-first assumption rather than by evidence.
 	StopAndTargetBothReachable int64 `json:"stop_and_target_both_reachable"`
+
+	// Vetoed is how many bars the trend filter blocked an entry on, and
+	// FilterNotReady how many it had no answer for. Kept apart: "blocked on
+	// purpose" and "could not say" are different findings.
+	Vetoed         int64 `json:"vetoed"`
+	FilterNotReady int64 `json:"filter_not_ready"`
 }
 
 type performanceDoc struct {
@@ -170,6 +187,12 @@ func BuildDocument(result backtest.Result, stats Statistics) Document {
 			Name:    result.StrategyName,
 			Version: result.StrategyVersion,
 		},
+		TrendFilter: trendFilterDoc{
+			Enabled:       result.TrendFilterName != "",
+			Name:          result.TrendFilterName,
+			Version:       result.TrendFilterVersion,
+			Configuration: result.TrendFilterConfig,
+		},
 		Run: runDoc{
 			Symbol:        result.Params.Symbol,
 			MarketType:    result.Params.MarketType.String(),
@@ -192,6 +215,8 @@ func BuildDocument(result backtest.Result, stats Statistics) Document {
 			SkippedWarmup:              result.BarsSkippedWarmup,
 			SkippedGap:                 result.BarsSkippedGap,
 			StopAndTargetBothReachable: result.AmbiguousBars,
+			Vetoed:                     result.BarsVetoed,
+			FilterNotReady:             result.BarsFilterNotReady,
 		},
 		Performance: performanceDoc{
 			NetReturn:   stats.NetReturn,

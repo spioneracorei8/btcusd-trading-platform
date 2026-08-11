@@ -19,6 +19,8 @@ import (
 	_datagap_repo "github.com/spioneracorei8/btcusd-trading-platform/server/services/datagap/repository"
 	_datagap_us "github.com/spioneracorei8/btcusd-trading-platform/server/services/datagap/usecase"
 	_indicator_us "github.com/spioneracorei8/btcusd-trading-platform/server/services/indicator/usecase"
+	"github.com/spioneracorei8/btcusd-trading-platform/server/services/trend"
+	_trend_us "github.com/spioneracorei8/btcusd-trading-platform/server/services/trend/usecase"
 	"github.com/spioneracorei8/btcusd-trading-platform/server/testhelper"
 )
 
@@ -171,4 +173,124 @@ func peakRSSMB(t *testing.T) int {
 
 	t.Skip("no VmHWM in /proc/self/status")
 	return 0
+}
+
+// TestFullYearWithTheTrendFilterStaysUnderTheMemoryBudget.
+//
+// Phase 05 adds three more cursors to a run — 5m, 15m and 1h — each paging its
+// own series alongside the base one. The budget is unchanged, so the filter
+// has to be paid for out of the same 500 MB, and the only way that works is if
+// the higher timeframes page rather than load.
+//
+// For a year that is 105,120 five-minute bars, 35,040 fifteen-minute and 8,760
+// hourly on top of 527,040 base bars. Held resident that is most of the
+// allowance; paged, it is kilobytes.
+func TestFullYearWithTheTrendFilterStaysUnderTheMemoryBudget(t *testing.T) {
+	if testing.Short() {
+		t.Skip("replaying a year of 1m candles is too slow for -short")
+	}
+
+	pool := testhelper.NewTestPool(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+	defer cancel()
+
+	from := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	to := time.Date(2024, 12, 31, 23, 59, 0, 0, time.UTC)
+	seedYear(ctx, t, pool, from, to)
+	seedHigherTimeframes(ctx, t, pool, from, to)
+
+	candles := _candle_us.NewCandleUsecaseImpl(_candle_repo.NewCandleRepoImpl(pool))
+	engine := _backtest_us.NewBacktestUsecaseImpl(
+		silentLogger(), candles,
+		_datagap_us.NewDataGapUsecaseImpl(_datagap_repo.NewDataGapRepoImpl(pool)),
+		_indicator_us.DefaultSetConfig(),
+	)
+
+	config := trend.DefaultConfig()
+	filter, err := _trend_us.NewFilterImpl(config)
+	if err != nil {
+		t.Fatalf("NewFilterImpl() returned error: %v", err)
+	}
+	aligner, err := _trend_us.NewAlignerImpl(_trend_us.AlignerConfig{
+		Symbol:     benchSymbol,
+		MarketType: constants.MarketTypeSpot,
+		Base:       constants.Timeframe1m,
+		Higher:     config.Timeframes(),
+		From:       from,
+		To:         to,
+		Indicators: _indicator_us.DefaultSetConfig(),
+	}, candles)
+	if err != nil {
+		t.Fatalf("NewAlignerImpl() returned error: %v", err)
+	}
+
+	before := peakRSSMB(t)
+
+	result, err := engine.Run(ctx, backtest.RunParams{
+		Symbol:        benchSymbol,
+		MarketType:    constants.MarketTypeSpot,
+		Timeframe:     constants.Timeframe1m,
+		From:          from,
+		To:            to,
+		InitialEquity: decimal.NewFromInt(10000),
+		Costs:         testCosts(),
+		GapPolicy:     backtest.GapIgnore,
+		Strategy:      &alternating{everyN: 500},
+		TrendFilter:   filter,
+		TrendAligner:  aligner,
+		TrendConfig:   config,
+	})
+	if err != nil {
+		t.Fatalf("Run() with the trend filter returned error: %v", err)
+	}
+
+	after := peakRSSMB(t)
+
+	t.Logf("replayed %d bars with the filter on; %d vetoed, %d not-ready; peak RSS %d MB (was %d MB)",
+		result.BarsEvaluated, result.BarsVetoed, result.BarsFilterNotReady, after, before)
+
+	if after > rssLimitMB {
+		t.Errorf("peak RSS reached %d MB with the filter on, over the %d MB budget", after, rssLimitMB)
+	}
+}
+
+// seedHigherTimeframes fills 5m, 15m and 1h for the same synthetic series.
+func seedHigherTimeframes(ctx context.Context, t *testing.T, pool *pgxpool.Pool, from, to time.Time) {
+	t.Helper()
+
+	for _, timeframe := range []struct {
+		name     string
+		interval string
+	}{
+		{"5m", "5 minutes"},
+		{"15m", "15 minutes"},
+		{"1h", "1 hour"},
+	} {
+		var stored int64
+		err := pool.QueryRow(ctx,
+			`SELECT count(*) FROM candles WHERE symbol = $1 AND timeframe = $2`,
+			benchSymbol, timeframe.name).Scan(&stored)
+		if err != nil {
+			t.Fatalf("count %s candles: %v", timeframe.name, err)
+		}
+		if stored > 0 {
+			continue
+		}
+
+		_, err = pool.Exec(ctx, `
+			INSERT INTO candles (symbol, market_type, timeframe, open_time, close_time,
+			                     open, high, low, close, volume, quote_volume, trade_count, is_closed)
+			SELECT $1, 'spot', $2, t, t + $3::interval,
+			       27000 + (extract(epoch from t)::bigint % 5000),
+			       27000 + (extract(epoch from t)::bigint % 5000) + 10,
+			       27000 + (extract(epoch from t)::bigint % 5000) - 10,
+			       27000 + (extract(epoch from t)::bigint % 5000) + 2,
+			       12.5, 340000, 250, true
+			FROM generate_series($4::timestamptz, $5::timestamptz, $3::interval) AS t
+			ON CONFLICT (symbol, market_type, timeframe, open_time) DO NOTHING`,
+			benchSymbol, timeframe.name, timeframe.interval, from, to)
+		if err != nil {
+			t.Fatalf("seed %s candles: %v", timeframe.name, err)
+		}
+	}
 }

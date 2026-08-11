@@ -120,9 +120,9 @@ btcusd-trading-platform/
 │   ├── server/             # server.go — ต่อ repo → usecase → handler
 │   ├── database/           # pgx pool, convert, db/ (sqlc generated), queries/
 │   ├── services/
-│   │   └── <domain>/       # ทำแล้ว: candle, signal, datagap, health,
-│   │       ├── handler.go        #   market, indicator, strategy, backtest
-│   │       ├── handler/          # ต่อไป: trend, notify
+│   │   └── <domain>/       # ทำแล้ว: candle, signal, datagap, health, market,
+│   │       ├── handler.go        #   indicator, strategy, backtest, trend
+│   │       ├── handler/          # ต่อไป: notify
 │   │       ├── repository.go
 │   │       ├── repository/
 │   │       ├── usecase.go
@@ -140,11 +140,14 @@ btcusd-trading-platform/
 - `constants` ห้าม import package อื่นในโปรเจกต์
 - `models` import ได้แค่ `constants`
 - `services/<domain>/*.go` (ไฟล์ interface) import ได้แค่ `models` + `constants`
-  - **ข้อยกเว้นเดียว: contract package** — service ที่ไม่มี implementation เลย
-    (ไม่มี `handler/`, `usecase/`, `repository/`) ถือเป็น contract อยู่ระดับ
-    เดียวกับ `models` service อื่น import ได้ ตอนนี้มีตัวเดียวคือ
-    `services/strategy` ถ้าวันไหนมันมี subpackage ข้อยกเว้นนี้หมดอายุทันที
-    ต้องกลับ dependency ใหม่ (ดู ADR 0014)
+  - เช็คแบบ **transitive**: import ไฟล์ interface ของ service อื่นได้
+    ถ้าไฟล์นั้นเองก็ไปถึงแค่ `models` + `constants` เท่านั้น
+    เช่น `backtest.RunParams` ถือ `strategy.Strategy` และ `trend.Filter` ได้
+    เพราะสองตัวนั้นไม่ได้ลากอะไรตามมา
+    สิ่งที่ห้ามจริงๆ คือไปถึง **layer** (handler/, usecase/, repository/, database)
+    วันไหน package ที่ root ของ service เริ่ม import usecase ของตัวเอง
+    มันจะหลุดเงื่อนไขทันที และทุกไฟล์ที่ import มันจะ fail
+    ที่ `server/architecture_test.go` (ดู ADR 0014)
   - ถ้า type ตัวไหนต้องข้าม service ให้ย้ายไป `models` เช่น
     `indicator.Snapshot` → `models.IndicatorSnapshot` เพราะ
     `strategy.BarContext` ต้องถือมัน

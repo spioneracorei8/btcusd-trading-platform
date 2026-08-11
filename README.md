@@ -12,13 +12,19 @@ Read [`CLAUDE.md`](CLAUDE.md) before writing any code. Phase prompts live in
 
 ## Status
 
-Phases 01–04 of 09 are merged: skeleton and schema, market data ingestion,
-the indicator engine, and the backtest engine.
+Phases 01–05 of 09 are merged: skeleton and schema, market data ingestion,
+the indicator engine, the backtest engine, and the multi-timeframe trend
+filter.
 
-The backtest engine is deliberately built **before** any strategy. Without a
-measuring instrument there is no way to tell whether a strategy works, so
-`backtest --list-strategies` reports an empty registry on purpose; strategies
-arrive in phase 06.
+The backtest engine is deliberately built **before** any strategy, and the
+trend filter before that too. Without a measuring instrument there is no way
+to tell whether a strategy works, so `backtest --list-strategies` reports an
+empty registry on purpose; strategies arrive in phase 06.
+
+**The trend filter needs about 42 days of history before it says anything.** A
+1h EMA(200) at a 5x warm-up is 1000 hourly closes, which is 60,000 1m bars. A
+shorter run is vetoed end to end — the report separates `bars_vetoed` from
+`bars_filter_not_ready` so that case is legible rather than mysterious.
 
 ## Quick start
 
@@ -95,7 +101,7 @@ Four rules are checkable mechanically, and all four currently hold:
 | `constants` imports nothing from the project | any layer can depend on it without a cycle |
 | `models` imports only `constants` | an entity cannot drag a layer in behind it |
 | no `usecase/` package imports pgx | the rules stay testable without a database |
-| a service's interface file imports only `models` + `constants` | one documented exception, see [ADR 0014](docs/decisions/0014-clean-architecture-in-practice.md) |
+| a service's interface file *reaches* only `models` + `constants` | it may name another interface file, because that one is bound by the same rule; what it must never reach is a layer |
 
 ```
 server/
@@ -120,6 +126,7 @@ server/
     indicator/     EMA, RSI, ATR, VWAP (phase 03)
     strategy/      strategy.go — the interface only, no implementations
     backtest/      backtest.go, outage.go + usecase/, report/ (phase 04)
+    trend/         trend.go, config.go + usecase/ (phase 05)
   migrations/      goose migrations
   testhelper/      shared setup for repository integration tests
 deploy/            docker-compose.yml, Caddyfile
@@ -130,13 +137,15 @@ mobile/            React Native app (phase 09)
 `health` is the one complete vertical slice (handler → usecase → repository)
 and is the template the later services follow.
 
-Two services deliberately break the shape, both documented in
+Two things deliberately depart from the shape, both documented in
 [ADR 0014](docs/decisions/0014-clean-architecture-in-practice.md):
 
-- **`strategy/`** is a contract package, not a service. It holds no
-  implementations and none are coming — phase 04 built the measuring
-  instrument before there was anything to measure — so it sits beside `models`
-  and `constants` in the dependency graph rather than above them.
+- **`strategy/`** holds no implementations and none are coming — phase 04 built
+  the measuring instrument before there was anything to measure — so it sits
+  beside `models` and `constants` in the dependency graph rather than above
+  them. `backtest.RunParams` naming a `strategy.Strategy`, or a `trend.Filter`,
+  drags in nothing but models and constants; the rule above is checked on the
+  transitive closure, so this stays legal exactly as long as it stays true.
 - **`backtest/report/`** renders for a CLI, not for HTTP. It does a handler's
   job but is not called `handler/`, because that name means HTTP everywhere
   else here and reusing it would make the convention useless as a signal.
@@ -160,6 +169,7 @@ held up over four phases, including what it costs.
 | `make engine` | show which container engine the targets will use |
 | `make adminer` / `make adminer-stop` | database browser on `127.0.0.1:8081` |
 | `go run ./backtest --help` | backtest CLI flags |
+| `go run ./backtest --compare ...` | same strategy, filter on and off, side by side |
 | `make check` | build + vet + lint + test |
 
 ## Design rules that shape the code
@@ -188,6 +198,16 @@ These come from `CLAUDE.md` and are enforced here, not just documented.
 - **A backtest refuses to run over data it does not trust.** Unfilled gaps halt
   the run by default, and known exchange outages are excluded under every
   policy; see [ADR 0013](docs/decisions/0013-untradeable-windows.md).
+- **No look-ahead across timeframes either.** A higher-timeframe candle
+  contributes only once its `close_time` is at or before the decision instant,
+  so at 14:23 the newest usable 1h bar is the 13:00–14:00 one. The wrong
+  implementation is kept beside the right one and a test asserts the check
+  still rejects it; see
+  [ADR 0015](docs/decisions/0015-cross-timeframe-alignment.md).
+- **A trend filter is a veto, never a signal.** It decides when entering is
+  permitted and cannot express an entry. Keeping the two apart is what makes
+  "does the filter help" answerable — `--compare` runs the same strategy with
+  and without it and prints the deltas.
 - **Every timestamp is UTC**, normalised on the way into and out of the database.
 - **Spot vs futures is a config enum**, not a hardcoded endpoint, so the choice
   stays open.

@@ -181,6 +181,40 @@ func (f *fakeCandles) FetchCandles(context.Context, candle.FetchCandlesParams) (
 	return f.series, nil
 }
 
+// OpenCursor serves the same series, bounded the same way StreamCandles is.
+func (f *fakeCandles) OpenCursor(params candle.FetchCandlesParams) candle.CandleCursor {
+	var window []models.Candle
+	for _, c := range f.series {
+		if c.OpenTime.Before(params.From) {
+			continue
+		}
+		if !params.To.IsZero() && c.OpenTime.After(params.To) {
+			break
+		}
+		window = append(window, c)
+	}
+	return &sliceCursor{series: window}
+}
+
+// sliceCursor walks a prepared slice, which is what a real cursor does once
+// its paging is stripped away.
+type sliceCursor struct {
+	series []models.Candle
+	next   int
+}
+
+func (c *sliceCursor) Next(ctx context.Context) (models.Candle, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return models.Candle{}, false, err
+	}
+	if c.next >= len(c.series) {
+		return models.Candle{}, false, nil
+	}
+	result := c.series[c.next]
+	c.next++
+	return result, true, nil
+}
+
 func (f *fakeCandles) FetchLatestCandle(context.Context, string, constants.MarketType, constants.Timeframe) (models.Candle, error) {
 	if len(f.series) == 0 {
 		return models.Candle{}, constants.ErrNotFound

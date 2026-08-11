@@ -147,6 +147,17 @@ func (r *recordingCandleUsecase) StreamCandles(context.Context, candle.FetchCand
 	return nil
 }
 
+func (r *recordingCandleUsecase) OpenCursor(candle.FetchCandlesParams) candle.CandleCursor {
+	return emptyCursor{}
+}
+
+// emptyCursor is exhausted immediately; ingestion never reads a cursor.
+type emptyCursor struct{}
+
+func (emptyCursor) Next(context.Context) (models.Candle, bool, error) {
+	return models.Candle{}, false, nil
+}
+
 func (r *recordingCandleUsecase) FindGaps(context.Context, string, constants.MarketType, constants.Timeframe) ([]candle.Gap, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()

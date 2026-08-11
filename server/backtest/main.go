@@ -33,12 +33,15 @@ import (
 	"github.com/spioneracorei8/btcusd-trading-platform/server/services/backtest"
 	"github.com/spioneracorei8/btcusd-trading-platform/server/services/backtest/report"
 	_backtest_us "github.com/spioneracorei8/btcusd-trading-platform/server/services/backtest/usecase"
+	"github.com/spioneracorei8/btcusd-trading-platform/server/services/candle"
 	_candle_repo "github.com/spioneracorei8/btcusd-trading-platform/server/services/candle/repository"
 	_candle_us "github.com/spioneracorei8/btcusd-trading-platform/server/services/candle/usecase"
 	_datagap_repo "github.com/spioneracorei8/btcusd-trading-platform/server/services/datagap/repository"
 	_datagap_us "github.com/spioneracorei8/btcusd-trading-platform/server/services/datagap/usecase"
 	_indicator_us "github.com/spioneracorei8/btcusd-trading-platform/server/services/indicator/usecase"
 	"github.com/spioneracorei8/btcusd-trading-platform/server/services/strategy"
+	"github.com/spioneracorei8/btcusd-trading-platform/server/services/trend"
+	_trend_us "github.com/spioneracorei8/btcusd-trading-platform/server/services/trend/usecase"
 )
 
 // exit codes, so a script can tell a refusal from a crash.
@@ -62,6 +65,9 @@ type options struct {
 	allowGaps      string
 	out            string
 	equity         string
+	trendFilter    string
+	noTrendFilter  bool
+	compare        bool
 	listStrategies bool
 }
 
@@ -115,12 +121,24 @@ func run() int {
 	}
 	defer pool.Close()
 
+	candles := _candle_us.NewCandleUsecaseImpl(_candle_repo.NewCandleRepoImpl(pool))
 	engine := _backtest_us.NewBacktestUsecaseImpl(
 		log,
-		_candle_us.NewCandleUsecaseImpl(_candle_repo.NewCandleRepoImpl(pool)),
+		candles,
 		_datagap_us.NewDataGapUsecaseImpl(_datagap_repo.NewDataGapRepoImpl(pool)),
 		_indicator_us.DefaultSetConfig(),
 	)
+
+	if opts.compare {
+		return runComparison(ctx, log, engine, candles, params, opts)
+	}
+
+	if opts.trendFilter != "" {
+		if err := attachTrendFilter(&params, candles); err != nil {
+			log.Error("could not build the trend filter", "error", err)
+			return exitFailure
+		}
+	}
 
 	result, runErr := engine.Run(ctx, params)
 
@@ -170,6 +188,12 @@ func parseFlags(args []string) (options, error) {
 		"what to do about unfilled gaps: halt, skip or ignore")
 	fs.StringVar(&opts.out, "out", "", "write the JSON report to this path")
 	fs.StringVar(&opts.equity, "initial-equity", "10000", "starting balance in quote currency")
+	fs.StringVar(&opts.trendFilter, "trend-filter", _trend_us.FilterName,
+		"multi-timeframe trend filter to gate entries with")
+	fs.BoolVar(&opts.noTrendFilter, "no-trend-filter", false,
+		"run unfiltered; this is the control a filtered run is compared against")
+	fs.BoolVar(&opts.compare, "compare", false,
+		"run twice, filtered and unfiltered, and print both side by side")
 	fs.BoolVar(&opts.listStrategies, "list-strategies", false, "list the strategies this binary can run")
 
 	if err := fs.Parse(args); err != nil {
@@ -182,6 +206,17 @@ func parseFlags(args []string) (options, error) {
 	if opts.from == "" || opts.to == "" {
 		fs.Usage()
 		return options{}, errors.New("--from and --to are required")
+	}
+	if opts.noTrendFilter && opts.compare {
+		return options{}, errors.New(
+			"--no-trend-filter and --compare contradict each other: comparing needs the filtered run")
+	}
+	if opts.noTrendFilter {
+		opts.trendFilter = ""
+	}
+	if opts.trendFilter != "" && opts.trendFilter != _trend_us.FilterName {
+		return options{}, fmt.Errorf("unknown trend filter %q; this binary ships %q",
+			opts.trendFilter, _trend_us.FilterName)
 	}
 	return opts, nil
 }
@@ -298,4 +333,104 @@ func writeJSONReport(path string, result backtest.Result, stats report.Statistic
 		return fmt.Errorf("close %s: %w", path, err)
 	}
 	return nil
+}
+
+// attachTrendFilter builds the filter and its aligner onto a run.
+//
+// The aligner's cursors start a full warm-up before the requested range, so
+// the filter has an opinion from the first scored bar rather than spending the
+// range earning one. At the production EMA(200) that is six weeks of hourly
+// history — which is why it is computed rather than guessed.
+func attachTrendFilter(params *backtest.RunParams, candles candle.CandleUsecase) error {
+	config := trend.DefaultConfig()
+
+	filter, err := _trend_us.NewFilterImpl(config)
+	if err != nil {
+		return err
+	}
+
+	higher := config.Timeframes()
+	aligner, err := _trend_us.NewAlignerImpl(_trend_us.AlignerConfig{
+		Symbol:     params.Symbol,
+		MarketType: params.MarketType,
+		Base:       params.Timeframe,
+		Higher:     higher,
+		From:       trendCursorStart(params, higher),
+		To:         params.To,
+		Indicators: _indicator_us.DefaultSetConfig(),
+	}, candles)
+	if err != nil {
+		return err
+	}
+
+	params.TrendFilter = filter
+	params.TrendAligner = aligner
+	params.TrendConfig = config
+	return nil
+}
+
+// trendCursorStart is how far before the range each higher-timeframe cursor
+// must begin so its indicators are warm when the range opens.
+func trendCursorStart(params *backtest.RunParams, higher []constants.Timeframe) time.Time {
+	set, err := _indicator_us.NewSet(_indicator_us.DefaultSetConfig())
+	if err != nil {
+		// DefaultSetConfig is known good; a failure here would be a
+		// programming error, and starting at the range is the safe fallback.
+		return params.From
+	}
+
+	longest := time.Duration(0)
+	for _, timeframe := range higher {
+		if required := time.Duration(set.WarmupPeriod()) * timeframe.Duration(); required > longest {
+			longest = required
+		}
+	}
+	return params.From.Add(-longest)
+}
+
+// runComparison runs the same strategy twice and prints the difference.
+//
+// Two full runs rather than one run with the veto counted but not applied: a
+// vetoed entry changes what the strategy is holding on every subsequent bar,
+// so the unfiltered path cannot be reconstructed from the filtered one.
+func runComparison(
+	ctx context.Context,
+	log *slog.Logger,
+	engine backtest.BacktestUsecase,
+	candles candle.CandleUsecase,
+	params backtest.RunParams,
+	opts options,
+) int {
+	unfiltered, err := engine.Run(ctx, params)
+	if err != nil {
+		log.Error("the unfiltered run failed", "error", err)
+		return exitFailure
+	}
+
+	filteredParams := params
+	if err := attachTrendFilter(&filteredParams, candles); err != nil {
+		log.Error("could not build the trend filter", "error", err)
+		return exitFailure
+	}
+
+	filtered, err := engine.Run(ctx, filteredParams)
+	if err != nil {
+		log.Error("the filtered run failed", "error", err)
+		return exitFailure
+	}
+
+	comparison := report.NewComparison(unfiltered, filtered)
+	if err := report.WriteComparison(os.Stdout, comparison); err != nil {
+		log.Error("could not write the comparison", "error", err)
+		return exitFailure
+	}
+
+	if opts.out != "" {
+		if err := writeJSONReport(opts.out, filtered, comparison.FilteredStats); err != nil {
+			log.Error("could not write the json report", "error", err)
+			return exitFailure
+		}
+		must(fmt.Fprintf(os.Stdout, "\nfiltered json report written to %s\n", opts.out))
+	}
+	return exitOK
 }

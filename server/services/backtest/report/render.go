@@ -110,7 +110,43 @@ func writeHeader(b *strings.Builder, result backtest.Result, stats Statistics) {
 	line(b, "slippage applied", fmt.Sprintf("%d tick(s) of %s, each side, always against",
 		result.Params.Costs.SlippageTicks, result.Params.Costs.TickSize))
 	line(b, "gap policy", result.Params.GapPolicy.String())
+
+	// The filter is part of what produced the numbers, so it belongs in the
+	// header beside the strategy rather than in a footnote.
+	if result.TrendFilterName == "" {
+		line(b, "trend filter", "none (unfiltered)")
+	} else {
+		line(b, "trend filter", fmt.Sprintf("%s %s", result.TrendFilterName, result.TrendFilterVersion))
+		line(b, "  configuration", result.TrendFilterConfig)
+		line(b, "  bars vetoed", fmt.Sprintf("%d of %d evaluated (%.2f%%)",
+			result.BarsVetoed, result.BarsEvaluated,
+			percent(result.BarsVetoed, result.BarsEvaluated)))
+		line(b, "  bars not ready", fmt.Sprintf("%d of %d evaluated (%.2f%%)",
+			result.BarsFilterNotReady, result.BarsEvaluated,
+			percent(result.BarsFilterNotReady, result.BarsEvaluated)))
+
+		// Both extremes are worth saying out loud, because neither is legible
+		// from the returns: a filter that blocks nothing is not doing
+		// anything, and one that blocks nearly everything leaves too few
+		// trades for the statistics to mean much.
+		switch {
+		case result.BarsEvaluated == 0:
+		case result.BarsVetoed == 0:
+			b.WriteString("  (the filter vetoed nothing at all — it is not affecting this run)\n")
+		case percent(result.BarsFilterNotReady, result.BarsEvaluated) > 90:
+			b.WriteString("  (the filter was not ready for most of the run — the range is\n" +
+				"   probably shorter than its warm-up; see the header above)\n")
+		}
+	}
 	_ = stats
+}
+
+// percent renders a count as a share of a total, guarding the empty run.
+func percent(part, total int64) float64 {
+	if total == 0 {
+		return 0
+	}
+	return float64(part) / float64(total) * 100
 }
 
 // line writes one aligned label/value row.

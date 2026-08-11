@@ -18,6 +18,7 @@ import (
 	"github.com/spioneracorei8/btcusd-trading-platform/server/constants"
 	"github.com/spioneracorei8/btcusd-trading-platform/server/models"
 	"github.com/spioneracorei8/btcusd-trading-platform/server/services/strategy"
+	"github.com/spioneracorei8/btcusd-trading-platform/server/services/trend"
 )
 
 // GapPolicy decides what a run does when the requested range has holes.
@@ -106,7 +107,25 @@ type RunParams struct {
 
 	// Strategy is the code under measurement.
 	Strategy strategy.Strategy
+
+	// TrendFilter vetoes entries the higher timeframes do not permit. Nil
+	// runs unfiltered, which is the control the filtered run is compared
+	// against — a filter whose benefit is never measured is a decoration.
+	TrendFilter trend.Filter
+
+	// TrendAligner supplies the higher-timeframe readings. It must be
+	// non-nil whenever TrendFilter is, and it is what enforces that no
+	// contribution comes from a bar that had not closed.
+	TrendAligner trend.Aligner
+
+	// TrendConfig is recorded in the report. A filter version says which code
+	// scored the run; the configuration says what it scored with, and two runs
+	// of the same version under different weights are not comparable.
+	TrendConfig trend.Config
 }
+
+// Filtered reports whether this run has a trend filter attached.
+func (p RunParams) Filtered() bool { return p.TrendFilter != nil }
 
 // ExitReason records why a position was closed.
 type ExitReason string
@@ -211,6 +230,27 @@ type Result struct {
 	// it is large the result rests on the stop-first assumption rather than on
 	// evidence, and says more about the data's resolution than the strategy.
 	AmbiguousBars int64
+
+	// BarsVetoed counts bars where the trend filter blocked an entry the
+	// strategy asked for.
+	//
+	// Both extremes need to be visible. A filter that vetoes almost nothing is
+	// not doing anything; one that vetoes almost everything leaves too few
+	// surviving trades for the statistics to mean much. Neither is legible
+	// from the returns alone.
+	BarsVetoed int64
+
+	// BarsFilterNotReady counts bars where the filter had no answer yet —
+	// warming up, or recovering from a gap. Reported apart from BarsVetoed
+	// because "blocked on purpose" and "could not say" are different findings:
+	// a run that is mostly the second one was simply started too early.
+	BarsFilterNotReady int64
+
+	// TrendFilterName, TrendFilterVersion and TrendFilterConfig record what
+	// filtered the run, empty when nothing did.
+	TrendFilterName    string
+	TrendFilterVersion string
+	TrendFilterConfig  string
 
 	Trades []Trade
 	Equity []EquityPoint

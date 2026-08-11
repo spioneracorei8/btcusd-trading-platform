@@ -52,19 +52,25 @@ help: ## Show this help
 build: ## Build every binary into server/bin
 	cd $(SERVER) && go build -trimpath -o bin/api . && go build -trimpath -o bin/ ./collector ./backtest
 
+# Tests run with the trenddebug tag so the cross-timeframe look-ahead
+# assertion is compiled in and panics loudly. Shipped binaries build without
+# it: CLAUDE.md §4 keeps panics out of business logic, and a collector must not
+# die of an assertion on a VPS at 3am.
+GOTAGS := -tags trenddebug
+
 .PHONY: test
 test: ## Run unit tests (integration tests skip without TEST_DATABASE_URL)
-	cd $(SERVER) && go test ./...
+	cd $(SERVER) && go test $(GOTAGS) ./...
 
 .PHONY: test-integration
 test-integration: ## Start the database, migrate it and run every test
 	$(COMPOSE) up -d postgres
 	$(MAKE) migrate-up
-	cd $(SERVER) && TEST_DATABASE_URL="$(DATABASE_URL)" go test -count=1 ./...
+	cd $(SERVER) && TEST_DATABASE_URL="$(DATABASE_URL)" go test $(GOTAGS) -count=1 ./...
 
 .PHONY: vet
 vet: ## Run go vet
-	cd $(SERVER) && go vet ./...
+	cd $(SERVER) && go vet ./... && go vet $(GOTAGS) ./...
 
 .PHONY: fmt
 fmt: ## Format the Go sources

@@ -16,6 +16,7 @@ import (
 	"github.com/spioneracorei8/btcusd-trading-platform/server/services/datagap"
 	_indicator_us "github.com/spioneracorei8/btcusd-trading-platform/server/services/indicator/usecase"
 	"github.com/spioneracorei8/btcusd-trading-platform/server/services/strategy"
+	"github.com/spioneracorei8/btcusd-trading-platform/server/services/trend"
 )
 
 type backtestUsecase struct {
@@ -103,6 +104,17 @@ func (u *backtestUsecase) Run(ctx context.Context, params backtest.RunParams) (b
 	if err != nil {
 		return backtest.Result{}, err
 	}
+	run.ctx = ctx
+
+	if params.Filtered() {
+		if params.TrendAligner == nil {
+			return backtest.Result{}, errors.New(
+				"backtest: a trend filter was given with no aligner; it would have nothing to read")
+		}
+		result.TrendFilterName = params.TrendFilter.Name()
+		result.TrendFilterVersion = params.TrendFilter.Version()
+		result.TrendFilterConfig = params.TrendConfig.Describe()
+	}
 
 	// Warm-up is loaded from before the requested range so the range itself
 	// can be scored from its first bar. When that history does not exist the
@@ -171,6 +183,10 @@ type runner struct {
 	set      *_indicator_us.Set
 	excluded excludedRegions
 
+	// ctx belongs to the run. onCandle is called from StreamCandles, which
+	// does not pass one through, and the aligner reads the database.
+	ctx context.Context
+
 	warmupBars int
 
 	// pending are the intents produced by the previous bar, waiting for this
@@ -183,10 +199,12 @@ type runner struct {
 	trades []backtest.Trade
 	curve  []backtest.EquityPoint
 
-	barsEvaluated     int64
-	barsSkippedWarmup int64
-	barsSkippedGap    int64
-	ambiguousBars     int64
+	barsEvaluated      int64
+	barsSkippedWarmup  int64
+	barsSkippedGap     int64
+	ambiguousBars      int64
+	barsVetoed         int64
+	barsFilterNotReady int64
 
 	firstBar time.Time
 	lastBar  time.Time
@@ -227,6 +245,7 @@ func (u *backtestUsecase) newRunner(
 
 // onCandle is the loop body, called once per stored candle in order.
 func (r *runner) onCandle(bar models.Candle) error {
+	ctx := r.ctx
 	// Indicators are fed every bar without exception, including bars that are
 	// not scored. They are stateful: skipping one would leave them
 	// permanently out of step with the series, and the same code feeds them
@@ -289,6 +308,14 @@ func (r *runner) onCandle(bar models.Candle) error {
 		Indicators: snapshot,
 		Position:   r.positionView(),
 	})
+
+	// 6. The trend filter vetoes entries the higher timeframes do not permit.
+	//    It runs on the same bar the strategy decided on, using the same
+	//    information the strategy had — vetoing at fill time instead would
+	//    judge a decision against data that arrived after it was made.
+	if err := r.applyTrendVeto(ctx, bar, snapshot); err != nil {
+		return err
+	}
 	r.applyLevelIntents()
 
 	r.barsEvaluated++
@@ -565,6 +592,8 @@ func (r *runner) finish() {
 // fill copies the run's state onto the result.
 func (r *runner) fill(result *backtest.Result) {
 	result.BarsEvaluated = r.barsEvaluated
+	result.BarsVetoed = r.barsVetoed
+	result.BarsFilterNotReady = r.barsFilterNotReady
 	result.BarsSkippedWarmup = r.barsSkippedWarmup
 	result.BarsSkippedGap = r.barsSkippedGap
 	result.AmbiguousBars = r.ambiguousBars
@@ -572,4 +601,68 @@ func (r *runner) fill(result *backtest.Result) {
 	result.LastBar = r.lastBar
 	result.Trades = r.trades
 	result.Equity = r.curve
+}
+
+// applyTrendVeto removes entry intents the trend filter does not permit.
+//
+// # Why the veto lands here rather than at fill time
+//
+// The strategy decided on this bar's close using this bar's information. The
+// filter judges that decision with the same information: the higher-timeframe
+// readings that had closed by the same instant. Vetoing at fill time would
+// judge it against a bar that arrived after the decision was made, which is
+// the cross-timeframe version of the mistake phase 04 §4 exists to prevent.
+//
+// Exits are never vetoed. A filter that could trap a position in the market
+// would be making a trading decision, and this one is only allowed to refuse
+// entries.
+func (r *runner) applyTrendVeto(ctx context.Context, bar models.Candle, snapshot models.IndicatorSnapshot) error {
+	if !r.params.Filtered() {
+		return nil
+	}
+
+	views, err := r.params.TrendAligner.Advance(ctx, bar.CloseTime)
+	if err != nil {
+		return fmt.Errorf("advance the trend filter: %w", err)
+	}
+
+	state := r.params.TrendFilter.OnBar(trend.BarContext{
+		Candle:     bar,
+		Indicators: snapshot,
+		Higher:     views,
+	})
+	if !state.Ready {
+		r.barsFilterNotReady++
+	}
+
+	kept := r.pending[:0]
+	vetoed := false
+
+	for _, intent := range r.pending {
+		direction := entryDirection(intent.Kind)
+		if direction == constants.DirectionFlat || state.Permits(direction) {
+			kept = append(kept, intent)
+			continue
+		}
+		vetoed = true
+	}
+
+	r.pending = kept
+	if vetoed {
+		r.barsVetoed++
+	}
+	return nil
+}
+
+// entryDirection maps an intent to the side it would open, or flat when it
+// opens nothing.
+func entryDirection(kind strategy.IntentKind) constants.Direction {
+	switch kind {
+	case strategy.IntentEnterLong:
+		return constants.DirectionLong
+	case strategy.IntentEnterShort:
+		return constants.DirectionShort
+	default:
+		return constants.DirectionFlat
+	}
 }

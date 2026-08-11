@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"go/parser"
 	"go/token"
 	"os"
@@ -140,58 +141,81 @@ func TestUsecasesKnowNoSQL(t *testing.T) {
 	}
 }
 
-// contractPackages are services with no implementations at all.
+// TestServiceInterfaceFilesReachOnlyModelsAndConstants.
 //
-// CLAUDE.md §5 allows a service's interface file to import models and
-// constants only. A package holding nothing but a contract — no handler/,
-// usecase/ or repository/ — sits beside models in the dependency graph rather
-// than above it, so depending on one cannot create the hidden coupling the
-// rule is written against.
+// CLAUDE.md §5 says a service's interface file may import models and constants
+// only. Taken literally that also forbids one interface file naming another —
+// backtest.RunParams carrying a strategy.Strategy, or a trend.Filter — which
+// is not what the rule is protecting against.
 //
-// The exception is narrow on purpose, and TestContractPackagesHaveNoLayers
-// below is what stops it from being widened by accident.
-var contractPackages = map[string]bool{
-	"services/strategy": true,
-}
-
-// TestServiceInterfaceFilesImportOnlyModelsAndConstants.
-func TestServiceInterfaceFilesImportOnlyModelsAndConstants(t *testing.T) {
+// What matters is the transitive closure. The rule exists to stop an interface
+// file depending on a *layer*: on a handler, a usecase, a repository, or the
+// database. An interface file that names another interface file drags in
+// nothing but models and constants, because that is all the other one is
+// allowed to import either. Go imports packages, not directories, so a sibling
+// usecase/ package existing next to it changes nothing about what is pulled in.
+//
+// So this walks the graph instead of allow-listing names. A package qualifies
+// if everything it can reach is models, constants, or another package that
+// qualifies. That makes the exception self-maintaining: the day a package at a
+// service root starts importing its own usecase, it stops qualifying and every
+// interface file that named it fails here, which is exactly when someone
+// should be told.
+func TestServiceInterfaceFilesReachOnlyModelsAndConstants(t *testing.T) {
 	for _, service := range serviceDirs(t) {
 		for _, file := range goFilesIn(t, service) {
 			for _, imported := range projectImports(t, file) {
-				switch {
-				case imported == "models" || imported == "constants":
-				case contractPackages[imported]:
-					// Allowed, and only while it stays a contract.
-				default:
-					t.Errorf("%s imports %q.\n"+
-						"A service's interface file may import models and constants only.\n"+
-						"If the type has to cross a service boundary, move it to models —\n"+
-						"indicator.Snapshot became models.IndicatorSnapshot for this reason.",
-						file, imported)
+				if reason := unreachableReason(t, imported, nil); reason != "" {
+					t.Errorf("%s imports %q, which %s.\n"+
+						"A service's interface file may only reach models, constants, and\n"+
+						"other packages that reach nothing more. If a type has to cross a\n"+
+						"service boundary, move it to models — indicator.Snapshot became\n"+
+						"models.IndicatorSnapshot for exactly this reason.",
+						file, imported, reason)
 				}
 			}
 		}
 	}
 }
 
-// TestContractPackagesHaveNoLayers is what keeps the exception above honest.
-//
-// The reasoning holds only while a contract package has nothing beneath it.
-// The moment one grows an implementation it becomes an ordinary service, and
-// anything importing its interface file is importing a layer.
-func TestContractPackagesHaveNoLayers(t *testing.T) {
-	for pkg := range contractPackages {
-		for _, layer := range []string{"handler", "usecase", "repository"} {
-			path := filepath.Join(pkg, layer)
-			if _, err := os.Stat(path); err == nil {
-				t.Errorf("%s exists, so %s is no longer a contract package.\n"+
-					"Remove it from contractPackages and invert the dependency: whoever\n"+
-					"imports it is now importing a layer, which CLAUDE.md §5 forbids.",
-					path, pkg)
+// unreachableReason returns why a package may not be reached from an interface
+// file, or "" when it may be.
+func unreachableReason(t *testing.T, pkg string, seen map[string]bool) string {
+	t.Helper()
+
+	if pkg == "models" || pkg == "constants" {
+		return ""
+	}
+	for _, layer := range []string{"/handler", "/usecase", "/repository"} {
+		if strings.Contains(pkg+"/", layer+"/") {
+			return "is an implementation package"
+		}
+	}
+	if pkg == "database" || strings.HasPrefix(pkg, "database/") {
+		return "is the database layer"
+	}
+
+	if seen == nil {
+		seen = map[string]bool{}
+	}
+	if seen[pkg] {
+		return "" // already being checked further up the walk
+	}
+	seen[pkg] = true
+
+	files := goFilesIn(t, pkg)
+	if len(files) == 0 {
+		return "is not a package this test can read"
+	}
+
+	for _, file := range files {
+		for _, imported := range projectImports(t, file) {
+			if reason := unreachableReason(t, imported, seen); reason != "" {
+				return fmt.Sprintf("reaches %q, which %s", imported, reason)
 			}
 		}
 	}
+	return ""
 }
 
 // TestNoServiceReachesAnotherServicesRepository.

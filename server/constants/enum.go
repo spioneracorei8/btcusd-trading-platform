@@ -99,6 +99,47 @@ func ParseTimeframe(s string) (Timeframe, error) {
 	return tf, nil
 }
 
+// Bias is which way the trend filter says the market is leaning.
+//
+// It is deliberately not Direction. "The trend is up" and "I am long" are
+// different claims, and a single type for both invites the trend filter's
+// output to be mistaken for a position — which is exactly the confusion a
+// filter that vetoes rather than signals exists to avoid.
+type Bias string
+
+// Supported trend biases.
+const (
+	BiasBullish Bias = "bullish"
+	BiasBearish Bias = "bearish"
+
+	// BiasNeutral permits nothing. It is the value reported inside the dead
+	// zone and whenever the filter is not ready, and phase 06 must read it as
+	// "no entries", never as "no opinion, proceed freely".
+	BiasNeutral Bias = "neutral"
+)
+
+// Valid reports whether b is a known bias.
+func (b Bias) Valid() bool {
+	switch b {
+	case BiasBullish, BiasBearish, BiasNeutral:
+		return true
+	default:
+		return false
+	}
+}
+
+// String returns the wire representation of the bias.
+func (b Bias) String() string { return string(b) }
+
+// ParseBias converts s into a Bias, rejecting unknown values.
+func ParseBias(s string) (Bias, error) {
+	b := Bias(s)
+	if !b.Valid() {
+		return "", fmt.Errorf("unknown trend bias %q", s)
+	}
+	return b, nil
+}
+
 // Direction is the side a signal points to. The system never places orders;
 // a direction is advice for the owner, nothing more.
 type Direction string
