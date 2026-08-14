@@ -87,6 +87,75 @@ func (c Costs) SlippageAmount() decimal.Decimal {
 	return c.TickSize.Mul(decimal.NewFromInt(int64(c.SlippageTicks)))
 }
 
+// SizingMode decides how much a position commits.
+type SizingMode string
+
+// The sizing modes.
+const (
+	// SizingAllIn commits the whole account, fee included. It is what phase 04
+	// measured with, and it is the only mode available to a strategy that sets
+	// no stop — buy-and-hold has no stop distance to size against.
+	SizingAllIn SizingMode = "all_in"
+
+	// SizingFixedFractional risks a fixed share of equity per trade, with the
+	// size derived from the distance to the stop. It is the mode real
+	// strategies use: a fixed notional makes every trade's risk depend on how
+	// far away the stop happens to be, which is the opposite of controlling it.
+	SizingFixedFractional SizingMode = "fixed_fractional"
+)
+
+// Valid reports whether m is a known sizing mode.
+func (m SizingMode) Valid() bool {
+	switch m {
+	case SizingAllIn, SizingFixedFractional:
+		return true
+	default:
+		return false
+	}
+}
+
+// String returns the wire representation of the sizing mode.
+func (m SizingMode) String() string { return string(m) }
+
+// Sizing is how much of the account a position commits.
+//
+// It is part of RunParams rather than of a strategy because it changes every
+// reported number, and because live and backtest must size identically — the
+// same code, not two implementations that agree today.
+type Sizing struct {
+	Mode SizingMode
+
+	// RiskPct is the share of equity risked per trade under
+	// SizingFixedFractional, in percent: 1 means 1%.
+	RiskPct decimal.Decimal
+}
+
+// DefaultSizing risks 1% of equity per trade against the stop distance.
+func DefaultSizing() Sizing {
+	return Sizing{Mode: SizingFixedFractional, RiskPct: decimal.NewFromInt(1)}
+}
+
+// AllInSizing is phase 04's behaviour, kept for strategies with no stop.
+func AllInSizing() Sizing {
+	return Sizing{Mode: SizingAllIn}
+}
+
+// Validate rejects a sizing that could not produce a position.
+func (s Sizing) Validate() error {
+	if !s.Mode.Valid() {
+		return fmt.Errorf("backtest: %q is not a sizing mode", s.Mode)
+	}
+	if s.Mode == SizingFixedFractional {
+		if !s.RiskPct.IsPositive() {
+			return fmt.Errorf("backtest: risk %s%% per trade is not positive", s.RiskPct)
+		}
+		if s.RiskPct.GreaterThan(decimal.NewFromInt(100)) {
+			return fmt.Errorf("backtest: risk %s%% per trade exceeds the whole account", s.RiskPct)
+		}
+	}
+	return nil
+}
+
 // RunParams is one backtest run.
 type RunParams struct {
 	Symbol     string
@@ -104,6 +173,10 @@ type RunParams struct {
 
 	Costs     Costs
 	GapPolicy GapPolicy
+
+	// Sizing decides how much each position commits. The zero value is
+	// rejected; callers state it, because it changes every reported number.
+	Sizing Sizing
 
 	// Strategy is the code under measurement.
 	Strategy strategy.Strategy
@@ -230,6 +303,16 @@ type Result struct {
 	// it is large the result rests on the stop-first assumption rather than on
 	// evidence, and says more about the data's resolution than the strategy.
 	AmbiguousBars int64
+
+	// EntriesSizeCapped counts entries where fixed-fractional sizing wanted
+	// more than the account could buy and was capped at all-in.
+	//
+	// This matters more than it looks. A 0.1% stop distance at 1% risk implies
+	// ten times the notional, which a spot account cannot hold; capping is the
+	// only honest answer, but a run where the cap binds often is not risking
+	// what it claims to, and its drawdown will be worse than the risk setting
+	// suggests.
+	EntriesSizeCapped int64
 
 	// BarsVetoed counts bars where the trend filter blocked an entry the
 	// strategy asked for.

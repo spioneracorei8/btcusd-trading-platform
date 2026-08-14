@@ -138,11 +138,13 @@ func (k IntentKind) String() string { return string(k) }
 
 // Intent is what a strategy wants, never what happens.
 //
-// It carries no price for an entry or an exit and no timestamp. The engine
-// decides both: a fill happens at the next bar's open, after costs, and a
-// strategy that could name its own fill price could report any result it
-// liked. Price is only meaningful for the two level-setting intents, where
-// it is a threshold rather than a fill.
+// It carries no fill price and no timestamp. The engine decides both: a fill
+// happens at the next bar's open, after costs, and a strategy that could name
+// its own fill price could report any result it liked.
+//
+// The prices it does carry are all thresholds rather than fills — a stop, a
+// target, a level to move one to. Those are decisions about where to act, not
+// claims about what was paid.
 type Intent struct {
 	Kind IntentKind
 
@@ -150,20 +152,53 @@ type Intent struct {
 	// ignored for every other kind.
 	Price decimal.Decimal
 
+	// Stop and Target belong to an entry intent and are attached to the
+	// position the moment it fills.
+	//
+	// # Why they live on the entry rather than in a separate intent
+	//
+	// Phase 04 had a defect where a stop issued as its own intent alongside an
+	// entry was silently dropped: levels were only ever applied to an already
+	// open position, so on the bar that asked there was nothing to attach them
+	// to, and by the time the entry filled they were gone. The position then
+	// ran unprotected while nothing in the report said so.
+	//
+	// The bug is fixed, but a shape that made it expressible would let it
+	// happen again. Carrying the levels on the entry itself means the two
+	// cannot be separated: there is no ordering of intents that opens a
+	// position and loses its stop.
+	//
+	// Zero means no level, which is a deliberate choice at the call site
+	// rather than an accident of ordering. Fixed-fractional sizing needs a
+	// stop and will refuse to size without one.
+	Stop   decimal.Decimal
+	Target decimal.Decimal
+
 	// Reason is carried into the trade record and, from phase 07, into the
 	// notification. A signal without a reason is not actionable.
 	Reason string
 }
 
-// EnterLong builds a long entry intent.
-func EnterLong(reason string) Intent {
-	return Intent{Kind: IntentEnterLong, Reason: reason}
+// HasLevels reports whether an entry intent carries protection.
+func (i Intent) HasLevels() bool {
+	return i.Stop.IsPositive() || i.Target.IsPositive()
 }
 
-// EnterShort builds a short entry intent. The engine rejects it outright on a
-// spot market, where a short is fiction rather than an unsupported feature.
-func EnterShort(reason string) Intent {
-	return Intent{Kind: IntentEnterShort, Reason: reason}
+// EnterLong builds a long entry with its stop and target attached.
+//
+// Pass decimal.Zero for a level a strategy genuinely does not set — a
+// buy-and-hold fixture has neither — but pass it explicitly, so an
+// unprotected entry is something someone wrote rather than something that
+// happened.
+func EnterLong(stop, target decimal.Decimal, reason string) Intent {
+	return Intent{Kind: IntentEnterLong, Stop: stop, Target: target, Reason: reason}
+}
+
+// EnterShort builds a short entry with its stop and target attached. The
+// engine rejects it outright on a spot market, where a short is fiction rather
+// than an unsupported feature.
+func EnterShort(stop, target decimal.Decimal, reason string) Intent {
+	return Intent{Kind: IntentEnterShort, Stop: stop, Target: target, Reason: reason}
 }
 
 // Exit builds an exit intent.

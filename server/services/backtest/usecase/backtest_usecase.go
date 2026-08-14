@@ -172,6 +172,9 @@ func validateParams(params backtest.RunParams) error {
 	if params.Costs.FeeTakerPct.IsNegative() {
 		return fmt.Errorf("backtest: taker fee %s is negative", params.Costs.FeeTakerPct)
 	}
+	if err := params.Sizing.Validate(); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -205,6 +208,7 @@ type runner struct {
 	ambiguousBars      int64
 	barsVetoed         int64
 	barsFilterNotReady int64
+	entriesSizeCapped  int64
 
 	firstBar time.Time
 	lastBar  time.Time
@@ -362,7 +366,7 @@ func (r *runner) applyPending(bar models.Candle) error {
 	for _, intent := range intents {
 		switch intent.Kind {
 		case strategy.IntentEnterLong:
-			r.openAt(bar, constants.DirectionLong, intent.Reason)
+			r.openAt(bar, constants.DirectionLong, intent)
 
 		case strategy.IntentEnterShort:
 			// A spot backtest that shorts is fiction, so this ends the run
@@ -374,7 +378,7 @@ func (r *runner) applyPending(bar models.Candle) error {
 					constants.ErrShortOnSpot, r.params.Strategy.Name(),
 					r.params.Symbol, bar.OpenTime.Format(time.RFC3339))
 			}
-			r.openAt(bar, constants.DirectionShort, intent.Reason)
+			r.openAt(bar, constants.DirectionShort, intent)
 
 		case strategy.IntentExit:
 			if r.position.isOpen() {
@@ -436,7 +440,7 @@ func (r *runner) applyLevelIntents() {
 // A second entry while a position is open is dropped rather than pyramided:
 // the position model is one at a time, and silently averaging in would make
 // the reported entry price something no single order ever paid.
-func (r *runner) openAt(bar models.Candle, direction constants.Direction, reason string) {
+func (r *runner) openAt(bar models.Candle, direction constants.Direction, intent strategy.Intent) {
 	if r.position.isOpen() {
 		return
 	}
@@ -447,14 +451,12 @@ func (r *runner) openAt(bar models.Candle, direction constants.Direction, reason
 		return
 	}
 
-	// All-in: the position commits the whole account, fee included, so that
-	// nothing is left idle and the equity curve is directly comparable with
-	// buy-and-hold. Dividing by (1 + fee) is what makes the entry affordable
-	// rather than one fee over budget.
-	feeRate := r.params.Costs.FeeTakerPct.Div(hundred)
-	size := r.equity.Div(price.Mul(decimal.NewFromInt(1).Add(feeRate)))
+	size, capped := r.sizeFor(price, intent.Stop)
 	if !size.IsPositive() {
 		return
+	}
+	if capped {
+		r.entriesSizeCapped++
 	}
 
 	notional := size.Mul(price)
@@ -466,8 +468,51 @@ func (r *runner) openAt(bar models.Candle, direction constants.Direction, reason
 		size:           size,
 		equityAtEntry:  r.equity,
 		entryFee:       feeOn(notional, r.params.Costs),
-		entryNote:      reason,
+		entryNote:      intent.Reason,
+		stop:           intent.Stop,
+		target:         intent.Target,
 	}
+}
+
+// sizeFor decides how much the position commits, and reports whether the
+// answer had to be capped.
+//
+// # The cap is not a detail
+//
+// Fixed-fractional sizing solves for a size whose loss at the stop equals the
+// risk budget. With a tight stop that size implies more notional than the
+// account holds — a 0.1% stop distance at 1% risk is ten times the equity,
+// which on a spot account is not a smaller position, it is an impossible one.
+//
+// Capping at all-in is the only honest answer, but a capped entry is no longer
+// risking what the configuration says. Runs count how often it happens, because
+// a strategy whose sizing is constantly capped will show a drawdown far worse
+// than its risk setting implies and nothing else would explain why.
+func (r *runner) sizeFor(price, stop decimal.Decimal) (size decimal.Decimal, capped bool) {
+	// All-in: commit the whole account, fee included. Dividing by (1 + fee) is
+	// what makes the entry affordable rather than one fee over budget.
+	feeRate := r.params.Costs.FeeTakerPct.Div(hundred)
+	affordable := r.equity.Div(price.Mul(decimal.NewFromInt(1).Add(feeRate)))
+
+	if r.params.Sizing.Mode == backtest.SizingAllIn {
+		return affordable, false
+	}
+
+	// Without a stop there is no distance to size against. Falling back to
+	// all-in silently would be the worst option: the run would report
+	// fixed-fractional sizing while committing everything.
+	distance := price.Sub(stop).Abs()
+	if !stop.IsPositive() || !distance.IsPositive() {
+		return decimal.Zero, false
+	}
+
+	risked := r.equity.Mul(r.params.Sizing.RiskPct).Div(hundred)
+	wanted := risked.Div(distance)
+
+	if wanted.GreaterThan(affordable) {
+		return affordable, true
+	}
+	return wanted, false
 }
 
 // checkLevels resolves a stop or target reached inside this bar.
@@ -593,6 +638,7 @@ func (r *runner) finish() {
 func (r *runner) fill(result *backtest.Result) {
 	result.BarsEvaluated = r.barsEvaluated
 	result.BarsVetoed = r.barsVetoed
+	result.EntriesSizeCapped = r.entriesSizeCapped
 	result.BarsFilterNotReady = r.barsFilterNotReady
 	result.BarsSkippedWarmup = r.barsSkippedWarmup
 	result.BarsSkippedGap = r.barsSkippedGap

@@ -41,7 +41,7 @@ func (buyAndHold) OnBar(bar strategy.BarContext) []strategy.Intent {
 	if bar.Position.IsOpen() {
 		return nil
 	}
-	return []strategy.Intent{strategy.EnterLong("buy and hold")}
+	return []strategy.Intent{strategy.EnterLong(decimal.Zero, decimal.Zero, "buy and hold")}
 }
 func (buyAndHold) WarmupPeriod() int { return 0 }
 func (buyAndHold) Name() string      { return "buy_and_hold" }
@@ -59,7 +59,7 @@ func (guaranteedLoss) OnBar(bar strategy.BarContext) []strategy.Intent {
 	if bar.Position.IsOpen() {
 		return []strategy.Intent{strategy.Exit("immediate")}
 	}
-	return []strategy.Intent{strategy.EnterLong("immediate")}
+	return []strategy.Intent{strategy.EnterLong(decimal.Zero, decimal.Zero, "immediate")}
 }
 func (guaranteedLoss) WarmupPeriod() int { return 0 }
 func (guaranteedLoss) Name() string      { return "guaranteed_loss" }
@@ -80,7 +80,7 @@ func (a *alternating) OnBar(bar strategy.BarContext) []strategy.Intent {
 	if bar.Position.IsOpen() {
 		return []strategy.Intent{strategy.Exit("alternate")}
 	}
-	return []strategy.Intent{strategy.EnterLong("alternate")}
+	return []strategy.Intent{strategy.EnterLong(decimal.Zero, decimal.Zero, "alternate")}
 }
 func (a *alternating) WarmupPeriod() int { return 0 }
 func (a *alternating) Name() string      { return "alternating" }
@@ -95,17 +95,13 @@ type longWithLevels struct {
 }
 
 func (s *longWithLevels) OnBar(bar strategy.BarContext) []strategy.Intent {
-	if !bar.Position.IsOpen() && !s.armed {
-		s.armed = true
-		return []strategy.Intent{strategy.EnterLong("with levels")}
+	if bar.Position.IsOpen() || s.armed {
+		return nil
 	}
-	if bar.Position.IsOpen() && bar.Position.Stop.IsZero() {
-		return []strategy.Intent{
-			strategy.SetStop(s.stop, "fixed stop"),
-			strategy.SetTarget(s.target, "fixed target"),
-		}
-	}
-	return nil
+	s.armed = true
+	// Levels travel with the entry, which is the shape that makes an
+	// unprotected position impossible to produce by ordering alone.
+	return []strategy.Intent{strategy.EnterLong(s.stop, s.target, "with levels")}
 }
 func (s *longWithLevels) WarmupPeriod() int { return 0 }
 func (s *longWithLevels) Name() string      { return "long_with_levels" }
@@ -119,7 +115,7 @@ func (s *shortOnce) OnBar(strategy.BarContext) []strategy.Intent {
 		return nil
 	}
 	s.asked = true
-	return []strategy.Intent{strategy.EnterShort("short it")}
+	return []strategy.Intent{strategy.EnterShort(decimal.Zero, decimal.Zero, "short it")}
 }
 func (s *shortOnce) WarmupPeriod() int { return 0 }
 func (s *shortOnce) Name() string      { return "short_once" }
@@ -359,6 +355,11 @@ func runParams(series []models.Candle, strat strategy.Strategy) backtest.RunPara
 		InitialEquity: initialEquity,
 		Costs:         testCosts(),
 		GapPolicy:     backtest.GapHalt,
-		Strategy:      strat,
+		// All-in, which is what phase 04 measured with and what the
+		// hand-computed arithmetic below depends on. The stop-less fixtures
+		// have no distance to size against, so it is also the only mode they
+		// could use. Fixed-fractional has its own tests.
+		Sizing:   backtest.AllInSizing(),
+		Strategy: strat,
 	}
 }

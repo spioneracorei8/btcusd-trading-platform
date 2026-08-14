@@ -550,7 +550,7 @@ func TestNoPyramiding(t *testing.T) {
 	// Asks to enter on every bar, whether or not something is already held.
 	strat := &recordingStrategy{
 		onEachBar: func(strategy.BarContext) []strategy.Intent {
-			return []strategy.Intent{strategy.EnterLong("again")}
+			return []strategy.Intent{strategy.EnterLong(decimal.Zero, decimal.Zero, "again")}
 		},
 	}
 	result := runEngine(t, candles, nil, scoredParams(t, series, strat))
@@ -601,7 +601,7 @@ func (s *enterWithStop) OnBar(bar strategy.BarContext) []strategy.Intent {
 	}
 	s.done = true
 	return []strategy.Intent{
-		strategy.EnterLong("in"),
+		strategy.EnterLong(decimal.Zero, decimal.Zero, "in"),
 		strategy.SetStop(s.stop, "protect"),
 		strategy.SetTarget(s.target, "take"),
 	}

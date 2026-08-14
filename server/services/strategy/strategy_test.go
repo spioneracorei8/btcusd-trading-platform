@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/shopspring/decimal"
+
 	"github.com/spioneracorei8/btcusd-trading-platform/server/services/strategy"
 )
 
@@ -113,8 +115,8 @@ func TestBarContextExposesNothingBeyondTheCurrentBar(t *testing.T) {
 // threshold rather than a fill.
 func TestIntentCarriesNoFillPrice(t *testing.T) {
 	for _, intent := range []strategy.Intent{
-		strategy.EnterLong("in"),
-		strategy.EnterShort("in"),
+		strategy.EnterLong(decimal.Zero, decimal.Zero, "in"),
+		strategy.EnterShort(decimal.Zero, decimal.Zero, "in"),
 		strategy.Exit("out"),
 	} {
 		if !intent.Price.IsZero() {
@@ -126,7 +128,9 @@ func TestIntentCarriesNoFillPrice(t *testing.T) {
 	intentType := reflect.TypeOf(strategy.Intent{})
 	for i := range intentType.NumField() {
 		switch name := intentType.Field(i).Name; name {
-		case "Kind", "Price", "Reason":
+		// Price, Stop and Target are all thresholds — where to act — never
+		// claims about what was paid. The engine still prices every fill.
+		case "Kind", "Price", "Stop", "Target", "Reason":
 		default:
 			t.Errorf("Intent has a new field %q; check it cannot express a fill", name)
 		}
