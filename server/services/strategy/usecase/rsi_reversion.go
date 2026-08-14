@@ -19,6 +19,9 @@ type RSIReversionConfig struct {
 	Levels strategy.Levels
 
 	RoundTripCostPct float64
+
+	// LongOnly suppresses short entries; see EMACrossoverConfig.LongOnly.
+	LongOnly bool
 }
 
 // DefaultRSIReversionConfig is the documented starting point.
@@ -115,7 +118,7 @@ func (s *rsiReversion) OnBar(bar strategy.BarContext) []strategy.Intent {
 		)}
 
 	// Leaving overbought from above.
-	case previous > s.config.Overbought && rsi <= s.config.Overbought:
+	case previous > s.config.Overbought && rsi <= s.config.Overbought && !s.config.LongOnly:
 		return []strategy.Intent{strategy.EnterShort(
 			s.config.Levels.StopFor(bar.Candle.Close, atr, false),
 			s.config.Levels.TargetFor(bar.Candle.Close, atr, false),

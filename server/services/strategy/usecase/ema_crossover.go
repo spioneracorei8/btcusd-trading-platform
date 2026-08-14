@@ -36,6 +36,16 @@ type EMACrossoverConfig struct {
 	// percent. It is passed in rather than assumed so a different fee tier
 	// changes what is accepted.
 	RoundTripCostPct float64
+
+	// LongOnly suppresses short entries.
+	//
+	// It is set from the market type at construction, not read from the bar:
+	// a spot account cannot short, and that is a property of the instrument
+	// rather than a mode the strategy is running in. The engine still refuses
+	// a short on spot outright — this is what stops a two-sided rule from
+	// tripping that refusal on its first bearish cross and taking the run down
+	// with it.
+	LongOnly bool
 }
 
 // DefaultEMACrossoverConfig is the documented starting point.
@@ -150,6 +160,9 @@ func (s *emaCrossover) OnBar(bar strategy.BarContext) []strategy.Intent {
 			s.config.Levels.TargetFor(bar.Candle.Close, atr, true),
 			fmt.Sprintf("ema(%d) crossed above ema(%d)", s.config.FastPeriod, s.config.SlowPeriod),
 		)}
+	}
+	if s.config.LongOnly {
+		return nil
 	}
 	return []strategy.Intent{strategy.EnterShort(
 		s.config.Levels.StopFor(bar.Candle.Close, atr, false),

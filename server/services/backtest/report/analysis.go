@@ -1,0 +1,357 @@
+package report
+
+import (
+	"fmt"
+	"io"
+	"math"
+	"sort"
+	"strings"
+
+	"github.com/shopspring/decimal"
+
+	"github.com/spioneracorei8/btcusd-trading-platform/server/services/backtest"
+)
+
+// Analysis is the phase-06 §C4 reporting: the specific ways a result can look
+// good and mean nothing.
+//
+// These are reported beside the headline numbers rather than instead of them.
+// A strategy can clear every acceptance threshold and still be a few lucky
+// bars wearing a costume, and the headline figures cannot tell the difference.
+type Analysis struct {
+	Concentration Concentration
+	ByYear        []PeriodBreakdown
+	ByVolatility  []PeriodBreakdown
+}
+
+// Concentration is how much of the profit came from a handful of trades.
+type Concentration struct {
+	// TopN is how many trades were counted as "the best few".
+	TopN int
+
+	// TopNProfit is their combined net PnL, and Share is that as a fraction
+	// of total net profit across all winning trades.
+	TopNProfit decimal.Decimal
+	Share      float64
+
+	TotalNet decimal.Decimal
+}
+
+// PeriodBreakdown is one slice of a run — a year, or a volatility regime.
+type PeriodBreakdown struct {
+	Label string
+
+	Trades  int
+	NetPnL  decimal.Decimal
+	WinRate float64
+}
+
+// Analyse computes the failure-mode report for a finished run.
+func Analyse(result backtest.Result, stats Statistics) Analysis {
+	return Analysis{
+		Concentration: concentration(result.Trades, stats, 5),
+		ByYear:        byYear(result.Trades),
+		ByVolatility:  byVolatility(result),
+	}
+}
+
+// concentration measures how much of the profit the best few trades carry.
+//
+// If most of it comes from five trades out of two hundred, the other
+// hundred and ninety-five paid fees for the privilege of being in the sample,
+// and the strategy's claim rests on events too rare to have been measured.
+func concentration(trades []backtest.Trade, stats Statistics, topN int) Concentration {
+	result := Concentration{TopN: topN, TotalNet: stats.TotalNetPnL,
+		TopNProfit: decimal.Zero}
+
+	if len(trades) == 0 {
+		return result
+	}
+
+	nets := make([]decimal.Decimal, 0, len(trades))
+	grossProfit := decimal.Zero
+	for _, trade := range trades {
+		nets = append(nets, trade.NetPnL)
+		if trade.NetPnL.IsPositive() {
+			grossProfit = grossProfit.Add(trade.NetPnL)
+		}
+	}
+	sort.Slice(nets, func(i, j int) bool { return nets[i].GreaterThan(nets[j]) })
+
+	for i := 0; i < topN && i < len(nets); i++ {
+		if nets[i].IsPositive() {
+			result.TopNProfit = result.TopNProfit.Add(nets[i])
+		}
+	}
+
+	// Measured against gross profit rather than net: the question is how
+	// concentrated the *winning* was, and netting losses in would let a
+	// strategy with many small losses look diversified.
+	if grossProfit.IsPositive() {
+		share, _ := result.TopNProfit.Div(grossProfit).Float64()
+		result.Share = share
+	}
+	return result
+}
+
+// byYear breaks the trades down by calendar year.
+//
+// A strategy that only worked in 2023 has told you about 2023. Crypto regimes
+// last months, so a single aggregate over two years can hide one good year
+// paying for one bad one — which is not an edge, it is a coin that landed
+// heads first.
+func byYear(trades []backtest.Trade) []PeriodBreakdown {
+	years := map[int]*PeriodBreakdown{}
+	order := []int{}
+
+	for _, trade := range trades {
+		year := trade.EntryTime.UTC().Year()
+		if _, seen := years[year]; !seen {
+			years[year] = &PeriodBreakdown{Label: fmt.Sprintf("%d", year), NetPnL: decimal.Zero}
+			order = append(order, year)
+		}
+		accumulate(years[year], trade)
+	}
+
+	sort.Ints(order)
+	out := make([]PeriodBreakdown, 0, len(order))
+	for _, year := range order {
+		finish(years[year])
+		out = append(out, *years[year])
+	}
+	return out
+}
+
+// byVolatility splits the trades at the median holding-period return range.
+//
+// A cheap proxy: trades are bucketed by how far price moved between entry and
+// exit relative to the entry, which is what "the market was busy" looks like
+// from a trade's point of view. It is not an ATR regime classification and
+// does not pretend to be — it is enough to show whether the result depends on
+// one kind of market.
+func byVolatility(result backtest.Result) []PeriodBreakdown {
+	if len(result.Trades) < 2 {
+		return nil
+	}
+
+	type scored struct {
+		trade backtest.Trade
+		move  float64
+	}
+
+	scoredTrades := make([]scored, 0, len(result.Trades))
+	for _, trade := range result.Trades {
+		if !trade.EntryPrice.IsPositive() {
+			continue
+		}
+		move, _ := trade.ExitPrice.Sub(trade.EntryPrice).Abs().
+			Div(trade.EntryPrice).Float64()
+		scoredTrades = append(scoredTrades, scored{trade: trade, move: move})
+	}
+	if len(scoredTrades) < 2 {
+		return nil
+	}
+
+	moves := make([]float64, 0, len(scoredTrades))
+	for _, s := range scoredTrades {
+		moves = append(moves, s.move)
+	}
+	sort.Float64s(moves)
+	median := moves[len(moves)/2]
+
+	low := &PeriodBreakdown{Label: "low volatility", NetPnL: decimal.Zero}
+	high := &PeriodBreakdown{Label: "high volatility", NetPnL: decimal.Zero}
+
+	for _, s := range scoredTrades {
+		if s.move <= median {
+			accumulate(low, s.trade)
+		} else {
+			accumulate(high, s.trade)
+		}
+	}
+	finish(low)
+	finish(high)
+	return []PeriodBreakdown{*low, *high}
+}
+
+// accumulate adds one trade to a breakdown.
+func accumulate(period *PeriodBreakdown, trade backtest.Trade) {
+	period.Trades++
+	period.NetPnL = period.NetPnL.Add(trade.NetPnL)
+	if trade.NetPnL.IsPositive() {
+		// WinRate holds the count until finish turns it into a rate.
+		period.WinRate++
+	}
+}
+
+// finish turns the accumulated win count into a rate.
+func finish(period *PeriodBreakdown) {
+	if period.Trades > 0 {
+		period.WinRate /= float64(period.Trades)
+	}
+}
+
+// WriteAnalysis renders the failure-mode report.
+func WriteAnalysis(w io.Writer, analysis Analysis, unit string) error {
+	var b strings.Builder
+
+	b.WriteString("\nFAILURE MODES\n")
+
+	c := analysis.Concentration
+	line(&b, fmt.Sprintf("best %d trades", c.TopN),
+		fmt.Sprintf("%s %s — %.2f%% of gross profit", c.TopNProfit.StringFixed(2), unit, c.Share*100))
+	if c.Share > 0.5 {
+		b.WriteString("  (most of the profit comes from a handful of trades; the rest of the\n" +
+			"   sample paid fees to be there. Treat the result as a few lucky bars\n" +
+			"   until it survives a range those bars are not in.)\n")
+	}
+
+	if len(analysis.ByYear) > 0 {
+		b.WriteString("\n  by year\n")
+		writeBreakdowns(&b, analysis.ByYear, unit)
+
+		if len(analysis.ByYear) > 1 && onlyOneYearProfitable(analysis.ByYear) {
+			b.WriteString("  (only one year is profitable. A strategy that worked in one regime\n" +
+				"   has told you about that regime.)\n")
+		}
+	}
+
+	if len(analysis.ByVolatility) > 0 {
+		b.WriteString("\n  by volatility (median split on entry-to-exit move)\n")
+		writeBreakdowns(&b, analysis.ByVolatility, unit)
+	}
+
+	if _, err := io.WriteString(w, b.String()); err != nil {
+		return fmt.Errorf("write analysis: %w", err)
+	}
+	return nil
+}
+
+func writeBreakdowns(b *strings.Builder, periods []PeriodBreakdown, unit string) {
+	for _, period := range periods {
+		fmt.Fprintf(b, "    %-18s %6d trades  %14s %s  win rate %6.2f%%\n",
+			period.Label, period.Trades, period.NetPnL.StringFixed(2), unit, period.WinRate*100)
+	}
+}
+
+// onlyOneYearProfitable reports whether exactly one year carried the result.
+func onlyOneYearProfitable(periods []PeriodBreakdown) bool {
+	profitable := 0
+	for _, period := range periods {
+		if period.NetPnL.IsPositive() {
+			profitable++
+		}
+	}
+	return profitable == 1
+}
+
+// CostSensitivity is one run repeated at a multiple of the assumed cost.
+type CostSensitivity struct {
+	Multiplier float64
+	NetReturn  float64
+	TradeCount int
+}
+
+// WriteCostSensitivity renders the cost-sensitivity table.
+//
+// An edge that vanishes under modest slippage was never robust enough to
+// trade. The assumed cost is a guess about a number that moves against retail
+// accounts over time — fee tiers change, spreads widen in exactly the
+// conditions a strategy trades most — so a result that only survives at
+// exactly the assumed figure has no margin at all.
+func WriteCostSensitivity(w io.Writer, runs []CostSensitivity) error {
+	var b strings.Builder
+
+	b.WriteString("\nCOST SENSITIVITY\n")
+	fmt.Fprintf(&b, "    %-12s %16s %10s\n", "cost", "net return", "trades")
+
+	baseline := math.NaN()
+	for _, run := range runs {
+		if run.Multiplier == 1 {
+			baseline = run.NetReturn
+		}
+		fmt.Fprintf(&b, "    %-12s %16s %10d\n",
+			fmt.Sprintf("%.1fx", run.Multiplier), formatPercent(run.NetReturn), run.TradeCount)
+	}
+
+	for _, run := range runs {
+		if run.Multiplier > 1 && !math.IsNaN(baseline) && baseline > 0 && run.NetReturn <= 0 {
+			fmt.Fprintf(&b, "  (the edge disappears at %.1fx the assumed cost. Treat that as a\n"+
+				"   failure regardless of the headline number: fee tiers and spreads move\n"+
+				"   against a retail account, not for it.)\n", run.Multiplier)
+			break
+		}
+	}
+
+	if _, err := io.WriteString(w, b.String()); err != nil {
+		return fmt.Errorf("write cost sensitivity: %w", err)
+	}
+	return nil
+}
+
+// NeighbourResult is one run at a neighbouring parameter value.
+type NeighbourResult struct {
+	Label      string
+	NetReturn  float64
+	TradeCount int
+	Failed     string
+}
+
+// WriteNeighbourhood renders the parameter-stability report.
+//
+// # This reports, it never selects
+//
+// Phase 06 puts automated parameter optimisation out of scope, and this is
+// deliberately not that. It runs the neighbours and prints them; it does not
+// rank them, does not recommend one, and does not report a "best". The
+// question it answers is whether the chosen value sits on a plateau or on a
+// spike — if EMA(21) is profitable and 20 and 22 are not, that is a fitted
+// artefact, and the only useful response is to stop believing 21.
+//
+// A tool that picked the winner would industrialise the exact mistake.
+func WriteNeighbourhood(w io.Writer, parameter string, chosen NeighbourResult, neighbours []NeighbourResult) error {
+	var b strings.Builder
+
+	fmt.Fprintf(&b, "\nPARAMETER NEIGHBOURHOOD — %s\n", parameter)
+	fmt.Fprintf(&b, "    %-24s %16s %10s\n", "value", "net return", "trades")
+
+	render := func(entry NeighbourResult, marker string) {
+		if entry.Failed != "" {
+			fmt.Fprintf(&b, "    %-24s %16s %10s  %s\n",
+				entry.Label+marker, "-", "-", entry.Failed)
+			return
+		}
+		fmt.Fprintf(&b, "    %-24s %16s %10d\n",
+			entry.Label+marker, formatPercent(entry.NetReturn), entry.TradeCount)
+	}
+
+	render(chosen, "  <- chosen")
+	for _, neighbour := range neighbours {
+		render(neighbour, "")
+	}
+
+	if isolated(chosen, neighbours) {
+		b.WriteString("  (the chosen value is profitable and its neighbours are not. That is a\n" +
+			"   spike, not a plateau — the shape of a fitted artefact rather than a\n" +
+			"   discovery. Nothing here selects a replacement; the finding is that this\n" +
+			"   value should not be believed.)\n")
+	}
+
+	if _, err := io.WriteString(w, b.String()); err != nil {
+		return fmt.Errorf("write neighbourhood: %w", err)
+	}
+	return nil
+}
+
+// isolated reports whether the chosen value stands alone.
+func isolated(chosen NeighbourResult, neighbours []NeighbourResult) bool {
+	if chosen.Failed != "" || chosen.NetReturn <= 0 || len(neighbours) == 0 {
+		return false
+	}
+	for _, neighbour := range neighbours {
+		if neighbour.Failed == "" && neighbour.NetReturn > 0 {
+			return false
+		}
+	}
+	return true
+}

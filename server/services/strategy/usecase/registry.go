@@ -16,10 +16,14 @@ type Registered struct {
 	// result says what produced it and not only which name did.
 	Describe func() string
 
-	// Build constructs the strategy at its documented defaults. It returns an
-	// error rather than a value because a configuration whose reward cannot
-	// clear the round trip must fail loudly at construction.
-	Build func(roundTripCostPct float64) (strategy.Strategy, error)
+	// Build constructs the strategy at its documented defaults.
+	//
+	// It returns an error rather than a value because a configuration whose
+	// reward cannot clear the round trip must fail loudly at construction.
+	//
+	// longOnly comes from the market type: a spot account cannot short, and a
+	// two-sided rule that tried would end the run on its first bearish signal.
+	Build func(roundTripCostPct float64, longOnly bool) (strategy.Strategy, error)
 }
 
 // registry is a slice, not a map.
@@ -36,9 +40,10 @@ var registry = []Registered{
 			return fmt.Sprintf("fast=%d slow=%d stop=%.2fATR target=%.2fATR",
 				c.FastPeriod, c.SlowPeriod, c.Levels.StopATRMult, c.Levels.TargetATRMult)
 		},
-		Build: func(cost float64) (strategy.Strategy, error) {
+		Build: func(cost float64, longOnly bool) (strategy.Strategy, error) {
 			config := DefaultEMACrossoverConfig()
 			config.RoundTripCostPct = cost
+			config.LongOnly = longOnly
 			return NewEMACrossoverImpl(config)
 		},
 	},
@@ -49,9 +54,10 @@ var registry = []Registered{
 			return fmt.Sprintf("oversold=%.0f overbought=%.0f stop=%.2fATR target=%.2fATR",
 				c.Oversold, c.Overbought, c.Levels.StopATRMult, c.Levels.TargetATRMult)
 		},
-		Build: func(cost float64) (strategy.Strategy, error) {
+		Build: func(cost float64, longOnly bool) (strategy.Strategy, error) {
 			config := DefaultRSIReversionConfig()
 			config.RoundTripCostPct = cost
+			config.LongOnly = longOnly
 			return NewRSIReversionImpl(config)
 		},
 	},
@@ -62,9 +68,10 @@ var registry = []Registered{
 			return fmt.Sprintf("trend=%d pullback=%.2fATR resume=%d stop=%.2fATR target=%.2fATR",
 				c.TrendPeriod, c.PullbackATR, c.ResumeBars, c.Levels.StopATRMult, c.Levels.TargetATRMult)
 		},
-		Build: func(cost float64) (strategy.Strategy, error) {
+		Build: func(cost float64, longOnly bool) (strategy.Strategy, error) {
 			config := DefaultTrendPullbackConfig()
 			config.RoundTripCostPct = cost
+			config.LongOnly = longOnly
 			return NewTrendPullbackImpl(config)
 		},
 	},

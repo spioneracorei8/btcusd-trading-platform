@@ -60,6 +60,7 @@ func TestTwoIdenticalRunsProduceByteIdenticalJSON(t *testing.T) {
 			To:            to,
 			InitialEquity: decimal.NewFromInt(10000),
 			Costs:         testCosts(),
+			Sizing:        backtest.AllInSizing(),
 			GapPolicy:     backtest.GapIgnore,
 			Strategy:      &alternating{everyN: 37},
 		})
@@ -148,6 +149,7 @@ func TestFullPipelineRendersASummary(t *testing.T) {
 		To:            to,
 		InitialEquity: decimal.NewFromInt(10000),
 		Costs:         testCosts(),
+		Sizing:        backtest.AllInSizing(),
 		GapPolicy:     backtest.GapIgnore,
 		Strategy:      &alternating{everyN: 60},
 	})

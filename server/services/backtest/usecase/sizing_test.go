@@ -2,6 +2,7 @@ package usecase_test
 
 import (
 	"context"
+	"runtime"
 	"testing"
 
 	"github.com/shopspring/decimal"
@@ -224,4 +225,55 @@ func TestSizingIsIdenticalWhateverTheEquity(t *testing.T) {
 // could measure — this is rounding, not slack in the model.
 func within(got, want decimal.Decimal, tolerance string) bool {
 	return got.Sub(want).Abs().LessThanOrEqual(decimal.RequireFromString(tolerance))
+}
+
+// TestAStrategyInstanceCannotBeRunTwice is a regression test for a defect
+// found by running the tooling rather than by reading it.
+//
+// --cost-sweep re-ran the same strategy instance at each cost multiple, so the
+// 1.0x row — which is identical to the headline run by construction — reported
+// a different trade count. The strategy had carried its moving averages and its
+// pending-crossing flag into the second run and started mid-stream.
+//
+// That is the mild symptom. The same defect in --compare would have made the
+// filtered and unfiltered runs incomparable, which is the entire purpose of the
+// feature, and nothing in the output would have said so.
+func TestAStrategyInstanceCannotBeRunTwice(t *testing.T) {
+	series := risingSeries(80, 100)
+	engine := newEngine(&fakeCandles{series: series}, nil)
+
+	strat := &alternating{everyN: 5}
+	params := scoredParams(t, series, strat)
+
+	if _, err := engine.Run(context.Background(), params); err != nil {
+		t.Fatalf("the first run failed: %v", err)
+	}
+	if _, err := engine.Run(context.Background(), params); err == nil {
+		t.Fatal("the same strategy instance ran twice.\n" +
+			"The second run started with the state the first left behind, so the " +
+			"two results are not comparable — and a comparison is the only thing " +
+			"two runs are ever for.")
+	}
+}
+
+// TestFreshInstancesRunFreely is the other half, and the reason the guard
+// holds a reference to each strategy it has seen.
+//
+// The first version keyed on the pointer address alone. Go reuses the address
+// of a collected object, so the second freshly-built strategy landed where the
+// first had been and was rejected as a repeat — a false positive, which is a
+// worse failure than the one being prevented.
+func TestFreshInstancesRunFreely(t *testing.T) {
+	series := risingSeries(80, 100)
+	engine := newEngine(&fakeCandles{series: series}, nil)
+
+	// Enough iterations that the allocator would very likely reuse an address
+	// if nothing were holding the earlier instances alive.
+	for i := range 25 {
+		params := scoredParams(t, series, &alternating{everyN: 5})
+		if _, err := engine.Run(context.Background(), params); err != nil {
+			t.Fatalf("run %d with a fresh strategy failed: %v", i, err)
+		}
+		runtime.GC()
+	}
 }

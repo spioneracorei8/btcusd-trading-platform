@@ -47,7 +47,7 @@ func allStrategies(t *testing.T) map[string]strategy.Strategy {
 
 	out := map[string]strategy.Strategy{}
 	for _, entry := range _strategy_us.All() {
-		built, err := entry.Build(0.1)
+		built, err := entry.Build(0.1, false)
 		if err != nil {
 			t.Fatalf("build %s: %v", entry.Name, err)
 		}
@@ -130,11 +130,11 @@ func TestEveryEntryIsProtectedOnTheCorrectSide(t *testing.T) {
 // the same intents, or nothing downstream can be compared with itself.
 func TestStrategiesAreDeterministic(t *testing.T) {
 	for _, entry := range _strategy_us.All() {
-		first, err := entry.Build(0.1)
+		first, err := entry.Build(0.1, false)
 		if err != nil {
 			t.Fatalf("build %s: %v", entry.Name, err)
 		}
-		second, err := entry.Build(0.1)
+		second, err := entry.Build(0.1, false)
 		if err != nil {
 			t.Fatalf("build %s: %v", entry.Name, err)
 		}
@@ -215,7 +215,7 @@ func TestRewardBelowTheRoundTripIsRejectedAtConstruction(t *testing.T) {
 
 	// And every shipped default must clear its own bar.
 	for _, entry := range _strategy_us.All() {
-		if _, err := entry.Build(0.1); err != nil {
+		if _, err := entry.Build(0.1, false); err != nil {
 			t.Errorf("the shipped default for %s does not clear the round trip: %v", entry.Name, err)
 		}
 	}

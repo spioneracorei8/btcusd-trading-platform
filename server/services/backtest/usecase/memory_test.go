@@ -78,6 +78,7 @@ func TestFullYearOfOneMinuteBarsStaysUnderTheMemoryBudget(t *testing.T) {
 		To:            to,
 		InitialEquity: decimal.NewFromInt(10000),
 		Costs:         testCosts(),
+		Sizing:        backtest.AllInSizing(),
 		GapPolicy:     backtest.GapIgnore,
 		Strategy:      &alternating{everyN: 500},
 	})
@@ -234,6 +235,7 @@ func TestFullYearWithTheTrendFilterStaysUnderTheMemoryBudget(t *testing.T) {
 		To:            to,
 		InitialEquity: decimal.NewFromInt(10000),
 		Costs:         testCosts(),
+		Sizing:        backtest.AllInSizing(),
 		GapPolicy:     backtest.GapIgnore,
 		Strategy:      &alternating{everyN: 500},
 		TrendFilter:   filter,

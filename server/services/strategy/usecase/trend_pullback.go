@@ -30,6 +30,9 @@ type TrendPullbackConfig struct {
 	Levels strategy.Levels
 
 	RoundTripCostPct float64
+
+	// LongOnly suppresses short entries; see EMACrossoverConfig.LongOnly.
+	LongOnly bool
 }
 
 // DefaultTrendPullbackConfig is the documented starting point.
@@ -156,6 +159,9 @@ func (s *trendPullback) OnBar(bar strategy.BarContext) []strategy.Intent {
 	s.resumeCount++
 
 	if s.resumeCount < s.config.ResumeBars || bar.Position.IsOpen() {
+		return nil
+	}
+	if !long && s.config.LongOnly {
 		return nil
 	}
 

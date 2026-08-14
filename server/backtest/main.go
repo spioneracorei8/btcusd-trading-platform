@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -40,6 +41,7 @@ import (
 	_datagap_us "github.com/spioneracorei8/btcusd-trading-platform/server/services/datagap/usecase"
 	_indicator_us "github.com/spioneracorei8/btcusd-trading-platform/server/services/indicator/usecase"
 	"github.com/spioneracorei8/btcusd-trading-platform/server/services/strategy"
+	_strategy_us "github.com/spioneracorei8/btcusd-trading-platform/server/services/strategy/usecase"
 	"github.com/spioneracorei8/btcusd-trading-platform/server/services/trend"
 	_trend_us "github.com/spioneracorei8/btcusd-trading-platform/server/services/trend/usecase"
 )
@@ -68,6 +70,11 @@ type options struct {
 	trendFilter    string
 	noTrendFilter  bool
 	compare        bool
+	dataset        string
+	riskPct        string
+	allIn          bool
+	costSweep      bool
+	holdoutNote    string
 	listStrategies bool
 }
 
@@ -130,7 +137,7 @@ func run() int {
 	)
 
 	if opts.compare {
-		return runComparison(ctx, log, engine, candles, params, opts)
+		return runComparison(ctx, log, engine, candles, params, opts, cfg)
 	}
 
 	if opts.trendFilter != "" {
@@ -165,6 +172,32 @@ func run() int {
 		return exitFailure
 	}
 
+	// The failure modes, always. A strategy can clear every threshold and
+	// still be a few lucky bars, and the headline figures cannot tell.
+	if err := report.WriteAnalysis(os.Stdout, report.Analyse(result, stats), quoteUnit(params.Symbol)); err != nil {
+		log.Error("could not write the analysis", "error", err)
+		return exitFailure
+	}
+
+	if opts.costSweep {
+		if err := runCostSweep(ctx, log, engine, params, opts, cfg); err != nil {
+			log.Error("could not run the cost sweep", "error", err)
+			return exitFailure
+		}
+	}
+
+	// The holdout is recorded before the numbers are read, so a run whose
+	// result was disliked is still on the record.
+	if dataset, err := backtest.ParseDataset(opts.dataset); err == nil && dataset.Spent() {
+		if err := report.AppendHoldoutUse(holdoutLogPath(),
+			report.HoldoutEntryFor(result, stats, time.Now().UTC(), opts.holdoutNote)); err != nil {
+			log.Error("could not append to the holdout log", "error", err)
+			return exitFailure
+		}
+		must(fmt.Fprintf(os.Stdout,
+			"\nthis holdout use was recorded in %s\n", holdoutLogPath()))
+	}
+
 	if opts.out != "" {
 		if err := writeJSONReport(opts.out, result, stats); err != nil {
 			log.Error("could not write the json report", "error", err)
@@ -181,8 +214,16 @@ func parseFlags(args []string) (options, error) {
 
 	fs := flag.NewFlagSet("backtest", flag.ContinueOnError)
 	fs.StringVar(&opts.strategyName, "strategy", "", "strategy to run (see --list-strategies)")
-	fs.StringVar(&opts.from, "from", "", "start of the range, RFC3339 (required)")
-	fs.StringVar(&opts.to, "to", "", "end of the range, RFC3339 (required)")
+	fs.StringVar(&opts.from, "from", "", "start of the range, RFC3339 (overrides --dataset)")
+	fs.StringVar(&opts.to, "to", "", "end of the range, RFC3339 (overrides --dataset)")
+	fs.StringVar(&opts.dataset, "dataset", backtest.DatasetDev.String(),
+		"dev (2023-2024, iterate freely) or holdout (2025+, run once — every use is logged)")
+	fs.StringVar(&opts.riskPct, "risk-pct", "1", "percent of equity risked per trade")
+	fs.BoolVar(&opts.allIn, "all-in", false,
+		"commit the whole account per trade instead of sizing against the stop")
+	fs.BoolVar(&opts.costSweep, "cost-sweep", false,
+		"also run at 1.5x and 2x the assumed cost and print the sensitivity")
+	fs.StringVar(&opts.holdoutNote, "note", "", "note recorded in the holdout log")
 	fs.StringVar(&opts.timeframe, "timeframe", constants.Timeframe1m.String(), "candle interval to replay")
 	fs.StringVar(&opts.allowGaps, "allow-gaps", backtest.GapHalt.String(),
 		"what to do about unfilled gaps: halt, skip or ignore")
@@ -203,9 +244,17 @@ func parseFlags(args []string) (options, error) {
 		return opts, nil
 	}
 
-	if opts.from == "" || opts.to == "" {
-		fs.Usage()
-		return options{}, errors.New("--from and --to are required")
+	dataset, err := backtest.ParseDataset(opts.dataset)
+	if err != nil {
+		return options{}, fmt.Errorf("--dataset: %w", err)
+	}
+	// Explicit dates mean the run is neither of the two sets that carry
+	// meaning, and it must not be labelled as one.
+	if (opts.from != "" || opts.to != "") && dataset != backtest.DatasetCustom {
+		if opts.from == "" || opts.to == "" {
+			return options{}, errors.New("--from and --to must be given together")
+		}
+		opts.dataset = backtest.DatasetCustom.String()
 	}
 	if opts.noTrendFilter && opts.compare {
 		return options{}, errors.New(
@@ -227,13 +276,14 @@ func parseFlags(args []string) (options, error) {
 // backtest whose costs could be tuned from the command line would eventually
 // be tuned until it looked good.
 func buildParams(opts options, cfg *config.Config) (backtest.RunParams, error) {
-	from, err := time.Parse(time.RFC3339, opts.from)
+	dataset, err := backtest.ParseDataset(opts.dataset)
 	if err != nil {
-		return backtest.RunParams{}, fmt.Errorf("--from %q is not an RFC3339 timestamp", opts.from)
+		return backtest.RunParams{}, err
 	}
-	to, err := time.Parse(time.RFC3339, opts.to)
+
+	from, to, err := resolveRange(opts, dataset)
 	if err != nil {
-		return backtest.RunParams{}, fmt.Errorf("--to %q is not an RFC3339 timestamp", opts.to)
+		return backtest.RunParams{}, err
 	}
 
 	timeframe, err := constants.ParseTimeframe(opts.timeframe)
@@ -249,9 +299,24 @@ func buildParams(opts options, cfg *config.Config) (backtest.RunParams, error) {
 		return backtest.RunParams{}, fmt.Errorf("--initial-equity %q is not a number", opts.equity)
 	}
 
-	strat, err := lookupStrategy(opts.strategyName)
+	// A spot account cannot short, so a two-sided rule is built long-only
+	// there. The engine's hard refusal stays as the backstop.
+	longOnly := cfg.Market.Type == constants.MarketTypeSpot
+
+	strat, err := lookupStrategy(opts.strategyName, roundTripCostPct(cfg), longOnly)
 	if err != nil {
 		return backtest.RunParams{}, err
+	}
+
+	sizing := backtest.DefaultSizing()
+	if opts.allIn {
+		sizing = backtest.AllInSizing()
+	} else {
+		risk, err := decimal.NewFromString(opts.riskPct)
+		if err != nil {
+			return backtest.RunParams{}, fmt.Errorf("--risk-pct %q is not a number", opts.riskPct)
+		}
+		sizing.RiskPct = risk
 	}
 
 	return backtest.RunParams{
@@ -267,30 +332,68 @@ func buildParams(opts options, cfg *config.Config) (backtest.RunParams, error) {
 			TickSize:      cfg.Market.TickSize,
 		},
 		GapPolicy: policy,
+		Sizing:    sizing,
 		Strategy:  strat,
 	}, nil
 }
 
-// lookupStrategy resolves the --strategy flag.
-//
-// Phase 04 has no strategies: the engine exists before anything to measure,
-// on purpose. The error says so rather than reporting an empty registry as a
-// typo, so nobody goes looking for a name that was never there.
-func lookupStrategy(name string) (strategy.Strategy, error) {
-	if name == "" {
-		return nil, errors.New("--strategy is required, but no strategy is registered yet " +
-			"(phase 04 builds the engine; strategies arrive in phase 06)")
+// resolveRange turns a dataset, or explicit dates, into a window.
+func resolveRange(opts options, dataset backtest.Dataset) (from, to time.Time, err error) {
+	if opts.from != "" || opts.to != "" {
+		from, err = time.Parse(time.RFC3339, opts.from)
+		if err != nil {
+			return time.Time{}, time.Time{}, fmt.Errorf("--from %q is not an RFC3339 timestamp", opts.from)
+		}
+		to, err = time.Parse(time.RFC3339, opts.to)
+		if err != nil {
+			return time.Time{}, time.Time{}, fmt.Errorf("--to %q is not an RFC3339 timestamp", opts.to)
+		}
+		return from.UTC(), to.UTC(), nil
 	}
-	return nil, fmt.Errorf("unknown strategy %q: no strategy is registered yet "+
-		"(phase 04 builds the engine; strategies arrive in phase 06)", name)
+
+	from, to, ok := dataset.Range(time.Now())
+	if !ok {
+		return time.Time{}, time.Time{}, fmt.Errorf(
+			"--dataset=%s has no range of its own; give --from and --to", dataset)
+	}
+	return from, to, nil
+}
+
+// roundTripCostPct is what one entry and one exit cost in fees, in percent.
+// A strategy configuration is validated against it, so a different fee tier
+// changes what is accepted.
+func roundTripCostPct(cfg *config.Config) float64 {
+	fee, _ := cfg.Market.FeeTakerPct.Float64()
+	return fee * 2
+}
+
+// lookupStrategy resolves the --strategy flag against the registry.
+func lookupStrategy(name string, roundTripCostPct float64, longOnly bool) (strategy.Strategy, error) {
+	if name == "" {
+		return nil, fmt.Errorf("--strategy is required; this binary ships %s",
+			strings.Join(_strategy_us.Names(), ", "))
+	}
+
+	entry, err := _strategy_us.Lookup(name)
+	if err != nil {
+		return nil, err
+	}
+	return entry.Build(roundTripCostPct, longOnly)
 }
 
 // printStrategies lists what can be run.
 func printStrategies(w io.Writer) {
-	must(io.WriteString(w, "no strategies are registered.\n\n"+
-		"The backtest engine is deliberately built before any strategy exists:\n"+
-		"without a measuring instrument there is no way to tell whether a\n"+
-		"strategy works. Strategies arrive in phase 06 and register here.\n"))
+	var b strings.Builder
+	b.WriteString("registered strategies:\n\n")
+
+	for _, entry := range _strategy_us.All() {
+		fmt.Fprintf(&b, "  %-16s %s\n", entry.Name, entry.Describe())
+	}
+
+	b.WriteString("\nThese are experiments, not recommendations. Most rules of this kind\n")
+	b.WriteString("fail at 1m-5m once 0.1% a round trip is charged; they were chosen for\n")
+	b.WriteString("failing in legible ways. Judge every one against docs/acceptance-criteria.md.\n")
+	must(io.WriteString(w, b.String()))
 }
 
 // printGaps lists the ranges that stopped a run.
@@ -400,6 +503,7 @@ func runComparison(
 	candles candle.CandleUsecase,
 	params backtest.RunParams,
 	opts options,
+	cfg *config.Config,
 ) int {
 	unfiltered, err := engine.Run(ctx, params)
 	if err != nil {
@@ -407,7 +511,15 @@ func runComparison(
 		return exitFailure
 	}
 
+	// A fresh instance: a strategy carries state, and reusing the one the
+	// unfiltered run left behind would make the two incomparable — which is
+	// the only thing this mode is for.
 	filteredParams := params
+	filteredParams.Strategy, err = freshStrategy(opts, cfg)
+	if err != nil {
+		log.Error("could not rebuild the strategy for the filtered run", "error", err)
+		return exitFailure
+	}
 	if err := attachTrendFilter(&filteredParams, candles); err != nil {
 		log.Error("could not build the trend filter", "error", err)
 		return exitFailure
@@ -433,4 +545,92 @@ func runComparison(
 		must(fmt.Fprintf(os.Stdout, "\nfiltered json report written to %s\n", opts.out))
 	}
 	return exitOK
+}
+
+// holdoutLogPath resolves the log relative to the repository root.
+//
+// The CLI is usually run from server/, so the plain relative path would put
+// the log somewhere nobody looks. Walking up to find docs/ keeps every use in
+// one file whatever directory the command was typed in — which is the whole
+// point of a log that is meant to be read later.
+func holdoutLogPath() string {
+	for _, prefix := range []string{"", "../", "../../"} {
+		if _, err := os.Stat(prefix + "docs"); err == nil {
+			return prefix + report.HoldoutLogPath
+		}
+	}
+	return report.HoldoutLogPath
+}
+
+// runCostSweep repeats the run at higher assumed costs.
+//
+// An edge that vanishes under modest slippage was never robust enough to
+// trade. The assumed cost is a guess about a number that moves against a
+// retail account over time, so a result that only survives at exactly the
+// assumed figure has no margin at all.
+func runCostSweep(
+	ctx context.Context,
+	log *slog.Logger,
+	engine backtest.BacktestUsecase,
+	params backtest.RunParams,
+	opts options,
+	cfg *config.Config,
+) error {
+	var runs []report.CostSensitivity
+
+	for _, multiplier := range []float64{1, 1.5, 2} {
+		scaled := params
+		scaled.Costs = params.Costs
+
+		// One instance per run. Sharing would start each sweep step wherever
+		// the last one stopped, and the 1.0x row would not reproduce the
+		// headline figure it exists to anchor.
+		fresh, err := freshStrategy(opts, cfg)
+		if err != nil {
+			return fmt.Errorf("cost sweep at %.1fx: %w", multiplier, err)
+		}
+		scaled.Strategy = fresh
+		scaled.Costs.FeeTakerPct = params.Costs.FeeTakerPct.
+			Mul(decimal.NewFromFloat(multiplier))
+		scaled.Costs.SlippageTicks = int(math.Round(float64(params.Costs.SlippageTicks) * multiplier))
+
+		result, err := engine.Run(ctx, scaled)
+		if err != nil {
+			return fmt.Errorf("cost sweep at %.1fx: %w", multiplier, err)
+		}
+		stats := report.Compute(result)
+
+		runs = append(runs, report.CostSensitivity{
+			Multiplier: multiplier,
+			NetReturn:  stats.NetReturn,
+			TradeCount: stats.TradeCount,
+		})
+		log.Debug("cost sweep run finished",
+			"multiplier", multiplier, "net_return", stats.NetReturn)
+	}
+	return report.WriteCostSensitivity(os.Stdout, runs)
+}
+
+// quoteUnit names the currency the money figures are in.
+func quoteUnit(symbol string) string {
+	for _, quote := range []string{"USDT", "USDC", "BUSD", "USD"} {
+		if strings.HasSuffix(symbol, quote) {
+			return quote
+		}
+	}
+	return "quote"
+}
+
+// freshStrategy builds a new instance of the selected strategy.
+//
+// Every run needs its own. A strategy accumulates state across bars, so
+// handing the same instance to a second run starts it mid-stream — and the
+// two features that exist to compare runs, --compare and --cost-sweep, are
+// exactly the ones that would be quietly wrong.
+func freshStrategy(opts options, cfg *config.Config) (strategy.Strategy, error) {
+	return lookupStrategy(
+		opts.strategyName,
+		roundTripCostPct(cfg),
+		cfg.Market.Type == constants.MarketTypeSpot,
+	)
 }

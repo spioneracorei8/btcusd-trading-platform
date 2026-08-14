@@ -24,6 +24,10 @@ type backtestUsecase struct {
 	gaps      datagap.DataGapUsecase
 	log       *slog.Logger
 	indicator _indicator_us.SetConfig
+
+	// guard refuses to replay a strategy instance that has already run. See
+	// reuse.go for what that would silently do to a comparison.
+	guard *strategyGuard
 }
 
 // NewBacktestUsecaseImpl builds the engine over the stored candle series.
@@ -42,6 +46,7 @@ func NewBacktestUsecaseImpl(
 		gaps:      gaps,
 		log:       log,
 		indicator: indicatorConfig,
+		guard:     newStrategyGuard(),
 	}
 }
 
@@ -62,6 +67,9 @@ var errStopScan = errors.New("backtest scan finished")
 // knowable once t is over, so a decision made on it cannot also fill on it.
 func (u *backtestUsecase) Run(ctx context.Context, params backtest.RunParams) (backtest.Result, error) {
 	if err := validateParams(params); err != nil {
+		return backtest.Result{}, err
+	}
+	if err := u.guard.claim(params.Strategy); err != nil {
 		return backtest.Result{}, err
 	}
 
