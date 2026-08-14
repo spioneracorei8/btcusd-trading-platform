@@ -12,14 +12,26 @@ Read [`CLAUDE.md`](CLAUDE.md) before writing any code. Phase prompts live in
 
 ## Status
 
-Phases 01–05 of 09 are merged: skeleton and schema, market data ingestion,
-the indicator engine, the backtest engine, and the multi-timeframe trend
-filter.
+Phases 01–06 of 09 are merged: skeleton and schema, market data ingestion,
+the indicator engine, the backtest engine, the multi-timeframe trend filter,
+and the strategy engine.
 
-The backtest engine is deliberately built **before** any strategy, and the
-trend filter before that too. Without a measuring instrument there is no way
-to tell whether a strategy works, so `backtest --list-strategies` reports an
-empty registry on purpose; strategies arrive in phase 06.
+The backtest engine was deliberately built **before** any strategy, and the
+trend filter before that too. Without a measuring instrument there is no way to
+tell whether a strategy works.
+
+`backtest --list-strategies` now reports three: `ema_crossover`,
+`rsi_reversion` and `trend_pullback`. They are structurally different —
+trend-following, counter-trend, trend-continuation — so their results say
+something about the market rather than about parameter choices. They are
+starting points for experiments, **not recommendations**; most rules of this
+kind fail at 1m–5m once the 0.1% round trip is applied.
+
+**No evaluation has been run yet.** `docs/acceptance-criteria.md` was written
+before any strategy code, `docs/experiments.md` is the log every run is
+appended to, and `docs/holdout-log.md` records each use of the 2025+ holdout.
+The most probable outcome is that nothing clears the criteria; that is the
+normal result, and the apparatus exists to make it believable when it arrives.
 
 **The trend filter needs about 42 days of history before it says anything.** A
 1h EMA(200) at a 5x warm-up is 1000 hourly closes, which is 60,000 1m bars. A
@@ -124,8 +136,8 @@ server/
     health/        handler.go, usecase.go, repository.go + impls
     market/        Binance client + ingestion (phase 02)
     indicator/     EMA, RSI, ATR, VWAP (phase 03)
-    strategy/      strategy.go — the interface only, no implementations
-    backtest/      backtest.go, outage.go + usecase/, report/ (phase 04)
+    strategy/      strategy.go, params.go + usecase/ (phase 06)
+    backtest/      backtest.go, outage.go, dataset.go + usecase/, report/ (phase 04)
     trend/         trend.go, config.go + usecase/ (phase 05)
   migrations/      goose migrations
   testhelper/      shared setup for repository integration tests
@@ -140,19 +152,28 @@ and is the template the later services follow.
 Two things deliberately depart from the shape, both documented in
 [ADR 0014](docs/decisions/0014-clean-architecture-in-practice.md):
 
-- **`strategy/`** holds no implementations and none are coming — phase 04 built
-  the measuring instrument before there was anything to measure — so it sits
-  beside `models` and `constants` in the dependency graph rather than above
-  them. `backtest.RunParams` naming a `strategy.Strategy`, or a `trend.Filter`,
-  drags in nothing but models and constants; the rule above is checked on the
-  transitive closure, so this stays legal exactly as long as it stays true.
+- **The root of `strategy/`** is a contract, not a service. It reaches only
+  `models` and `constants`, so it sits beside them in the dependency graph
+  rather than above them, and `backtest.RunParams` naming a
+  `strategy.Strategy` — or a `trend.Filter` — drags in no layer. Phase 06 added
+  `strategy/usecase/`, which points down the graph like any other
+  implementation package and changes nothing about what the root pulls in. The
+  rule above is checked on the transitive closure, so this stays legal exactly
+  as long as it stays true.
 - **`backtest/report/`** renders for a CLI, not for HTTP. It does a handler's
   job but is not called `handler/`, because that name means HTTP everywhere
   else here and reusing it would make the convention useless as a signal.
 
+Two rules with no exceptions are checked the same way, in the same file:
+nothing references an order, account or withdrawal endpoint, and no code path
+branches on whether it is running a backtest. Both are the sort of thing that
+gets verified once by eye and then quietly violated three phases later.
+
 The choice itself is [ADR 0005](docs/decisions/0005-clean-architecture-layout.md);
 [ADR 0014](docs/decisions/0014-clean-architecture-in-practice.md) records how it
-held up over four phases, including what it costs.
+held up over four phases, including what it costs, and
+[ADR 0016](docs/decisions/0016-strategy-evaluation-discipline.md) records what
+phase 06 decided about strategies and how they get evaluated.
 
 ## Make targets
 
@@ -169,8 +190,37 @@ held up over four phases, including what it costs.
 | `make engine` | show which container engine the targets will use |
 | `make adminer` / `make adminer-stop` | database browser on `127.0.0.1:8081` |
 | `go run ./backtest --help` | backtest CLI flags |
+| `go run ./backtest --list-strategies` | strategies this binary can run, and their defaults |
 | `go run ./backtest --compare ...` | same strategy, filter on and off, side by side |
 | `make check` | build + vet + lint + test |
+
+### Running a backtest
+
+```bash
+go run ./backtest --strategy=trend_pullback --timeframe=5m       # dev set, filtered
+go run ./backtest --strategy=trend_pullback --compare            # filter on and off
+go run ./backtest --strategy=trend_pullback --cost-sweep         # 1x, 1.5x, 2x costs
+go run ./backtest --strategy=trend_pullback --dataset=holdout \
+                  --note="final run"                             # logged, and spends the set
+```
+
+| flag | default | what it decides |
+|---|---|---|
+| `--strategy` | — | which registered strategy to run |
+| `--dataset` | `dev` | `dev` (2023–2024, iterate freely) or `holdout` (2025+, every use logged) |
+| `--from` / `--to` | — | explicit dates; the run is then labelled `custom`, neither set |
+| `--risk-pct` | `1` | percent of equity risked per trade, sized off the stop |
+| `--all-in` | off | commit the whole account per trade instead of sizing against the stop |
+| `--cost-sweep` | off | rerun at 1.5x and 2x the assumed cost and print the sensitivity |
+| `--trend-filter` / `--no-trend-filter` | filtered | gate entries on the multi-timeframe filter |
+| `--compare` | off | run filtered and unfiltered, print both side by side |
+| `--allow-gaps` | `halt` | `halt`, `skip` or `ignore` unfilled gaps |
+| `--out` | — | also write the JSON report to this path |
+| `--note` | — | recorded alongside a holdout use |
+
+Costs are configuration (`FEE_TAKER_PCT`, `SLIPPAGE_TICKS`, `MARKET_TICK_SIZE`)
+and there is no flag that changes them. A backtest whose costs could be tuned
+from the command line would eventually be tuned until it looked good.
 
 ## Design rules that shape the code
 
@@ -208,6 +258,25 @@ These come from `CLAUDE.md` and are enforced here, not just documented.
   permitted and cannot express an entry. Keeping the two apart is what makes
   "does the filter help" answerable — `--compare` runs the same strategy with
   and without it and prints the deltas.
+- **An entry carries its own stop and target.** `strategy.Intent` has no way to
+  express an entry without them, because phase 04 had a defect where a
+  separately-issued stop was silently dropped and the position ran unprotected.
+  Stops are ATR-scaled, and a configuration whose reward cannot clear the 0.1%
+  round trip fails at construction rather than quietly in the results.
+- **A signal stores the evidence behind it.** `signals.reason` is jsonb holding
+  the bar, the indicator values, the trend verdict with each timeframe's
+  `close_time`, and the levels. Indicators are never persisted, so this cannot
+  be reconstructed later — and later is when a surprising alert needs auditing.
+  A NaN indicator is refused rather than stored as zero.
+- **The holdout set is a mirror, not a lock.** `--dataset=holdout` appends every
+  use to `docs/holdout-log.md` before printing the numbers, so a run whose
+  result was disliked is still on the record. It cannot be enforced; making a
+  second use visible is the whole mechanism, and claiming more for it would be
+  the same error the discipline exists to prevent.
+- **Reports never select.** Cost sensitivity, regime splits, concentration and
+  the parameter neighbourhood are printed and nothing chooses from them.
+  Picking the best neighbour is the overfitting the report exists to detect;
+  see [ADR 0016](docs/decisions/0016-strategy-evaluation-discipline.md).
 - **Every timestamp is UTC**, normalised on the way into and out of the database.
 - **Spot vs futures is a config enum**, not a hardcoded endpoint, so the choice
   stays open.

@@ -84,16 +84,35 @@ storage no matter what `CandleUsecase` said about it.
 reads as forbidden: a service's interface file may import `models` and
 `constants` only.
 
-The exception is deliberate and narrow. `services/strategy` holds **no
-implementations at all** — no `usecase/`, no `repository/`, no `handler/`, and
-by design none are coming: phase 04 built the measuring instrument before
-anything to measure. It is a pure contract, in the same position as `models`
-and `constants` in the dependency graph, and it imports only those two itself.
+The exception is deliberate and narrow. The *root* of `services/strategy` is a
+pure contract: it imports `models` and `constants` and nothing else, which puts
+it beside them in the dependency graph rather than above them.
 
 The rule exists to stop an interface file depending on a *layer*. Depending on
 a leaf contract with nothing beneath it cannot create the cycle or the hidden
-coupling the rule is written against. The moment `strategy` grows a
-subpackage, this reasoning expires and the dependency has to be inverted.
+coupling the rule is written against.
+
+> **Amended 2026-08-14 (phase 06).** As first written, this section said
+> `strategy` held no implementations and that "the moment `strategy` grows a
+> subpackage, this reasoning expires". Phase 06 added
+> `services/strategy/usecase/` with three strategies, so the first half is now
+> false — and the second half turned out to be the wrong test.
+>
+> What matters is not whether a subpackage *exists* but whether the root
+> package *imports* it. `strategy/usecase` imports `strategy`, which points
+> down the graph like every other implementation package; `strategy` still
+> reaches only `models` and `constants`, so `backtest.RunParams` naming a
+> `strategy.Strategy` still drags in no layer.
+>
+> The original wording confused a proxy for the thing it stood for. "No
+> subpackages" was an easy signal that the contract was a leaf; it was never
+> the reason. The reason is the transitive closure, and that is what
+> `server/architecture_test.go` checks — which is why the test kept passing
+> through a change the prose had predicted would break it. A rule worth
+> keeping is checked by the test, not by the sentence describing it.
+>
+> The day `strategy.go` imports `strategy/usecase`, the exception really does
+> expire, and the test fails without anyone having to remember this paragraph.
 
 This is why `indicator.Snapshot` was moved to `models.IndicatorSnapshot`
 instead: `services/indicator` **does** have a `usecase/`, so it is a service,

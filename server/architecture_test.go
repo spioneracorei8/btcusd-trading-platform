@@ -6,6 +6,7 @@ import (
 	"go/token"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -274,6 +275,134 @@ func TestOnlyTheWiringKnowsImplementations(t *testing.T) {
 							file, imported)
 					}
 				}
+			}
+		}
+	}
+}
+
+// allGoFiles walks the whole module and returns every Go file, tests included.
+func allGoFiles(t *testing.T) []string {
+	t.Helper()
+
+	var files []string
+	err := filepath.WalkDir(".", func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			if entry.Name() == "testdata" || entry.Name() == "db" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if strings.HasSuffix(path, ".go") {
+			files = append(files, path)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk the module: %v", err)
+	}
+	if len(files) == 0 {
+		t.Fatal("no Go files found; the test is looking in the wrong place")
+	}
+	return files
+}
+
+// TestNothingReachesATradingEndpoint is CLAUDE.md §1, which is the one rule in
+// this repository with no exception and no discussion attached: the system
+// never places an order.
+//
+// It is checked mechanically because the danger is not that someone decides to
+// add trading. It is that the code to do it arrives one harmless-looking piece
+// at a time — a client method "for completeness", a constant "so it is
+// documented" — and each piece is individually defensible. This test makes the
+// first piece fail, which is the only point at which refusing is easy.
+//
+// Phase 06 is where the pressure starts: from here the system has an opinion
+// about the market, and the distance between having an opinion and acting on
+// it is one HTTP call.
+func TestNothingReachesATradingEndpoint(t *testing.T) {
+	// Binance's order, account and withdrawal paths. Matching on the URL
+	// fragment rather than on words like "order" avoids flagging the many
+	// legitimate uses of "order" in this codebase — sort order, bar order.
+	forbidden := []string{
+		"/api/v3/order",
+		"/api/v3/openOrders",
+		"/api/v3/allOrders",
+		"/api/v3/account",
+		"/sapi/v1/capital/withdraw",
+		"/fapi/v1/order",
+		"/fapi/v1/positionSide",
+		"/fapi/v1/leverage",
+		"/wapi/v3/withdraw",
+	}
+
+	for _, path := range allGoFiles(t) {
+		// This file names the paths in order to forbid them.
+		if filepath.Base(path) == "architecture_test.go" {
+			continue
+		}
+		content, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read %s: %v", path, err)
+		}
+		for _, endpoint := range forbidden {
+			if strings.Contains(string(content), endpoint) {
+				t.Errorf("%s references %q. CLAUDE.md §1: this system never places an order, "+
+					"and market data needs no such endpoint. If there is a reason for this, "+
+					"it is a conversation to have before the code exists, not after.",
+					path, endpoint)
+			}
+		}
+	}
+}
+
+// TestNoCodePathBranchesOnBeingABacktest is CLAUDE.md §3.2 made checkable.
+//
+// The rule is that live and backtest differ only in where the bars come from.
+// A branch on which mode is running breaks that in the worst possible way: the
+// backtest keeps passing, keeps reporting, and stops describing what live will
+// do — and the divergence is invisible precisely because the numbers still look
+// reasonable.
+//
+// The check is textual and therefore approximate. It looks for a condition
+// testing a backtest/live flag, which is the shape the mistake takes. A
+// determined author can evade it; someone adding the branch for convenience at
+// 2am cannot, and that is who the rule is for.
+func TestNoCodePathBranchesOnBeingABacktest(t *testing.T) {
+	// A condition of the form `if backtesting`, `if !isLive`, `if liveMode`.
+	//
+	// The trailing class is what keeps `if backtest.DatasetHoldout.Spent()` out
+	// of the results: there the word is a package qualifier, and a qualifier is
+	// always followed by a dot. Branching on a *value* named after the mode is
+	// the mistake; naming the package you are calling into is not.
+	branch := regexp.MustCompile(
+		`(?i)\bif\s+!?\(?\s*(is)?(backtest(ing)?|live(mode)?)\b([^.\w]|$)`)
+
+	// Field and method shapes that mean the same thing wherever they appear,
+	// including as an argument or a struct literal.
+	named := []string{".IsBacktest", ".Backtesting", ".IsLive", ".LiveMode", ".BacktestMode"}
+
+	for _, path := range allGoFiles(t) {
+		if filepath.Base(path) == "architecture_test.go" {
+			continue
+		}
+		content, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read %s: %v", path, err)
+		}
+
+		if match := branch.Find(content); match != nil {
+			t.Errorf("%s branches on whether this is a backtest (%q). "+
+				"CLAUDE.md §3.2: one code path, differing only in the source of the bars. "+
+				"A mode branch makes the backtest stop describing live while still passing.",
+				path, strings.TrimSpace(string(match)))
+		}
+		for _, pattern := range named {
+			if strings.Contains(string(content), pattern) {
+				t.Errorf("%s carries a %q flag. CLAUDE.md §3.2: the mode is not something "+
+					"the code below the entry point is allowed to know.", path, pattern)
 			}
 		}
 	}
