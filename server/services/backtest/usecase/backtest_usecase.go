@@ -180,6 +180,12 @@ func validateParams(params backtest.RunParams) error {
 	if params.Costs.FeeTakerPct.IsNegative() {
 		return fmt.Errorf("backtest: taker fee %s is negative", params.Costs.FeeTakerPct)
 	}
+	if params.Costs.FeeMakerPct.IsNegative() {
+		return fmt.Errorf("backtest: maker fee %s is negative", params.Costs.FeeMakerPct)
+	}
+	if err := params.Execution.Validate(); err != nil {
+		return err
+	}
 	if err := params.Sizing.Validate(); err != nil {
 		return err
 	}
@@ -231,6 +237,57 @@ type runner struct {
 	// happens on the next bar's open, so the volatility the decision was made
 	// under has to be carried across with the intents.
 	pendingATR float64
+
+	// pendingClose is the close of the bar that produced r.pending. A limit
+	// entry rests at that price, because that is what an order placed at the
+	// moment of the signal would have been priced at.
+	pendingClose decimal.Decimal
+
+	// resting is the limit entry waiting for price to come to it, if any.
+	resting *restingOrder
+
+	makerEntries, takerEntries int64
+	makerExits, takerExits     int64
+
+	// entriesRequested counts entry intents the engine acted on, filled or
+	// not. It is the denominator for the cancellation rate: the share of a
+	// strategy's intent that never became a trade.
+	entriesRequested   int64
+	limitOrdersExpired int64
+}
+
+// restingOrder is a limit entry sitting on the book.
+//
+// # Why the whole intent is carried
+//
+// The order was placed on the strength of a decision made at one bar's close,
+// and it fills — if it fills — some bars later. The stop, the target and the
+// ATR all belong to the moment of the decision, not to the moment of the fill:
+// re-deriving them at fill time would size the position against volatility the
+// strategy never saw.
+type restingOrder struct {
+	direction constants.Direction
+	limit     decimal.Decimal
+	intent    strategy.Intent
+	entryATR  float64
+
+	placedAt time.Time
+	// barsRested counts how many bars the order has been offered to. It is
+	// compared against Execution.Timeout().
+	barsRested int
+}
+
+// fillableBy reports whether the bar traded through the resting price.
+//
+// A buy fills when the bar's low reaches down to the limit, a sell when the
+// high reaches up to it. Touch is treated as a fill, which is optimistic and
+// reported as such: queue position is real, and being at the front of the book
+// is not automatic.
+func (o *restingOrder) fillableBy(bar models.Candle) bool {
+	if o.direction == constants.DirectionLong {
+		return bar.Low.LessThanOrEqual(o.limit)
+	}
+	return bar.High.GreaterThanOrEqual(o.limit)
 }
 
 // newRunner prepares the per-run state.
@@ -305,7 +362,11 @@ func (r *runner) onCandle(bar models.Candle) error {
 		r.pending = nil
 	}
 
-	// 2. Fill what the previous bar asked for, at this bar's open.
+	// 2a. A limit entry placed earlier fills if this bar comes to its price,
+	//     before anything else happens on the bar: it was on the book first.
+	r.resolveResting(bar)
+
+	// 2b. Fill what the previous bar asked for, at this bar's open.
 	if err := r.applyPending(bar); err != nil {
 		return err
 	}
@@ -326,6 +387,7 @@ func (r *runner) onCandle(bar models.Candle) error {
 		Position:   r.positionView(),
 	})
 	r.pendingATR = snapshot.ATR
+	r.pendingClose = bar.Close
 
 	// 6. The trend filter vetoes entries the higher timeframes do not permit.
 	//    It runs on the same bar the strategy decided on, using the same
@@ -381,7 +443,7 @@ func (r *runner) applyPending(bar models.Candle) error {
 	for _, intent := range intents {
 		switch intent.Kind {
 		case strategy.IntentEnterLong:
-			r.openAt(bar, constants.DirectionLong, intent, entryATR)
+			r.enter(bar, constants.DirectionLong, intent, entryATR)
 
 		case strategy.IntentEnterShort:
 			// A spot backtest that shorts is fiction, so this ends the run
@@ -393,7 +455,7 @@ func (r *runner) applyPending(bar models.Candle) error {
 					constants.ErrShortOnSpot, r.params.Strategy.Name(),
 					r.params.Symbol, bar.OpenTime.Format(time.RFC3339))
 			}
-			r.openAt(bar, constants.DirectionShort, intent, entryATR)
+			r.enter(bar, constants.DirectionShort, intent, entryATR)
 
 		case strategy.IntentExit:
 			if r.position.isOpen() {
@@ -455,18 +517,26 @@ func (r *runner) applyLevelIntents() {
 // A second entry while a position is open is dropped rather than pyramided:
 // the position model is one at a time, and silently averaging in would make
 // the reported entry price something no single order ever paid.
+// reference is the price the fill is measured from and maker says whether it
+// rested on the book: a resting order fills at its own price and pays no
+// slippage, which is the entire reason to use one.
 func (r *runner) openAt(
 	bar models.Candle,
 	direction constants.Direction,
 	intent strategy.Intent,
 	entryATR float64,
+	reference decimal.Decimal,
+	maker bool,
 ) {
 	if r.position.isOpen() {
 		return
 	}
 
 	buying := direction == constants.DirectionLong
-	price := fillPrice(bar.Open, buying, r.params.Costs)
+	price := reference
+	if !maker {
+		price = fillPrice(reference, buying, r.params.Costs)
+	}
 	if !price.IsPositive() {
 		return
 	}
@@ -484,14 +554,21 @@ func (r *runner) openAt(
 		direction:      direction,
 		entryTime:      bar.OpenTime,
 		entryPrice:     price,
-		entryReference: bar.Open,
+		entryReference: reference,
 		size:           size,
 		equityAtEntry:  r.equity,
-		entryFee:       feeOn(notional, r.params.Costs),
+		entryFee:       feeOn(notional, r.params.Costs, maker),
+		entryMaker:     maker,
 		entryNote:      intent.Reason,
 		entryATR:       entryATR,
 		stop:           intent.Stop,
 		target:         intent.Target,
+	}
+
+	if maker {
+		r.makerEntries++
+	} else {
+		r.takerEntries++
 	}
 }
 
@@ -555,6 +632,28 @@ func (r *runner) checkLevels(bar models.Candle) {
 	r.closeAt(bar.OpenTime, level, reason, string(reason), ambiguous)
 }
 
+// exitIsMaker decides whether an exit rested on the book.
+//
+// # A stop is never a maker fill, under any configuration
+//
+// This is a switch on the reason rather than a check of the configuration,
+// because the rule has to hold structurally. A stop that only filled at its
+// limit price is a stop that does not fill when the market gaps through it —
+// which is exactly the situation stops exist for. Modelling one as a resting
+// order would delete the worst losses from the record and produce a strategy
+// that looks robust because its tail was quietly removed.
+//
+// Only a target can rest: reaching a target means price came to a price the
+// position was already willing to sell at, which is what a resting order is.
+// Everything else — a gap forcing the position out, the end of the run — is a
+// market order because nothing was resting at that price.
+func (r *runner) exitIsMaker(reason backtest.ExitReason) bool {
+	if r.params.Execution.Exit() != constants.OrderTypeLimit {
+		return false
+	}
+	return reason == backtest.ExitTarget
+}
+
 // closeAt closes the open position and records the trade.
 //
 // reference is the price the exit was triggered at and fill is what it
@@ -567,11 +666,16 @@ func (r *runner) closeAt(at time.Time, reference decimal.Decimal, reason backtes
 		return
 	}
 
-	fill := fillPrice(reference, p.direction == constants.DirectionShort, r.params.Costs)
-	exitFee := feeOn(fill.Mul(p.size), r.params.Costs)
+	maker := r.exitIsMaker(reason)
+
+	fill := reference
+	if !maker {
+		fill = fillPrice(reference, p.direction == constants.DirectionShort, r.params.Costs)
+	}
+	exitFee := feeOn(fill.Mul(p.size), r.params.Costs, maker)
 
 	fees := p.entryFee.Add(exitFee)
-	slippage := p.slippageCost(r.params.Costs)
+	slippage := p.slippageCost(r.params.Costs, maker)
 	costs := fees.Add(slippage)
 	gross := p.grossPnL(reference)
 
@@ -579,6 +683,12 @@ func (r *runner) closeAt(at time.Time, reference decimal.Decimal, reason backtes
 	// agree by construction — realised = gross - slippage — and the
 	// guaranteed-loss fixture exists to keep them agreeing.
 	r.equity = p.equityAtEntry.Sub(fees).Add(p.realisedPnL(fill))
+
+	if maker {
+		r.makerExits++
+	} else {
+		r.takerExits++
+	}
 
 	r.trades = append(r.trades, backtest.Trade{
 		Direction:                  p.direction,
@@ -596,6 +706,8 @@ func (r *runner) closeAt(at time.Time, reference decimal.Decimal, reason backtes
 		EntryNote:                  p.entryNote,
 		ExitNote:                   note,
 		EntryATR:                   p.entryATR,
+		EntryMaker:                 p.entryMaker,
+		ExitMaker:                  maker,
 		StopAndTargetBothReachable: ambiguous,
 		ForcedByGap:                reason == backtest.ExitGapForced,
 	})
@@ -667,6 +779,12 @@ func (r *runner) fill(result *backtest.Result) {
 	result.AmbiguousBars = r.ambiguousBars
 	result.FirstBar = r.firstBar
 	result.LastBar = r.lastBar
+	result.MakerEntries = r.makerEntries
+	result.TakerEntries = r.takerEntries
+	result.MakerExits = r.makerExits
+	result.TakerExits = r.takerExits
+	result.EntriesRequested = r.entriesRequested
+	result.LimitOrdersExpired = r.limitOrdersExpired
 	result.Trades = r.trades
 	result.Equity = r.curve
 }
@@ -732,5 +850,76 @@ func entryDirection(kind strategy.IntentKind) constants.Direction {
 		return constants.DirectionShort
 	default:
 		return constants.DirectionFlat
+	}
+}
+
+// enter acts on an entry intent, either crossing the spread now or resting on
+// the book until price comes to it.
+//
+// The limit price is the close of the bar the strategy decided on, not this
+// bar's open. That is what a resting order placed at the moment of the signal
+// would have been priced at, and using the later open would credit the model
+// with information the order did not have.
+func (r *runner) enter(
+	bar models.Candle,
+	direction constants.Direction,
+	intent strategy.Intent,
+	entryATR float64,
+) {
+	if r.position.isOpen() || r.resting != nil {
+		return
+	}
+	r.entriesRequested++
+
+	if r.params.Execution.Entry() != constants.OrderTypeLimit {
+		r.openAt(bar, direction, intent, entryATR, bar.Open, false)
+		return
+	}
+
+	// The signal bar's close, which this bar's open follows.
+	limit := r.pendingClose
+	if !limit.IsPositive() {
+		limit = bar.Open
+	}
+	r.resting = &restingOrder{
+		direction: direction,
+		limit:     limit,
+		intent:    intent,
+		entryATR:  entryATR,
+		placedAt:  bar.OpenTime,
+	}
+	// The bar the order is placed into is itself an opportunity to fill.
+	r.resolveResting(bar)
+}
+
+// resolveResting fills or ages the order waiting on the book.
+//
+// An order that times out is cancelled and no trade happens. Those are counted
+// rather than discarded: a strategy whose limit entries fill only when price
+// moves against it has adverse selection — it gets filled on the trades it
+// should have skipped and misses the ones it wanted — and that is invisible in
+// the headline number.
+func (r *runner) resolveResting(bar models.Candle) {
+	order := r.resting
+	if order == nil {
+		return
+	}
+	if r.position.isOpen() {
+		// Something else opened first; the order has nothing to fill into.
+		r.resting = nil
+		r.limitOrdersExpired++
+		return
+	}
+
+	if order.fillableBy(bar) {
+		r.resting = nil
+		r.openAt(bar, order.direction, order.intent, order.entryATR, order.limit, true)
+		return
+	}
+
+	order.barsRested++
+	if order.barsRested >= r.params.Execution.Timeout() {
+		r.resting = nil
+		r.limitOrdersExpired++
 	}
 }

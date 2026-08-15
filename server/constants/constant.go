@@ -14,6 +14,27 @@ const (
 	DefaultFeeTakerPct   = "0.05"
 	DefaultSlippageTicks = 1
 
+	// DefaultFeeMakerPct is what a resting order pays instead. It is roughly
+	// 40% of the taker rate, which makes the order type the single largest
+	// lever on this system's economics: a round trip costs 0.04% at maker
+	// rates against 0.1% at taker rates.
+	//
+	// It buys nothing on its own. A limit order only pays this fee when it
+	// fills, and it only fills if price comes to it.
+	DefaultFeeMakerPct = "0.02"
+
+	// DefaultEntryOrderType and DefaultExitOrderType reproduce the behaviour
+	// every completed evaluation was run under. Market is also the
+	// conservative choice — it always fills and pays the higher fee — so an
+	// unset order type cannot flatter a result.
+	DefaultEntryOrderType = "market"
+	DefaultExitOrderType  = "market"
+
+	// DefaultLimitOrderTimeoutBars is how long an unfilled limit order rests
+	// before it is cancelled. One bar means the order gets a single bar of
+	// opportunity, which is the same window a market entry would have used.
+	DefaultLimitOrderTimeoutBars = 1
+
 	// DefaultMarketTickSize is the smallest price increment of the
 	// instrument, which is what turns DefaultSlippageTicks into money.
 	//

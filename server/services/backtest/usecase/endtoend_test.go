@@ -170,8 +170,19 @@ func TestFullPipelineRendersASummary(t *testing.T) {
 		"net return after costs",
 		"total costs paid",
 		"bars evaluated",
-		"fee applied",
+		// The cost model is stated in full rather than as one fee line: with
+		// two rates and two order types, a single figure could not say which
+		// side paid what.
+		"entry order type",
+		"exit order type",
+		// Always printed, always market. A reader comparing a maker-rate
+		// result against a taker-rate one needs to see the losses were priced
+		// identically in both.
+		"stop exits",
 		"slippage applied",
+		"effective cost",
+		"entry fills",
+		"exit fills",
 		"gap policy",
 		"stop-before-target bars",
 	} {

@@ -83,10 +83,18 @@ type runDoc struct {
 }
 
 type costsDoc struct {
-	FeeTakerPct   string `json:"fee_taker_pct"`
-	SlippageTicks int    `json:"slippage_ticks"`
-	TickSize      string `json:"tick_size"`
-	TotalPaid     string `json:"total_paid"`
+	FeeTakerPct string `json:"fee_taker_pct"`
+	FeeMakerPct string `json:"fee_maker_pct"`
+
+	// EntryOrderType and ExitOrderType are recorded because the fee rates
+	// alone no longer say what a fill cost.
+	EntryOrderType   string  `json:"entry_order_type"`
+	ExitOrderType    string  `json:"exit_order_type"`
+	LimitTimeoutBars int     `json:"limit_timeout_bars"`
+	SlippageTicks    int     `json:"slippage_ticks"`
+	TickSize         string  `json:"tick_size"`
+	TotalPaid        string  `json:"total_paid"`
+	PerRoundTripBps  float64 `json:"per_round_trip_bps"`
 }
 
 type barsDoc struct {
@@ -138,6 +146,18 @@ type tradeStatsDoc struct {
 	LargestLoss         string   `json:"largest_loss"`
 	AverageHoldSeconds  int64    `json:"average_hold_seconds"`
 	LongestLosingStreak int      `json:"longest_losing_streak"`
+
+	// Fills by how they reached the book, and the signals that never became
+	// trades at all. The last one is the number to read first under a limit
+	// entry model: a large share means the statistics above describe a subset
+	// of the strategy's intent rather than the strategy.
+	MakerEntries       int64   `json:"maker_entries"`
+	TakerEntries       int64   `json:"taker_entries"`
+	MakerExits         int64   `json:"maker_exits"`
+	TakerExits         int64   `json:"taker_exits"`
+	EntriesRequested   int64   `json:"entries_requested"`
+	LimitOrdersExpired int64   `json:"limit_orders_expired"`
+	CancelledPercent   float64 `json:"limit_orders_cancelled_percent"`
 }
 
 type tradeDoc struct {
@@ -156,6 +176,9 @@ type tradeDoc struct {
 	ExitReason string `json:"exit_reason"`
 	EntryNote  string `json:"entry_note"`
 	ExitNote   string `json:"exit_note"`
+
+	EntryMaker bool `json:"entry_maker"`
+	ExitMaker  bool `json:"exit_maker"`
 
 	StopAndTargetBothReachable bool `json:"stop_and_target_both_reachable"`
 	ForcedByGap                bool `json:"forced_by_gap"`
@@ -205,10 +228,15 @@ func BuildDocument(result backtest.Result, stats Statistics) Document {
 			InitialEquity: stats.InitialEquity.String(),
 		},
 		Costs: costsDoc{
-			FeeTakerPct:   result.Params.Costs.FeeTakerPct.String(),
-			SlippageTicks: result.Params.Costs.SlippageTicks,
-			TickSize:      result.Params.Costs.TickSize.String(),
-			TotalPaid:     stats.TotalCosts.String(),
+			FeeTakerPct:      result.Params.Costs.FeeTakerPct.String(),
+			FeeMakerPct:      result.Params.Costs.MakerFeePct().String(),
+			EntryOrderType:   result.Params.Execution.Entry().String(),
+			ExitOrderType:    result.Params.Execution.Exit().String(),
+			LimitTimeoutBars: result.Params.Execution.Timeout(),
+			SlippageTicks:    result.Params.Costs.SlippageTicks,
+			PerRoundTripBps:  stats.CostPerTripBps,
+			TickSize:         result.Params.Costs.TickSize.String(),
+			TotalPaid:        stats.TotalCosts.String(),
 		},
 		Bars: barsDoc{
 			Evaluated:                  result.BarsEvaluated,
@@ -247,6 +275,13 @@ func BuildDocument(result backtest.Result, stats Statistics) Document {
 			LargestLoss:         stats.LargestLoss.String(),
 			AverageHoldSeconds:  int64(stats.AverageHoldingTime / time.Second),
 			LongestLosingStreak: stats.LongestLosingStreak,
+			MakerEntries:        result.MakerEntries,
+			TakerEntries:        result.TakerEntries,
+			MakerExits:          result.MakerExits,
+			TakerExits:          result.TakerExits,
+			EntriesRequested:    result.EntriesRequested,
+			LimitOrdersExpired:  result.LimitOrdersExpired,
+			CancelledPercent:    percent(result.LimitOrdersExpired, result.EntriesRequested),
 		},
 		// Never nil: an empty run emits [] rather than null, so a consumer
 		// can iterate without a special case.
@@ -275,6 +310,8 @@ func BuildDocument(result backtest.Result, stats Statistics) Document {
 			EntryNote:                  trade.EntryNote,
 			ExitNote:                   trade.ExitNote,
 			StopAndTargetBothReachable: trade.StopAndTargetBothReachable,
+			EntryMaker:                 trade.EntryMaker,
+			ExitMaker:                  trade.ExitMaker,
 			ForcedByGap:                trade.ForcedByGap,
 		})
 	}

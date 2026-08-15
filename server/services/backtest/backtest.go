@@ -76,10 +76,97 @@ type Costs struct {
 	// FeeTakerPct is the taker fee in percent, e.g. 0.05 means 0.05%.
 	FeeTakerPct decimal.Decimal
 
+	// FeeMakerPct is what a fill that rested on the book pays instead.
+	//
+	// Zero means "the same as taker", which is what every run produced before
+	// maker fees existed. That reading is deliberate: a zero-value Costs must
+	// keep charging the full rate, because the alternative — a zero-value
+	// struct that silently makes trading free — is the flattering default
+	// CLAUDE.md §3.4 exists to prevent.
+	FeeMakerPct decimal.Decimal
+
 	// SlippageTicks is how many ticks a fill is assumed to slip, always
 	// against the trade. TickSize is what one tick is worth.
+	//
+	// It applies to market fills only. A resting order does not cross the
+	// spread, which is the entire reason to use one.
 	SlippageTicks int
 	TickSize      decimal.Decimal
+}
+
+// MakerFeePct is the resting-order rate, falling back to the taker rate.
+//
+// The fallback is what makes an execution model that was never configured
+// cost the same as it always did.
+func (c Costs) MakerFeePct() decimal.Decimal {
+	if c.FeeMakerPct.IsZero() {
+		return c.FeeTakerPct
+	}
+	return c.FeeMakerPct
+}
+
+// Execution is how orders reach the book.
+//
+// # Why this is not part of Costs
+//
+// Costs answers "what does a fill pay". Execution answers "does the fill
+// happen at all", and the second question is the one that makes maker fees
+// honest: a limit order pays less and sometimes does not trade. Folding them
+// together would also make the cost sweep ambiguous, since the sweep scales
+// what things cost and must not quietly change how they are placed.
+//
+// # Why the zero value is market
+//
+// Unlike Sizing, which has no natural default and therefore demands one be
+// stated, market is both what every completed evaluation used and the
+// conservative side of this choice: it always fills and pays the higher fee.
+// An unstated execution model cannot flatter a result. Defaulting to limit
+// would be the dangerous direction, and that is the one this refuses.
+type Execution struct {
+	EntryOrderType constants.OrderType
+	ExitOrderType  constants.OrderType
+
+	// LimitTimeoutBars is how many bars an unfilled limit order rests. Zero
+	// is read as one, so a limit configuration is never a no-op.
+	LimitTimeoutBars int
+}
+
+// Entry returns the entry order type, defaulting to market.
+func (e Execution) Entry() constants.OrderType {
+	if e.EntryOrderType == "" {
+		return constants.OrderTypeMarket
+	}
+	return e.EntryOrderType
+}
+
+// Exit returns the exit order type, defaulting to market.
+func (e Execution) Exit() constants.OrderType {
+	if e.ExitOrderType == "" {
+		return constants.OrderTypeMarket
+	}
+	return e.ExitOrderType
+}
+
+// Timeout returns how many bars a limit order rests, at least one.
+func (e Execution) Timeout() int {
+	if e.LimitTimeoutBars < 1 {
+		return 1
+	}
+	return e.LimitTimeoutBars
+}
+
+// Validate rejects an execution model that could not be simulated.
+func (e Execution) Validate() error {
+	if e.EntryOrderType != "" && !e.EntryOrderType.Valid() {
+		return fmt.Errorf("backtest: %q is not an entry order type", e.EntryOrderType)
+	}
+	if e.ExitOrderType != "" && !e.ExitOrderType.Valid() {
+		return fmt.Errorf("backtest: %q is not an exit order type", e.ExitOrderType)
+	}
+	if e.LimitTimeoutBars < 0 {
+		return fmt.Errorf("backtest: a limit order cannot rest for %d bars", e.LimitTimeoutBars)
+	}
+	return nil
 }
 
 // SlippageAmount is the price offset one fill is assumed to suffer.
@@ -178,6 +265,10 @@ type RunParams struct {
 	// rejected; callers state it, because it changes every reported number.
 	Sizing Sizing
 
+	// Execution is how orders reach the book. Its zero value is market on both
+	// sides, which is what every completed evaluation used.
+	Execution Execution
+
 	// Strategy is the code under measurement.
 	Strategy strategy.Strategy
 
@@ -259,6 +350,15 @@ type Trade struct {
 	EntryNote  string
 	ExitNote   string
 
+	// EntryMaker and ExitMaker record how each side of the round trip filled.
+	//
+	// They are per-trade rather than per-run because a run can be
+	// configured with a limit exit and still leave through a stop, which is
+	// always a market order. Reading the configuration instead of the trade
+	// would report a maker fee that was never paid.
+	EntryMaker bool
+	ExitMaker  bool
+
 	// EntryATR is the base-timeframe ATR at the close the entry was decided
 	// on — the bar before the fill, which is the last one the strategy saw.
 	//
@@ -335,6 +435,22 @@ type Result struct {
 	// surviving trades for the statistics to mean much. Neither is legible
 	// from the returns alone.
 	BarsVetoed int64
+
+	// MakerEntries and the three counters beside it break the fills down by
+	// how they reached the book. They sum to the number of trades on each
+	// side, which is what makes an unexpected taker fill findable.
+	MakerEntries, TakerEntries int64
+	MakerExits, TakerExits     int64
+
+	// EntriesRequested is how many entry intents the engine acted on, filled
+	// or not, and LimitOrdersExpired how many of those never filled.
+	//
+	// The second is the number to watch under a limit entry model. If a large
+	// share of signals never became trades, the surviving sample is a filtered
+	// subset of the strategy's intent, and its statistics describe something
+	// other than the strategy as written.
+	EntriesRequested   int64
+	LimitOrdersExpired int64
 
 	// BarsFilterNotReady counts bars where the filter had no answer yet —
 	// warming up, or recovering from a gap. Reported apart from BarsVetoed

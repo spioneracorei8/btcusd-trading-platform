@@ -292,3 +292,49 @@ func ParseCollectorState(s string) (CollectorState, error) {
 	}
 	return state, nil
 }
+
+// OrderType is how an order reaches the book.
+//
+// # Why this exists as a type rather than a boolean
+//
+// The two differ in more than their fee. A market order always fills and pays
+// taker plus slippage; a limit order pays maker and no slippage but only fills
+// if price comes to it, and otherwise does not trade at all. Modelling the
+// cheaper fee without the missed fills would produce a report that is
+// straightforwardly false — cheaper trades that always happen — so the two
+// halves travel together under one name.
+type OrderType string
+
+// Supported order types.
+const (
+	// OrderTypeMarket crosses the spread: it always fills, pays the taker fee
+	// and suffers slippage.
+	OrderTypeMarket OrderType = "market"
+
+	// OrderTypeLimit rests on the book: it pays the maker fee and no
+	// slippage, and fills only if price reaches it before the order times out.
+	OrderTypeLimit OrderType = "limit"
+)
+
+// Valid reports whether o is a known order type.
+func (o OrderType) Valid() bool {
+	switch o {
+	case OrderTypeMarket, OrderTypeLimit:
+		return true
+	default:
+		return false
+	}
+}
+
+// String returns the configuration representation of the order type.
+func (o OrderType) String() string { return string(o) }
+
+// ParseOrderType converts s into an OrderType, rejecting unknown values.
+func ParseOrderType(s string) (OrderType, error) {
+	o := OrderType(s)
+	if !o.Valid() {
+		return "", fmt.Errorf("unknown order type %q (want %q or %q)",
+			s, OrderTypeMarket, OrderTypeLimit)
+	}
+	return o, nil
+}

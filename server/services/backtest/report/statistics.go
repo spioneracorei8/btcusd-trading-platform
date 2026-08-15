@@ -86,6 +86,15 @@ type Statistics struct {
 	// reachable and the stop was assumed. A large number here means the
 	// result rests on that assumption rather than on the data.
 	AmbiguousBars int64
+
+	// CostPerTripBps is what a round trip actually cost, in basis points of
+	// the notional traded.
+	//
+	// It exists because the configured rates no longer answer the question. A
+	// run with a limit entry and a market exit pays two different fees and
+	// slippage on one side only, and the headline rate would understate it.
+	// This is measured from the trades rather than from the configuration.
+	CostPerTripBps float64
 }
 
 // Compute derives the statistics of a finished run.
@@ -112,6 +121,7 @@ func Compute(result backtest.Result) Statistics {
 
 	stats.MaxDrawdown = maxDrawdown(result.Equity)
 	stats.Sharpe = sharpe(result.Equity, stats.AnnualisationBars)
+	stats.CostPerTripBps = costPerTripBps(result.Trades)
 
 	return stats
 }
@@ -303,4 +313,34 @@ func ratio(numerator, denominator decimal.Decimal) float64 {
 	}
 	value, _ := numerator.Div(denominator).Float64()
 	return value
+}
+
+// costPerTripBps is the average cost of a round trip, in basis points of the
+// notional it traded.
+//
+// Measured from the trades rather than from the configured rates, because the
+// rates stopped being the answer once a run could pay maker on one side and
+// taker on the other. A run with a limit entry and a market exit pays two
+// different fees and slippage once; quoting either rate alone would be wrong,
+// and quoting their sum would be wrong in the flattering direction.
+//
+// Notional is measured at entry, which is the size the position committed.
+func costPerTripBps(trades []backtest.Trade) float64 {
+	if len(trades) == 0 {
+		return 0
+	}
+
+	notional := decimal.Zero
+	costs := decimal.Zero
+	for _, trade := range trades {
+		notional = notional.Add(trade.EntryPrice.Mul(trade.Size))
+		costs = costs.Add(trade.Costs)
+	}
+	if !notional.IsPositive() {
+		return 0
+	}
+
+	// 10,000 basis points to the unit.
+	bps, _ := costs.Div(notional).Mul(decimal.NewFromInt(10000)).Float64()
+	return bps
 }

@@ -53,6 +53,20 @@ type Market struct {
 	// It is configuration, never a constant in code, because every backtest
 	// result must be reported net of cost.
 	FeeTakerPct decimal.Decimal
+
+	// FeeMakerPct is what a resting order pays instead, charged only on a
+	// fill that actually rested.
+	FeeMakerPct decimal.Decimal
+
+	// EntryOrderType and ExitOrderType decide how orders reach the book.
+	// They are separate because the realistic configuration is asymmetric: a
+	// limit entry can wait, and a stop cannot.
+	EntryOrderType constants.OrderType
+	ExitOrderType  constants.OrderType
+
+	// LimitOrderTimeoutBars is how many bars an unfilled limit order rests
+	// before it is cancelled and the trade never happens.
+	LimitOrderTimeoutBars int
 	// SlippageTicks is the assumed slippage of a fill, in price ticks.
 	SlippageTicks int
 	// TickSize is what one of those ticks is worth in quote currency. Without
@@ -157,10 +171,16 @@ func LoadFrom(lookup helper.LookupFunc, opts ...Option) (*Config, error) {
 			ConnectTimeout: constants.DefaultConnectTimeout,
 		},
 		Market: Market{
-			Symbol:        l.optionalString("MARKET_SYMBOL", constants.DefaultMarketSymbol),
-			Type:          l.marketType("MARKET_TYPE"),
-			Timeframes:    l.timeframes("MARKET_TIMEFRAMES"),
-			FeeTakerPct:   l.feePct("FEE_TAKER_PCT"),
+			Symbol:      l.optionalString("MARKET_SYMBOL", constants.DefaultMarketSymbol),
+			Type:        l.marketType("MARKET_TYPE"),
+			Timeframes:  l.timeframes("MARKET_TIMEFRAMES"),
+			FeeTakerPct: l.feePct("FEE_TAKER_PCT"),
+			FeeMakerPct: l.makerFeePct("FEE_MAKER_PCT"),
+
+			EntryOrderType: l.orderType("ENTRY_ORDER_TYPE", constants.DefaultEntryOrderType),
+			ExitOrderType:  l.orderType("EXIT_ORDER_TYPE", constants.DefaultExitOrderType),
+			LimitOrderTimeoutBars: l.optionalInt("LIMIT_ORDER_TIMEOUT_BARS",
+				constants.DefaultLimitOrderTimeoutBars, 1, 1000),
 			SlippageTicks: l.optionalInt("SLIPPAGE_TICKS", constants.DefaultSlippageTicks, 0, 1000),
 			TickSize:      l.tickSize("MARKET_TICK_SIZE"),
 
@@ -433,6 +453,36 @@ func (l *loader) feePct(key string) decimal.Decimal {
 		return decimal.Zero
 	}
 	return d
+}
+
+// makerFeePct parses the resting-order fee.
+//
+// It is read through the same bounds as the taker fee but kept separate,
+// because the two are not interchangeable: charging maker rates on a fill that
+// crossed the spread would report a discount that was never received.
+func (l *loader) makerFeePct(key string) decimal.Decimal {
+	v := l.optionalString(key, constants.DefaultFeeMakerPct)
+	d, err := decimal.NewFromString(v)
+	if err != nil {
+		l.invalidf(key, "%q is not a decimal number", v)
+		return decimal.Zero
+	}
+	if d.IsNegative() || d.GreaterThanOrEqual(decimal.NewFromInt(100)) {
+		l.invalidf(key, "%s is outside 0-100 (percent)", d)
+		return decimal.Zero
+	}
+	return d
+}
+
+// orderType parses market or limit.
+func (l *loader) orderType(key, def string) constants.OrderType {
+	v := l.optionalString(key, def)
+	parsed, err := constants.ParseOrderType(v)
+	if err != nil {
+		l.invalidf(key, "%v", err)
+		return ""
+	}
+	return parsed
 }
 
 // tickSize parses the instrument's price increment.

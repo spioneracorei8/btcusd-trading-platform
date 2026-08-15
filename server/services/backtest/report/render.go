@@ -9,6 +9,7 @@ import (
 
 	"github.com/shopspring/decimal"
 
+	"github.com/spioneracorei8/btcusd-trading-platform/server/constants"
 	"github.com/spioneracorei8/btcusd-trading-platform/server/services/backtest"
 )
 
@@ -58,12 +59,39 @@ func WriteSummary(w io.Writer, result backtest.Result, stats Statistics) error {
 		stats.LargestWin.StringFixed(2), stats.LargestLoss.StringFixed(2), quoteUnit(result)))
 	line(&b, "average holding time", stats.AverageHoldingTime.String())
 	line(&b, "longest losing streak", fmt.Sprintf("%d", stats.LongestLosingStreak))
+	line(&b, "entry fills", fmt.Sprintf("%d maker, %d taker",
+		result.MakerEntries, result.TakerEntries))
+	line(&b, "exit fills", fmt.Sprintf("%d maker, %d taker",
+		result.MakerExits, result.TakerExits))
+	line(&b, "effective cost", fmt.Sprintf("%.2f bps per round trip", stats.CostPerTripBps))
+
+	// The line to watch under a limit entry model, so it is printed where it
+	// cannot be skipped rather than left to be derived.
+	if result.EntriesRequested > 0 && result.LimitOrdersExpired > 0 {
+		line(&b, "limit orders cancelled", fmt.Sprintf("%d of %d signals (%.2f%%) never filled",
+			result.LimitOrdersExpired, result.EntriesRequested,
+			percent(result.LimitOrdersExpired, result.EntriesRequested)))
+		b.WriteString("  (these signals produced no trade at all; the statistics above\n")
+		b.WriteString("   describe the subset that did fill, which is not the strategy\n")
+		b.WriteString("   as written)\n")
+	}
 
 	b.WriteString("\nASSUMPTIONS\n")
 	line(&b, "stop-before-target bars", fmt.Sprintf("%d", stats.AmbiguousBars))
 	b.WriteString("  (bars where the stop and the target were both reachable and\n")
 	b.WriteString("   the stop was assumed to fill first; a large count means the\n")
 	b.WriteString("   result rests on that assumption rather than on the data)\n")
+
+	// Stated beside the stop-before-target assumption because they are the
+	// same class of thing: a simplification the result rests on, which the
+	// reader has to be able to weigh.
+	if usesLimitOrders(result) {
+		b.WriteString("\n  limit fills assume touch means fill. Queue position is real and\n")
+		b.WriteString("  being at the front of the book is not automatic, so the true fill\n")
+		b.WriteString("  rate is at best this one. Intrabar path is also unknown: a bar\n")
+		b.WriteString("  whose low reached the limit may have done so before or after\n")
+		b.WriteString("  everything else that happened in it.\n")
+	}
 
 	if len(result.UntradeableWindows) > 0 {
 		b.WriteString("\nUNTRADEABLE WINDOWS (no order could have been placed)\n")
@@ -106,9 +134,7 @@ func writeHeader(b *strings.Builder, result backtest.Result, stats Statistics) {
 	line(b, "bars evaluated", fmt.Sprintf("%d", result.BarsEvaluated))
 	line(b, "bars skipped", fmt.Sprintf("%d warm-up, %d gap or halt",
 		result.BarsSkippedWarmup, result.BarsSkippedGap))
-	line(b, "fee applied", fmt.Sprintf("%s%% taker, each side", result.Params.Costs.FeeTakerPct))
-	line(b, "slippage applied", fmt.Sprintf("%d tick(s) of %s, each side, always against",
-		result.Params.Costs.SlippageTicks, result.Params.Costs.TickSize))
+	writeCostModel(b, result)
 	line(b, "gap policy", result.Params.GapPolicy.String())
 
 	// The filter is part of what produced the numbers, so it belongs in the
@@ -199,4 +225,44 @@ func quoteUnit(result backtest.Result) string {
 		}
 	}
 	return "quote"
+}
+
+// usesLimitOrders reports whether any part of the run rested on the book.
+func usesLimitOrders(result backtest.Result) bool {
+	return result.Params.Execution.Entry() == constants.OrderTypeLimit ||
+		result.Params.Execution.Exit() == constants.OrderTypeLimit
+}
+
+// writeCostModel states what a fill actually costs.
+//
+// A single "fee applied" line was enough while every fill was a taker fill.
+// With two rates and two order types it would be ambiguous in the direction
+// that flatters: a reader seeing 0.02% would have no way to tell whether the
+// run charged it on both sides, on entries only, or on the exits that happened
+// to leave through a target.
+func writeCostModel(b *strings.Builder, result backtest.Result) {
+	costs := result.Params.Costs
+	execution := result.Params.Execution
+
+	rate := func(orderType constants.OrderType) string {
+		if orderType == constants.OrderTypeLimit {
+			return fmt.Sprintf("limit (maker %s%%)", costs.MakerFeePct())
+		}
+		return fmt.Sprintf("market (taker %s%%)", costs.FeeTakerPct)
+	}
+
+	line(b, "entry order type", rate(execution.Entry()))
+	line(b, "exit order type", rate(execution.Exit()))
+
+	// Always stated, and always market. It is the one exit that cannot be a
+	// resting order, and a reader comparing a maker-rate result against a
+	// taker-rate one needs to know the losses were priced the same in both.
+	line(b, "stop exits", fmt.Sprintf("market (taker %s%%) — always", costs.FeeTakerPct))
+
+	line(b, "slippage applied", fmt.Sprintf("%d tick(s) of %s, market fills only, always against",
+		costs.SlippageTicks, costs.TickSize))
+
+	if usesLimitOrders(result) {
+		line(b, "limit order timeout", fmt.Sprintf("%d bar(s)", execution.Timeout()))
+	}
 }

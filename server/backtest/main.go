@@ -355,8 +355,14 @@ func buildParams(opts options, cfg *config.Config) (backtest.RunParams, error) {
 		InitialEquity: equity,
 		Costs: backtest.Costs{
 			FeeTakerPct:   cfg.Market.FeeTakerPct,
+			FeeMakerPct:   cfg.Market.FeeMakerPct,
 			SlippageTicks: cfg.Market.SlippageTicks,
 			TickSize:      cfg.Market.TickSize,
+		},
+		Execution: backtest.Execution{
+			EntryOrderType:   cfg.Market.EntryOrderType,
+			ExitOrderType:    cfg.Market.ExitOrderType,
+			LimitTimeoutBars: cfg.Market.LimitOrderTimeoutBars,
 		},
 		GapPolicy: policy,
 		Sizing:    sizing,
@@ -691,7 +697,12 @@ func runCostSweep(
 			return nil, fmt.Errorf("cost sweep at %.1fx: %w", multiplier, err)
 		}
 
+		// Both rates move together. Scaling only the taker rate would make a
+		// maker-configured run look progressively cheaper relative to its own
+		// assumption, which is the opposite of what a stress test is for.
 		scaled.Costs.FeeTakerPct = params.Costs.FeeTakerPct.
+			Mul(decimal.NewFromFloat(multiplier))
+		scaled.Costs.FeeMakerPct = params.Costs.MakerFeePct().
 			Mul(decimal.NewFromFloat(multiplier))
 		scaled.Costs.SlippageTicks = int(math.Round(float64(params.Costs.SlippageTicks) * multiplier))
 
@@ -710,7 +721,7 @@ func runCostSweep(
 		log.Debug("cost sweep run finished",
 			"multiplier", multiplier, "net_return", stats.NetReturn)
 	}
-	return runs, report.WriteCostSensitivity(os.Stdout, runs)
+	return runs, report.WriteCostSensitivity(os.Stdout, runs, report.CostSensitivityHeading(params))
 }
 
 // quoteUnit names the currency the money figures are in.

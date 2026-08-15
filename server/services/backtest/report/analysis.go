@@ -9,6 +9,7 @@ import (
 
 	"github.com/shopspring/decimal"
 
+	"github.com/spioneracorei8/btcusd-trading-platform/server/constants"
 	"github.com/spioneracorei8/btcusd-trading-platform/server/services/backtest"
 )
 
@@ -301,19 +302,37 @@ type CostSensitivity struct {
 // accounts over time — fee tiers change, spreads widen in exactly the
 // conditions a strategy trades most — so a result that only survives at
 // exactly the assumed figure has no margin at all.
-func WriteCostSensitivity(w io.Writer, runs []CostSensitivity) error {
+// CostSensitivityHeading names the cost model the sweep scaled, so a run at
+// maker rates is not mistaken for one at taker rates. An edge surviving 1.5x
+// at maker rates is a materially stronger result than the same multiple at
+// taker rates, and the two are otherwise indistinguishable in the table.
+func CostSensitivityHeading(params backtest.RunParams) string {
+	entry := params.Execution.Entry()
+	exit := params.Execution.Exit()
+	if entry == constants.OrderTypeMarket && exit == constants.OrderTypeMarket {
+		return fmt.Sprintf("scaling taker %s%% on both sides", params.Costs.FeeTakerPct)
+	}
+	return fmt.Sprintf("scaling maker %s%% and taker %s%% together (entry %s, exit %s)",
+		params.Costs.MakerFeePct(), params.Costs.FeeTakerPct, entry, exit)
+}
+
+func WriteCostSensitivity(w io.Writer, runs []CostSensitivity, heading string) error {
 	var b strings.Builder
 
 	b.WriteString("\nCOST SENSITIVITY\n")
-	fmt.Fprintf(&b, "    %-12s %16s %10s\n", "cost", "net return", "trades")
+	if heading != "" {
+		fmt.Fprintf(&b, "  %s\n", heading)
+	}
+	fmt.Fprintf(&b, "    %-12s %16s %10s %10s\n", "cost", "net return", "trades", "PF")
 
 	baseline := math.NaN()
 	for _, run := range runs {
 		if run.Multiplier == 1 {
 			baseline = run.NetReturn
 		}
-		fmt.Fprintf(&b, "    %-12s %16s %10d\n",
-			fmt.Sprintf("%.1fx", run.Multiplier), formatPercent(run.NetReturn), run.TradeCount)
+		fmt.Fprintf(&b, "    %-12s %16s %10d %10s\n",
+			fmt.Sprintf("%.1fx", run.Multiplier), formatPercent(run.NetReturn),
+			run.TradeCount, formatFloat(run.ProfitFactor))
 	}
 
 	for _, run := range runs {

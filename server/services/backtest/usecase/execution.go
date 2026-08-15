@@ -35,10 +35,17 @@ func fillPrice(reference decimal.Decimal, buying bool, costs backtest.Costs) dec
 	return filled
 }
 
-// feeOn is the taker fee charged on one side of a round trip, in quote
-// currency.
-func feeOn(notional decimal.Decimal, costs backtest.Costs) decimal.Decimal {
-	return notional.Mul(costs.FeeTakerPct).Div(hundred)
+// feeOn is the fee charged on one side of a round trip, in quote currency.
+//
+// maker is whether that side rested on the book rather than crossing the
+// spread. It is a property of the fill, not of the configuration: an exit
+// configured as a limit still pays taker when it leaves through a stop.
+func feeOn(notional decimal.Decimal, costs backtest.Costs, maker bool) decimal.Decimal {
+	rate := costs.FeeTakerPct
+	if maker {
+		rate = costs.MakerFeePct()
+	}
+	return notional.Mul(rate).Div(hundred)
 }
 
 // openPosition is the engine's own view of what is held.
@@ -71,6 +78,10 @@ type openPosition struct {
 	target decimal.Decimal
 
 	barsHeld int
+
+	// entryMaker records how this position was opened, because the exit
+	// cannot infer it and the fee for each side is decided separately.
+	entryMaker bool
 
 	entryNote string
 
@@ -111,8 +122,21 @@ func (p *openPosition) realisedPnL(exitFill decimal.Decimal) decimal.Decimal {
 // One tick against on the way in and one on the way out, whichever direction
 // the position was: a short sells lower and buys back higher, which is the
 // same penalty as a long buying higher and selling lower.
-func (p *openPosition) slippageCost(costs backtest.Costs) decimal.Decimal {
-	return costs.SlippageAmount().Mul(p.size).Mul(decimal.NewFromInt(2))
+// slippageCost is the slippage paid across the round trip.
+//
+// Counted per side rather than doubled: a resting order does not cross the
+// spread, so a limit entry followed by a market exit pays slippage once. The
+// old unconditional ×2 would have charged a cost that was not incurred, which
+// is the safe direction to be wrong in but still wrong.
+func (p *openPosition) slippageCost(costs backtest.Costs, exitMaker bool) decimal.Decimal {
+	sides := int64(0)
+	if !p.entryMaker {
+		sides++
+	}
+	if !exitMaker {
+		sides++
+	}
+	return costs.SlippageAmount().Mul(p.size).Mul(decimal.NewFromInt(sides))
 }
 
 // equityAt marks the position to market without closing it.
@@ -124,6 +148,11 @@ func (p *openPosition) slippageCost(costs backtest.Costs) decimal.Decimal {
 // point and understate every drawdown — the statistic that most needs to be
 // pessimistic — and would disagree with the trade the engine actually books
 // when the position does close at that price.
+//
+// The exit is always priced as a market order, whatever the run configured.
+// An open position's exit is not known to be a target fill — it may be a stop,
+// which is always a market order, or the end of the run. Assuming the cheaper
+// exit would make the curve optimistic exactly where it must not be.
 func (p *openPosition) equityAt(reference decimal.Decimal, costs backtest.Costs) decimal.Decimal {
 	if !p.isOpen() {
 		// Unreachable through markEquity, which checks first. Guarded anyway:
@@ -133,7 +162,7 @@ func (p *openPosition) equityAt(reference decimal.Decimal, costs backtest.Costs)
 	}
 
 	fill := fillPrice(reference, p.direction == constants.DirectionShort, costs)
-	exitFee := feeOn(fill.Mul(p.size), costs)
+	exitFee := feeOn(fill.Mul(p.size), costs, false)
 
 	return p.equityAtEntry.
 		Sub(p.entryFee).
