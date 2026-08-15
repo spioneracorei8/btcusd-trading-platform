@@ -1,0 +1,66 @@
+# Production overlay. Applied on top of docker-compose.yml, never alone:
+#
+#   docker compose --env-file .env \
+#     -f deploy/docker-compose.yml -f deploy/docker-compose.prod.yml up -d
+#
+# which is what `make prod-up` and the btcusd.service systemd unit do.
+#
+# What this file changes, and why each change only makes sense on the VPS:
+#
+#   - the api is additionally published on the Tailscale IP, so a phone and a
+#     developer machine can reach it without anything being open to the public
+#     internet
+#   - PostgreSQL is tuned for 4 GB of RAM rather than for the small defaults
+#   - container logs are capped, because an unbounded log on a 60 GB disk is a
+#     slow-motion outage that ends with PostgreSQL refusing writes
+#
+# It deliberately does *not* publish PostgreSQL on the Tailscale IP. Reaching
+# the database is an SSH tunnel (`ssh -L 5432:127.0.0.1:5432 <host>`), which is
+# documented in deploy/README.md. Nothing on the tailnet needs SQL access, and
+# the smaller surface is worth the extra flag when a human wants a psql prompt.
+
+services:
+  postgres:
+    # Tuned for the 4 GB VPS. The image's own timescaledb-tune writes
+    # postgresql.conf at first start; command-line flags override that file, so
+    # these win on every start including after an image upgrade.
+    #
+    # shared_buffers is what PostgreSQL caches for itself. effective_cache_size
+    # is not an allocation — it is what the planner is told to *assume* the OS
+    # is caching, which is why it can exceed shared_buffers on the same box.
+    command:
+      - postgres
+      - -c
+      - shared_buffers=1GB
+      - -c
+      - effective_cache_size=2GB
+    logging: &capped
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  migrate:
+    logging: *capped
+
+  api:
+    environment:
+      # JSON log handler, and the level a long-running host should sit at.
+      APP_ENV: prod
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    ports:
+      # Compose concatenates port lists across files, so the loopback mapping
+      # from the base file survives and this is published in addition to it.
+      #
+      # The `:?` makes an unset TAILSCALE_IP abort the command. An empty value
+      # here would expand to ":8080:8080", which binds every interface — the
+      # exact mistake this line exists to prevent, and one that would not be
+      # visible in `docker compose ps`.
+      - "${TAILSCALE_IP:?set TAILSCALE_IP in .env to this host's tailnet address; see deploy/README.md §5}:${API_HOST_PORT:-8080}:8080"
+    logging: *capped
+
+  collector:
+    environment:
+      APP_ENV: prod
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    logging: *capped

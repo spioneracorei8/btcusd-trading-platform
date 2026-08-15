@@ -1,0 +1,10 @@
+[Unit]
+Description=Hourly disk usage check for the BTC/USDT platform
+
+[Timer]
+OnCalendar=hourly
+Persistent=true
+RandomizedDelaySec=120
+
+[Install]
+WantedBy=timers.target

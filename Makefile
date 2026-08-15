@@ -170,3 +170,49 @@ adminer: ## Start Adminer to browse the database, then print its URL
 .PHONY: adminer-stop
 adminer-stop: ## Stop and remove Adminer, leaving the rest of the stack up
 	$(COMPOSE) --profile tools rm -sf adminer
+
+# ---------------------------------------------------------------------------
+# VPS deployment
+# ---------------------------------------------------------------------------
+# These are meant to be run ON the VPS, from /opt/btcusd. On the host itself
+# the stack is normally driven by systemd (`systemctl start btcusd`); these
+# targets are for the times you are logged in and want the compose command
+# without retyping both -f flags.
+#
+# The production overlay adds the Tailscale binding and the 4 GB PostgreSQL
+# tuning, and refuses to start when TAILSCALE_IP is unset.
+
+PROD_COMPOSE := $(CONTAINER_ENGINE) compose $(if $(wildcard ./.env),--env-file .env,) \
+	-f $(COMPOSE_FILE) -f deploy/docker-compose.prod.yml
+
+.PHONY: prod-up
+prod-up: ## VPS: build and start the production stack
+	$(PROD_COMPOSE) up --build -d --remove-orphans
+
+.PHONY: prod-down
+prod-down: ## VPS: stop the production stack (keeps the pgdata volume)
+	$(PROD_COMPOSE) down
+
+.PHONY: prod-ps
+prod-ps: ## VPS: show the production container status
+	$(PROD_COMPOSE) ps
+
+.PHONY: prod-logs
+prod-logs: ## VPS: follow the production container logs
+	$(PROD_COMPOSE) logs -f
+
+.PHONY: prod-config
+prod-config: ## VPS: print the merged production compose configuration
+	$(PROD_COMPOSE) config
+
+.PHONY: backup
+backup: ## VPS: dump the database now, with rotation
+	sudo deploy/backup.sh
+
+.PHONY: restore-test
+restore-test: ## VPS: restore the newest dump into a scratch database and verify it
+	sudo deploy/restore-test.sh
+
+.PHONY: disk-check
+disk-check: ## VPS: report disk usage for the root and postgres filesystems
+	sudo deploy/disk-check.sh

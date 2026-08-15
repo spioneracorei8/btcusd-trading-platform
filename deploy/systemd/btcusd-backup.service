@@ -1,0 +1,17 @@
+[Unit]
+Description=PostgreSQL dump for the BTC/USDT platform
+Documentation=file:/opt/btcusd/deploy/README.md
+# The dump runs inside the postgres container, so there is nothing to do if the
+# stack is not up.
+Requires=btcusd.service
+After=btcusd.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/btcusd/deploy/backup.sh
+# The script's own guards decide what counts as failure; a non-zero exit here
+# marks the unit failed, which is what `systemctl status` and the next
+# `list-timers` will show.
+Environment=APP_DIR=/opt/btcusd
+Nice=10
+IOSchedulingClass=idle

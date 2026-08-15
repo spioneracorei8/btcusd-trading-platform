@@ -1,0 +1,12 @@
+[Unit]
+Description=Disk usage check for the BTC/USDT platform
+Documentation=file:/opt/btcusd/deploy/README.md
+
+[Service]
+Type=oneshot
+ExecStart=/opt/btcusd/deploy/disk-check.sh
+Environment=APP_DIR=/opt/btcusd
+# The script prefixes its output with sd-daemon severities, so journald files
+# each line at its own priority instead of all of them as info.
+StandardOutput=journal
+StandardError=journal

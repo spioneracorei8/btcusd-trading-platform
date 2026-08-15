@@ -58,6 +58,18 @@ make adminer              # http://127.0.0.1:8081, server "postgres"
 make adminer-stop         # when finished
 ```
 
+### Running it on a server
+
+The collector is meant to run continuously so the candle series keeps
+accumulating; backtesting stays on the developer machine.
+[`deploy/README.md`](deploy/README.md) is the runbook — provisioning, backups
+with a tested restore, disk monitoring, and the verification checklist. The
+decisions behind it are
+[ADR 0017](docs/decisions/0017-vps-deployment.md).
+
+Nothing about that host changes what this system does: it collects and
+analyses, and places no orders.
+
 ### podman or docker
 
 Both work — the compose file is the same for either. The Makefile picks podman
@@ -141,7 +153,7 @@ server/
     trend/         trend.go, config.go + usecase/ (phase 05)
   migrations/      goose migrations
   testhelper/      shared setup for repository integration tests
-deploy/            docker-compose.yml, Caddyfile
+deploy/            compose files, VPS runbook, provisioning and backup scripts
 docs/              decisions/, prompts/
 mobile/            React Native app (phase 09)
 ```

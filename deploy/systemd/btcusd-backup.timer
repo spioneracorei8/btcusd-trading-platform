@@ -1,0 +1,14 @@
+[Unit]
+Description=Daily PostgreSQL dump for the BTC/USDT platform
+
+[Timer]
+# 03:17 UTC rather than 00:00: nothing else on the box runs then, and an odd
+# minute keeps it out of the crowd of jobs every other host runs on the hour.
+OnCalendar=*-*-* 03:17:00
+# If the host was off when this was due, run it once after boot rather than
+# skipping the day entirely.
+Persistent=true
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target
