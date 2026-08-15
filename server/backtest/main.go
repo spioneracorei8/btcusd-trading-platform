@@ -445,7 +445,13 @@ func writeJSONReport(path string, result backtest.Result, stats report.Statistic
 // range earning one. At the production EMA(200) that is six weeks of hourly
 // history — which is why it is computed rather than guessed.
 func attachTrendFilter(params *backtest.RunParams, candles candle.CandleUsecase) error {
-	config := trend.DefaultConfig()
+	// Contributors at or below this run's base have nothing to say at this
+	// base. They are dropped and the survivors rescaled, and the drop is
+	// recorded on the config so the run header states it.
+	config, err := trend.DefaultConfig().ForBase(params.Timeframe)
+	if err != nil {
+		return err
+	}
 
 	filter, err := _trend_us.NewFilterImpl(config)
 	if err != nil {

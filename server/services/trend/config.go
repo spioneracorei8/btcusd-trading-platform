@@ -28,6 +28,17 @@ type Config struct {
 	// gated on it is permitted and forbidden in turn — which is worse than no
 	// filter, because it adds cost without adding information.
 	DeadZone float64
+
+	// Dropped records contributors that were configured but do not close less
+	// often than the run's base timeframe, and were therefore removed by
+	// ForBase.
+	//
+	// It is not configuration — it is what happened to the configuration — but
+	// it lives here because this struct is what the report header renders, and
+	// silently discarding part of a configuration is its own defect. A reader
+	// must be able to see that the 5m contributor they configured took no part
+	// in the numbers in front of them.
+	Dropped []constants.Timeframe
 }
 
 // DefaultConfig is the documented starting point for the 1m scalping setup.
@@ -110,6 +121,65 @@ func (c Config) Validate() error {
 	return nil
 }
 
+// ForBase adapts the configuration to the base timeframe of a run.
+//
+// # Why a contributor is dropped rather than fatal
+//
+// A contributor that does not close strictly less often than the base is a
+// look-ahead hazard, and phase 05 §1 rejects one outright. That rejection is
+// right about the danger and wrong about the response: at a 15m base, the
+// sensible reading of a configured 5m contributor is that it has nothing to
+// say here, not that the whole filter is misconfigured. Treating it as fatal
+// made --compare and --trend-filter unusable at every base except 1m, which is
+// the one the evidence says to move away from.
+//
+// So the contributors are partitioned. Survivors keep the look-ahead rule
+// enforced against them by the aligner, which is unchanged.
+//
+// # Why the weights are rescaled
+//
+// The filter divides by TotalWeight, so dropping 5m from the default set would
+// leave the survivors normalised over 0.8 instead of 1.0 — arithmetically fine
+// and impossible to read. Rescaling to the original total means the printed
+// weights are the shares each timeframe actually had: at a 15m base, 1h is not
+// "0.5 of a filter that lost its other half", it is the whole of it.
+func (c Config) ForBase(base constants.Timeframe) (Config, error) {
+	if !base.Valid() {
+		return Config{}, fmt.Errorf("trend: base timeframe %q is not valid", base)
+	}
+	if err := c.Validate(); err != nil {
+		return Config{}, err
+	}
+
+	adapted := Config{DeadZone: c.DeadZone}
+	survivingTotal := 0.0
+
+	for _, weight := range c.Weights {
+		if weight.Timeframe.Duration() > base.Duration() {
+			adapted.Weights = append(adapted.Weights, weight)
+			survivingTotal += weight.Weight
+			continue
+		}
+		adapted.Dropped = append(adapted.Dropped, weight.Timeframe)
+	}
+
+	if len(adapted.Weights) == 0 {
+		return Config{}, fmt.Errorf(
+			"trend: no configured contributor (%s) closes less often than the base timeframe %s; "+
+				"a filter with nothing above the base cannot contribute anything, and pretending "+
+				"to filter is worse than not filtering",
+			describeTimeframes(c.Timeframes()), base)
+	}
+
+	// Rescale to the total the caller configured, so the filter's influence is
+	// unchanged and the header shows each survivor's real share.
+	factor := c.TotalWeight() / survivingTotal
+	for i := range adapted.Weights {
+		adapted.Weights[i].Weight *= factor
+	}
+	return adapted, nil
+}
+
 // Describe renders the configuration for a report header, so a stored result
 // says what produced it rather than only which version did.
 func (c Config) Describe() string {
@@ -120,5 +190,23 @@ func (c Config) Describe() string {
 		}
 		out += fmt.Sprintf("%s=%.2f", weight.Timeframe, weight.Weight)
 	}
-	return fmt.Sprintf("%s deadzone=%.2f", out, c.DeadZone)
+	out = fmt.Sprintf("%s deadzone=%.2f", out, c.DeadZone)
+
+	if len(c.Dropped) > 0 {
+		out += fmt.Sprintf(" (dropped %s: not above the base timeframe; "+
+			"remaining weights rescaled)", describeTimeframes(c.Dropped))
+	}
+	return out
+}
+
+// describeTimeframes joins timeframes for a message.
+func describeTimeframes(timeframes []constants.Timeframe) string {
+	out := ""
+	for i, timeframe := range timeframes {
+		if i > 0 {
+			out += ", "
+		}
+		out += timeframe.String()
+	}
+	return out
 }
