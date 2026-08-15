@@ -1,8 +1,18 @@
 # Experiment log
 
-Appended after every evaluation run. Not automated: writing the line is the
-point, because the act of recording a result you dislike is the discipline
-this file exists to impose.
+Appended automatically after every completed run by `backtest`. Entries 1–7
+were written by hand; everything from 8 onward is generated.
+
+The automation is the point. Writing the line by hand was meant to be the
+discipline, and it was not: the seven entries below were reconstructed
+afterwards from scrollback, in one batch. The runs that go unrecorded are never
+the interesting ones — they are the ones abandoned halfway and the ones whose
+result was disappointing enough to move on from quickly, which are exactly the
+ones the denominator needs. Recording them cannot be left to whoever has just
+been disappointed.
+
+The tool fills everything except **Note**, which is a judgement and stays
+yours.
 
 ## Why this file exists
 
@@ -22,10 +32,12 @@ When you reach a result worth acting on, count the entries above it first.
 
 ## Format
 
-One entry per run, newest at the bottom.
+One entry per run, newest at the bottom, numbered. A run suppressed with
+`--no-experiment-log` still spends its number, so the gap is visible: a run
+that happened is a run the count has to include.
 
 ```
-### <date> — <strategy> <version>
+### <n>. <date> — <strategy> <version> (<timeframe>)
 
 - **Dataset:** dev | holdout | custom (range)
 - **Parameters:** what differed from the documented defaults, or "defaults"

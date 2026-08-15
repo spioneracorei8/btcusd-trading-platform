@@ -60,22 +60,24 @@ const (
 
 // options are the flags of one run.
 type options struct {
-	strategyName   string
-	from           string
-	to             string
-	timeframe      string
-	allowGaps      string
-	out            string
-	equity         string
-	trendFilter    string
-	noTrendFilter  bool
-	compare        bool
-	dataset        string
-	riskPct        string
-	allIn          bool
-	costSweep      bool
-	holdoutNote    string
-	listStrategies bool
+	strategyName    string
+	from            string
+	to              string
+	timeframe       string
+	allowGaps       string
+	out             string
+	equity          string
+	trendFilter     string
+	noTrendFilter   bool
+	compare         bool
+	dataset         string
+	riskPct         string
+	allIn           bool
+	costSweep       bool
+	holdoutNote     string
+	listStrategies  bool
+	experimentLog   string
+	noExperimentLog bool
 }
 
 func main() {
@@ -173,16 +175,27 @@ func run() int {
 
 	// The failure modes, always. A strategy can clear every threshold and
 	// still be a few lucky bars, and the headline figures cannot tell.
-	if err := report.WriteAnalysis(os.Stdout, report.Analyse(result, stats), quoteUnit(params.Symbol)); err != nil {
+	analysis := report.Analyse(result, stats)
+	if err := report.WriteAnalysis(os.Stdout, analysis, quoteUnit(params.Symbol)); err != nil {
 		log.Error("could not write the analysis", "error", err)
 		return exitFailure
 	}
 
+	var sweep []report.CostSensitivity
 	if opts.costSweep {
-		if err := runCostSweep(ctx, log, engine, candles, params, opts, cfg); err != nil {
+		sweep, err = runCostSweep(ctx, log, engine, candles, params, opts, cfg)
+		if err != nil {
 			log.Error("could not run the cost sweep", "error", err)
 			return exitFailure
 		}
+	}
+
+	// Recorded before the holdout log and before the JSON report, because a
+	// run that happened is a run the denominator has to include. Everything
+	// after this point is output; the run itself is already finished.
+	if err := recordExperiment(log, opts, result, stats, analysis, sweep); err != nil {
+		log.Error("could not append to the experiment log", "error", err)
+		return exitFailure
 	}
 
 	// The holdout is recorded before the numbers are read, so a run whose
@@ -235,6 +248,10 @@ func parseFlags(args []string) (options, error) {
 	fs.BoolVar(&opts.compare, "compare", false,
 		"run twice, filtered and unfiltered, and print both side by side")
 	fs.BoolVar(&opts.listStrategies, "list-strategies", false, "list the strategies this binary can run")
+	fs.StringVar(&opts.experimentLog, "experiment-log", report.ExperimentLogPath,
+		"append every completed run to this log")
+	fs.BoolVar(&opts.noExperimentLog, "no-experiment-log", false,
+		"withhold this run's details from the experiment log; the entry number is still spent")
 
 	if err := fs.Parse(args); err != nil {
 		return options{}, err
@@ -593,11 +610,22 @@ func runComparison(
 	// silently ignored flag is the same defect as a silently dropped trend
 	// contributor. The sweep runs against the filtered configuration, which is
 	// the headline of a comparison.
+	var sweep []report.CostSensitivity
 	if opts.costSweep {
-		if err := runCostSweep(ctx, log, engine, candles, filteredParams, opts, cfg); err != nil {
+		sweep, err = runCostSweep(ctx, log, engine, candles, filteredParams, opts, cfg)
+		if err != nil {
 			log.Error("could not run the cost sweep", "error", err)
 			return exitFailure
 		}
+	}
+
+	// A comparison is two runs and one entry: the filtered run is what the
+	// comparison is about, and logging both would inflate the denominator with
+	// a control that was never a candidate.
+	if err := recordExperiment(log, opts, filtered,
+		comparison.FilteredStats, report.Analyse(filtered, comparison.FilteredStats), sweep); err != nil {
+		log.Error("could not append to the experiment log", "error", err)
+		return exitFailure
 	}
 
 	if opts.out != "" {
@@ -617,12 +645,7 @@ func runComparison(
 // one file whatever directory the command was typed in — which is the whole
 // point of a log that is meant to be read later.
 func holdoutLogPath() string {
-	for _, prefix := range []string{"", "../", "../../"} {
-		if _, err := os.Stat(prefix + "docs"); err == nil {
-			return prefix + report.HoldoutLogPath
-		}
-	}
-	return report.HoldoutLogPath
+	return repoRelative(report.HoldoutLogPath)
 }
 
 // runCostSweep repeats the run at higher assumed costs.
@@ -639,7 +662,7 @@ func runCostSweep(
 	params backtest.RunParams,
 	opts options,
 	cfg *config.Config,
-) error {
+) ([]report.CostSensitivity, error) {
 	var runs []report.CostSensitivity
 
 	// Whether the base run was filtered decides whether each pass is. A sweep
@@ -654,7 +677,7 @@ func runCostSweep(
 		// hit the forward-only invariant.
 		scaled, err := prepareRun(params, opts, cfg, candles, withFilter)
 		if err != nil {
-			return fmt.Errorf("cost sweep at %.1fx: %w", multiplier, err)
+			return nil, fmt.Errorf("cost sweep at %.1fx: %w", multiplier, err)
 		}
 
 		scaled.Costs.FeeTakerPct = params.Costs.FeeTakerPct.
@@ -663,19 +686,20 @@ func runCostSweep(
 
 		result, err := engine.Run(ctx, scaled)
 		if err != nil {
-			return fmt.Errorf("cost sweep at %.1fx: %w", multiplier, err)
+			return nil, fmt.Errorf("cost sweep at %.1fx: %w", multiplier, err)
 		}
 		stats := report.Compute(result)
 
 		runs = append(runs, report.CostSensitivity{
-			Multiplier: multiplier,
-			NetReturn:  stats.NetReturn,
-			TradeCount: stats.TradeCount,
+			Multiplier:   multiplier,
+			NetReturn:    stats.NetReturn,
+			TradeCount:   stats.TradeCount,
+			ProfitFactor: stats.ProfitFactor,
 		})
 		log.Debug("cost sweep run finished",
 			"multiplier", multiplier, "net_return", stats.NetReturn)
 	}
-	return report.WriteCostSensitivity(os.Stdout, runs)
+	return runs, report.WriteCostSensitivity(os.Stdout, runs)
 }
 
 // quoteUnit names the currency the money figures are in.
@@ -746,4 +770,77 @@ func prepareRun(
 		}
 	}
 	return params, nil
+}
+
+// recordExperiment appends this run to the experiment log.
+//
+// # Why this is not optional
+//
+// The log's value is the denominator. A strategy chosen out of fifty has fifty
+// chances to look good by accident, and nothing in a run's own report can tell
+// you that happened — only the count of entries above it can. Left to a human,
+// the entries that go missing are the ones abandoned halfway and the ones whose
+// result was disappointing, which are exactly the ones the denominator needs.
+//
+// It runs only after a run has produced a report. A run that errored has no
+// result to record and writing a half-entry would corrupt the count with
+// something that was never a candidate.
+func recordExperiment(
+	log *slog.Logger,
+	opts options,
+	result backtest.Result,
+	stats report.Statistics,
+	analysis report.Analysis,
+	sweep []report.CostSensitivity,
+) error {
+	if opts.experimentLog == "" {
+		return nil
+	}
+	path := repoRelative(opts.experimentLog)
+
+	// A missing or unparseable criteria file must not produce a guess. A wrong
+	// pass in a permanent log is worse than no verdict at all, so the failure
+	// is recorded in the entry rather than resolved.
+	criteria, criteriaErr := report.LoadCriteria(repoRelative(report.CriteriaPath))
+	if criteriaErr != nil {
+		log.Warn("acceptance criteria could not be read; the entry will say so",
+			"error", criteriaErr)
+	}
+
+	entry := report.ExperimentEntryFor(result, stats, analysis,
+		criteria, criteriaErr, opts.dataset, time.Now().UTC(), sweep)
+	entry.Suppressed = opts.noExperimentLog
+
+	number, err := report.AppendExperiment(path, entry)
+	if err != nil {
+		return err
+	}
+	entry.Number = number
+
+	if entry.Suppressed {
+		must(fmt.Fprintf(os.Stdout,
+			"\nrun %d recorded in %s as suppressed (--no-experiment-log)\n",
+			entry.Number, path))
+	} else {
+		must(fmt.Fprintf(os.Stdout, "\nrun %d appended to %s — fill in the Note line\n",
+			entry.Number, path))
+	}
+	return nil
+}
+
+// repoRelative resolves a docs path from wherever the CLI was invoked.
+//
+// Same reasoning as holdoutLogPath: the binary is usually run from server/, and
+// a plain relative path would scatter logs into whichever directory somebody
+// happened to be standing in. One log in one place is the entire point.
+func repoRelative(path string) string {
+	if filepath.IsAbs(path) {
+		return path
+	}
+	for _, prefix := range []string{"", "../", "../../"} {
+		if _, err := os.Stat(prefix + "docs"); err == nil {
+			return prefix + path
+		}
+	}
+	return path
 }

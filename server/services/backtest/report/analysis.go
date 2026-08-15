@@ -287,6 +287,11 @@ type CostSensitivity struct {
 	Multiplier float64
 	NetReturn  float64
 	TradeCount int
+
+	// ProfitFactor at this cost level. Net return alone hides the shape of the
+	// decay: a run can stay positive while its profit factor collapses towards
+	// 1, which is the point at which the edge stops being worth the risk.
+	ProfitFactor float64
 }
 
 // WriteCostSensitivity renders the cost-sensitivity table.
