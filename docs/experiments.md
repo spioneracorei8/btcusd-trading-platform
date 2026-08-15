@@ -209,7 +209,7 @@ of the arithmetic, not a market observation. Ignore that section in runs 1–7.
 - **Costs as share of gross profit:** n/a — gross is not positive (costs 0)
 - **Concentration (best 5):** 0.00%
 - **Verdict:** fail — Net return after costs (0.00%, needs > 0.00%), Profit factor (not measurable), Trades in the development period (0, needs >= 200), Total costs as a share of gross profit (not measurable)
-- **Note:** _(to fill in — what you learned, not what you hoped)_
+- **Note:** _(bug from contributor warm-up)_
 
 ### 9. 2026-08-15 — ema_crossover v1 (1h)
 
@@ -223,4 +223,58 @@ of the arithmetic, not a market observation. Ignore that section in runs 1–7.
 - **Concentration (best 5):** 0.00%
 - **Cost sweep:** 1.0x +0.00% (PF inf) | 1.5x +0.00% (PF inf) | 2.0x +0.00% (PF inf)
 - **Verdict:** fail — Net return after costs (0.00%, needs > 0.00%), Profit factor (not measurable), Trades in the development period (0, needs >= 200), Total costs as a share of gross profit (not measurable)
-- **Note:** _(to fill in — what you learned, not what you hoped)_
+- **Note:** _(bug from contributor warm-up)_
+
+### 10. 2026-08-15 — ema_crossover v1 (1h)
+
+- **Dataset:** dev (2023-01-01 .. 2024-12-31), `--allow-gaps=skip`
+- **Parameters:** defaults, timeframe 1h
+- **Filter:** ema_rsi_mtf v1 (4h=0.37 1d=0.62 deadzone=0.15) — vetoed 2.30%, not-ready 100.00%
+- **Sizing:** risk 1% of equity
+- **Net return after costs:** +0.0000%
+- **Profit factor / max drawdown / trades:** inf / 0.00% / 0
+- **Costs as share of gross profit:** n/a — gross is not positive (costs 0)
+- **Concentration (best 5):** 0.00%
+- **Verdict:** fail — Net return after costs (0.00%, needs > 0.00%), Profit factor (not measurable), Trades in the development period (0, needs >= 200), Total costs as a share of gross profit (not measurable)
+- **Note:** _(bug from contributor warm-up)_
+
+### 11. 2026-08-15 — ema_crossover v1 (1h)
+
+- **Dataset:** dev (2023-01-01 .. 2024-12-31), `--allow-gaps=skip`
+- **Parameters:** defaults, timeframe 1h
+- **Filter:** ema_rsi_mtf v1 (4h=0.37 1d=0.62 deadzone=0.15) — vetoed 2.30%, not-ready 100.00%
+- **Sizing:** risk 1% of equity
+- **Net return after costs:** +0.0000%
+- **Profit factor / max drawdown / trades:** inf / 0.00% / 0
+- **Costs as share of gross profit:** n/a — gross is not positive (costs 0)
+- **Concentration (best 5):** 0.00%
+- **Cost sweep:** 1.0x +0.00% (PF inf) | 1.5x +0.00% (PF inf) | 2.0x +0.00% (PF inf)
+- **Verdict:** fail — Net return after costs (0.00%, needs > 0.00%), Profit factor (not measurable), Trades in the development period (0, needs >= 200), Total costs as a share of gross profit (not measurable)
+- **Note:** _(bug from contributor warm-up)_
+
+### 12. 2026-08-15 — ema_crossover v1 (1h)
+
+- **Dataset:** dev (2023-01-01 .. 2024-12-31), `--allow-gaps=skip`
+- **Parameters:** defaults, timeframe 1h
+- **Filter:** ema_rsi_mtf v1 (4h=0.37 1d=0.62 deadzone=0.15) — vetoed 2.30%, not-ready 100.00%
+- **Sizing:** risk 1% of equity
+- **Net return after costs:** +0.0000%
+- **Profit factor / max drawdown / trades:** inf / 0.00% / 0
+- **Costs as share of gross profit:** n/a — gross is not positive (costs 0)
+- **Concentration (best 5):** 0.00%
+- **Verdict:** fail — Net return after costs (0.00%, needs > 0.00%), Profit factor (not measurable), Trades in the development period (0, needs >= 200), Total costs as a share of gross profit (not measurable)
+- **Note:** _(bug from contributor warm-up)_
+
+### 13. 2026-08-15 — ema_crossover v1 (1h)
+
+- **Dataset:** dev (2023-01-01 .. 2024-12-31), `--allow-gaps=skip`
+- **Parameters:** defaults, timeframe 1h
+- **Filter:** ema_rsi_mtf v1 (4h=0.37 1d=0.62 deadzone=0.15) — vetoed 2.30%, not-ready 100.00%
+- **Sizing:** risk 1% of equity
+- **Net return after costs:** +0.0000%
+- **Profit factor / max drawdown / trades:** inf / 0.00% / 0
+- **Costs as share of gross profit:** n/a — gross is not positive (costs 0)
+- **Concentration (best 5):** 0.00%
+- **Cost sweep:** 1.0x +0.00% (PF inf) | 1.5x +0.00% (PF inf) | 2.0x +0.00% (PF inf)
+- **Verdict:** fail — Net return after costs (0.00%, needs > 0.00%), Profit factor (not measurable), Trades in the development period (0, needs >= 200), Total costs as a share of gross profit (not measurable)
+- **Note:** _(bug from contributor warm-up)_
