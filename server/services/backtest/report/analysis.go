@@ -122,56 +122,93 @@ func byYear(trades []backtest.Trade) []PeriodBreakdown {
 	return out
 }
 
-// byVolatility splits the trades at the median holding-period return range.
-//
-// A cheap proxy: trades are bucketed by how far price moved between entry and
-// exit relative to the entry, which is what "the market was busy" looks like
-// from a trade's point of view. It is not an ATR regime classification and
-// does not pretend to be — it is enough to show whether the result depends on
-// one kind of market.
-func byVolatility(result backtest.Result) []PeriodBreakdown {
-	if len(result.Trades) < 2 {
-		return nil
-	}
+// volatilityBuckets is how many the trades are split into. Terciles rather
+// than a median split: two buckets hide the extremes, and the extremes are
+// where a strategy's behaviour usually differs.
+const volatilityBuckets = 3
 
+// byVolatility groups trades by the volatility they were entered into.
+//
+// # The defect this replaces
+//
+// The first version split on the entry-to-exit move — how far price travelled
+// while the trade was open. That is the trade's own outcome. Every trade whose
+// price barely moved lost to costs, so every such trade landed in the "low"
+// bucket by construction, and the report faithfully announced that the low
+// bucket had a 0.00% win rate across four thousand trades. Reproduced across
+// three structurally different strategies, that is not a finding about
+// markets; it is arithmetic. Sorting losses into a bucket and then reporting
+// that the bucket lost is circular.
+//
+// # What replaces it
+//
+// ATR at the entry bar, which is knowable before the outcome exists and is the
+// volatility the strategy actually conditioned on — the same value its stop
+// was sized from.
+//
+// It is normalised by entry price. An absolute ATR split over a range where
+// BTC moved between roughly $16k and $100k would mostly be sorting by calendar
+// date: $200 of ATR is a violent day at $16k and a quiet one at $100k.
+//
+// The buckets are labelled with the ATR range they cover, because "high" is
+// meaningless without knowing whether it means 0.3% or 3%.
+func byVolatility(result backtest.Result) []PeriodBreakdown {
 	type scored struct {
-		trade backtest.Trade
-		move  float64
+		trade  backtest.Trade
+		atrPct float64
 	}
 
 	scoredTrades := make([]scored, 0, len(result.Trades))
 	for _, trade := range result.Trades {
-		if !trade.EntryPrice.IsPositive() {
+		if !trade.EntryPrice.IsPositive() || trade.EntryATR <= 0 {
 			continue
 		}
-		move, _ := trade.ExitPrice.Sub(trade.EntryPrice).Abs().
-			Div(trade.EntryPrice).Float64()
-		scoredTrades = append(scoredTrades, scored{trade: trade, move: move})
+		entry, _ := trade.EntryPrice.Float64()
+		if entry <= 0 {
+			continue
+		}
+		scoredTrades = append(scoredTrades, scored{
+			trade: trade, atrPct: trade.EntryATR / entry * 100,
+		})
 	}
-	if len(scoredTrades) < 2 {
+
+	// Fewer trades than buckets cannot be split into them, and a bucket
+	// holding one trade reports that trade's outcome as a regime.
+	if len(scoredTrades) < volatilityBuckets*2 {
 		return nil
 	}
 
-	moves := make([]float64, 0, len(scoredTrades))
-	for _, s := range scoredTrades {
-		moves = append(moves, s.move)
-	}
-	sort.Float64s(moves)
-	median := moves[len(moves)/2]
-
-	low := &PeriodBreakdown{Label: "low volatility", NetPnL: decimal.Zero}
-	high := &PeriodBreakdown{Label: "high volatility", NetPnL: decimal.Zero}
-
-	for _, s := range scoredTrades {
-		if s.move <= median {
-			accumulate(low, s.trade)
-		} else {
-			accumulate(high, s.trade)
+	sort.Slice(scoredTrades, func(i, j int) bool {
+		if scoredTrades[i].atrPct != scoredTrades[j].atrPct {
+			return scoredTrades[i].atrPct < scoredTrades[j].atrPct
 		}
+		// A stable tiebreak, so two runs over the same trades bucket them
+		// identically. Report determinism is ADR 0012.
+		return scoredTrades[i].trade.EntryTime.Before(scoredTrades[j].trade.EntryTime)
+	})
+
+	names := [volatilityBuckets]string{"low", "mid", "high"}
+	out := make([]PeriodBreakdown, 0, volatilityBuckets)
+
+	for bucket := range volatilityBuckets {
+		start := bucket * len(scoredTrades) / volatilityBuckets
+		end := (bucket + 1) * len(scoredTrades) / volatilityBuckets
+		if start >= end {
+			continue
+		}
+
+		period := &PeriodBreakdown{
+			Label: fmt.Sprintf("%s vol (ATR %.2f–%.2f%%)",
+				names[bucket], scoredTrades[start].atrPct, scoredTrades[end-1].atrPct),
+			NetPnL: decimal.Zero,
+		}
+		for _, s := range scoredTrades[start:end] {
+			accumulate(period, s.trade)
+		}
+		finish(period)
+		out = append(out, *period)
 	}
-	finish(low)
-	finish(high)
-	return []PeriodBreakdown{*low, *high}
+	return out
 }
 
 // accumulate adds one trade to a breakdown.
@@ -217,7 +254,7 @@ func WriteAnalysis(w io.Writer, analysis Analysis, unit string) error {
 	}
 
 	if len(analysis.ByVolatility) > 0 {
-		b.WriteString("\n  by volatility (median split on entry-to-exit move)\n")
+		b.WriteString("\n  by volatility (terciles of ATR at the entry bar, as % of entry price)\n")
 		writeBreakdowns(&b, analysis.ByVolatility, unit)
 	}
 

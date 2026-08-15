@@ -259,6 +259,19 @@ type Trade struct {
 	EntryNote  string
 	ExitNote   string
 
+	// EntryATR is the base-timeframe ATR at the close the entry was decided
+	// on — the bar before the fill, which is the last one the strategy saw.
+	//
+	// It is recorded so a report can group trades by the conditions they were
+	// taken in. Grouping by anything measured after the exit describes how the
+	// trade turned out, not what it faced: sorting losses into a bucket and
+	// then reporting that the bucket lost is circular. This is the volatility
+	// the strategy actually conditioned on, and it is knowable at entry.
+	//
+	// float64 rather than decimal.Decimal because it is an indicator value,
+	// not money — CLAUDE.md §4 draws the line there.
+	EntryATR float64
+
 	// StopAndTargetBothReachable marks a bar where both levels lay inside the
 	// range and the stop was taken by assumption rather than by evidence.
 	StopAndTargetBothReachable bool

@@ -73,6 +73,11 @@ type openPosition struct {
 	barsHeld int
 
 	entryNote string
+
+	// entryATR is the base-timeframe ATR at the close the entry was decided
+	// on. Carried through the position so the trade can record the conditions
+	// it was taken in rather than only how it turned out.
+	entryATR float64
 }
 
 // isOpen reports whether a position is held.

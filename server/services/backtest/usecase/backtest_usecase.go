@@ -226,6 +226,11 @@ type runner struct {
 	// from inside a period nobody could trade.
 	lastTradeableClose decimal.Decimal
 	lastTradeableTime  time.Time
+
+	// pendingATR is the ATR at the close that produced r.pending. The fill
+	// happens on the next bar's open, so the volatility the decision was made
+	// under has to be carried across with the intents.
+	pendingATR float64
 }
 
 // newRunner prepares the per-run state.
@@ -320,6 +325,7 @@ func (r *runner) onCandle(bar models.Candle) error {
 		Indicators: snapshot,
 		Position:   r.positionView(),
 	})
+	r.pendingATR = snapshot.ATR
 
 	// 6. The trend filter vetoes entries the higher timeframes do not permit.
 	//    It runs on the same bar the strategy decided on, using the same
@@ -369,12 +375,13 @@ func (r *runner) positionView() strategy.Position {
 // later would leave it exposed through exactly the move it was placed for.
 func (r *runner) applyPending(bar models.Candle) error {
 	intents := r.pending
+	entryATR := r.pendingATR
 	r.pending = nil
 
 	for _, intent := range intents {
 		switch intent.Kind {
 		case strategy.IntentEnterLong:
-			r.openAt(bar, constants.DirectionLong, intent)
+			r.openAt(bar, constants.DirectionLong, intent, entryATR)
 
 		case strategy.IntentEnterShort:
 			// A spot backtest that shorts is fiction, so this ends the run
@@ -386,7 +393,7 @@ func (r *runner) applyPending(bar models.Candle) error {
 					constants.ErrShortOnSpot, r.params.Strategy.Name(),
 					r.params.Symbol, bar.OpenTime.Format(time.RFC3339))
 			}
-			r.openAt(bar, constants.DirectionShort, intent)
+			r.openAt(bar, constants.DirectionShort, intent, entryATR)
 
 		case strategy.IntentExit:
 			if r.position.isOpen() {
@@ -448,7 +455,12 @@ func (r *runner) applyLevelIntents() {
 // A second entry while a position is open is dropped rather than pyramided:
 // the position model is one at a time, and silently averaging in would make
 // the reported entry price something no single order ever paid.
-func (r *runner) openAt(bar models.Candle, direction constants.Direction, intent strategy.Intent) {
+func (r *runner) openAt(
+	bar models.Candle,
+	direction constants.Direction,
+	intent strategy.Intent,
+	entryATR float64,
+) {
 	if r.position.isOpen() {
 		return
 	}
@@ -477,6 +489,7 @@ func (r *runner) openAt(bar models.Candle, direction constants.Direction, intent
 		equityAtEntry:  r.equity,
 		entryFee:       feeOn(notional, r.params.Costs),
 		entryNote:      intent.Reason,
+		entryATR:       entryATR,
 		stop:           intent.Stop,
 		target:         intent.Target,
 	}
@@ -582,6 +595,7 @@ func (r *runner) closeAt(at time.Time, reference decimal.Decimal, reason backtes
 		ExitReason:                 reason,
 		EntryNote:                  p.entryNote,
 		ExitNote:                   note,
+		EntryATR:                   p.entryATR,
 		StopAndTargetBothReachable: ambiguous,
 		ForcedByGap:                reason == backtest.ExitGapForced,
 	})
