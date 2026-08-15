@@ -82,6 +82,17 @@ type Statistics struct {
 	AverageHoldingTime  time.Duration
 	LongestLosingStreak int
 
+	// TradesPerDay is how often the strategy actually traded, over the range
+	// it was evaluated on.
+	//
+	// It is a headline number rather than something to derive, because
+	// frequency is what decides whether costs matter: the same entry rule at
+	// twelve trades a day and at one is two different strategies once a round
+	// trip is priced in. A strategy that states an expected frequency has to
+	// be checked against the one it produced, and that check should not
+	// require dividing two other numbers by hand.
+	TradesPerDay float64
+
 	// AmbiguousBars counts bars where the stop and the target were both
 	// reachable and the stop was assumed. A large number here means the
 	// result rests on that assumption rather than on the data.
@@ -157,9 +168,29 @@ func Compute(result backtest.Result) Statistics {
 	stats.MaxDrawdown = maxDrawdown(result.Equity)
 	stats.Sharpe = sharpe(result.Equity, stats.AnnualisationBars)
 	stats.CostPerTripBps = costPerTripBps(result.Trades)
+	stats.TradesPerDay = tradesPerDay(len(result.Trades), result.FirstBar, result.LastBar)
 	summariseRisk(&stats, result.Trades)
 
 	return stats
+}
+
+// tradesPerDay measures frequency over the range actually evaluated.
+//
+// The evaluated range, not the requested one: warm-up consumed inside the
+// range is time the strategy could not have traded in, and counting it would
+// understate the frequency of a run whose history was short.
+func tradesPerDay(trades int, first, last time.Time) float64 {
+	if trades == 0 || first.IsZero() || last.IsZero() {
+		return 0
+	}
+
+	// A run of one bar has no span to divide by. Reporting the trade count
+	// itself is the honest answer at that point — it happened in under a day.
+	days := last.Sub(first).Hours() / 24
+	if days <= 0 {
+		return float64(trades)
+	}
+	return float64(trades) / days
 }
 
 // summariseTrades fills in everything derived from the trade list.

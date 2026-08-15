@@ -74,6 +74,7 @@
     "largest_loss": "0",
     "average_hold_seconds": 415,
     "longest_losing_streak": 0,
+    "trades_per_day": 103.38461538461539,
     "maker_entries": 0,
     "taker_entries": 28,
     "maker_exits": 0,

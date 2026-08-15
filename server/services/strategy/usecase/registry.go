@@ -75,6 +75,25 @@ var registry = []Registered{
 			return NewTrendPullbackImpl(config)
 		},
 	},
+	{
+		Name: "mtf_alignment",
+		Describe: func() string {
+			c := DefaultMTFAlignmentConfig()
+			names := make([]string, 0, len(c.Intermediate))
+			for _, timeframe := range c.Intermediate {
+				names = append(names, timeframe.String())
+			}
+			return fmt.Sprintf("dominant=%s confirm=%s trigger=%d pullback=%.2fATR resume=%d stop=%.2fATR target=%.2fATR",
+				c.Dominant, strings.Join(names, "+"), c.TriggerPeriod, c.PullbackATR,
+				c.ResumeBars, c.Levels.StopATRMult, c.Levels.TargetATRMult)
+		},
+		Build: func(cost float64, longOnly bool) (strategy.Strategy, error) {
+			config := DefaultMTFAlignmentConfig()
+			config.RoundTripCostPct = cost
+			config.LongOnly = longOnly
+			return NewMTFAlignmentImpl(config)
+		},
+	},
 }
 
 // Names lists the registered strategies in a stable order.

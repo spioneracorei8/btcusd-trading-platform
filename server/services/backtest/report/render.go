@@ -53,6 +53,12 @@ func WriteSummary(w io.Writer, result backtest.Result, stats Statistics) error {
 	b.WriteString("\nTRADES\n")
 	line(&b, "count", fmt.Sprintf("%d  (%d won, %d lost)", stats.TradeCount, stats.WinCount, stats.LossCount))
 
+	// Beside the count, not buried below it. Frequency is what decides whether
+	// costs matter: the same entry rule at twelve trades a day and at one is
+	// two different strategies once a round trip is priced in, and a strategy
+	// that declared an expected frequency is checked against this line.
+	line(&b, "frequency", fmt.Sprintf("%.2f trades per day over the evaluated range", stats.TradesPerDay))
+
 	// A run that took no trades has no performance to describe, and every
 	// ratio below would be computed from an empty set. Said here rather than
 	// left to be inferred from a row of zeroes and n/a.

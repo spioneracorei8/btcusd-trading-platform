@@ -18,6 +18,18 @@ var seriesStart = time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 // bar builds a decision point: a closed candle plus the indicator snapshot the
 // engine would have computed for it.
 func bar(index int, closePrice float64, rsi, atr float64, position strategy.Position) strategy.BarContext {
+	return barAligned(index, closePrice, rsi, atr, position, nil)
+}
+
+// barAligned is the same decision point with higher-timeframe readings
+// attached, as a multi-timeframe strategy would be given them.
+func barAligned(
+	index int,
+	closePrice float64,
+	rsi, atr float64,
+	position strategy.Position,
+	higher *models.TrendSnapshot,
+) strategy.BarContext {
 	at := seriesStart.Add(time.Duration(index) * time.Minute)
 	price := decimal.NewFromFloat(closePrice)
 
@@ -34,7 +46,72 @@ func bar(index int, closePrice float64, rsi, atr float64, position strategy.Posi
 			EMA: closePrice, VWAP: closePrice,
 		},
 		Position: position,
+		Higher:   higher,
 	}
+}
+
+// alignedHigher synthesises the readings a multi-timeframe strategy would see
+// when every higher timeframe points the same way.
+//
+// # Why it takes a function rather than a price
+//
+// A reading must be *frozen* between that timeframe's closes. The real aligner
+// repeats one 4h candle across 240 one-minute bars — same close, same
+// indicators, same close_time — and a fixture whose close drifted while its
+// close_time stood still would be looser than reality in the direction that
+// matters: a stale EMA compared against a live close eventually agrees with
+// anything, and a timeframe set up to disagree would quietly stop disagreeing.
+//
+// So each reading is evaluated at its own last close, through trendAt.
+//
+// The higher-timeframe close is deliberately not the base bar's close. A 4h
+// candle's close is not the 1m close inside it, and tying them together would
+// make it impossible to build the case this strategy exists for: a retracement
+// on the base timeframe that leaves the higher ones pointing the same way
+// throughout.
+func alignedHigher(index int, trendAt func(int) float64, rising bool) *models.TrendSnapshot {
+	timeframes := []struct {
+		timeframe constants.Timeframe
+		minutes   int
+	}{
+		{constants.Timeframe15m, 15},
+		{constants.Timeframe1h, 60},
+		{constants.Timeframe4h, 240},
+	}
+
+	readings := make([]models.TimeframeReading, 0, len(timeframes))
+	for _, entry := range timeframes {
+		// The most recent close of this timeframe at or before now, and the
+		// trend as it stood at that instant.
+		closedIndex := index / entry.minutes * entry.minutes
+		closedAt := seriesStart.Add(time.Duration(closedIndex) * time.Minute)
+		closePrice := trendAt(closedIndex)
+
+		// The EMA sits below the close in an uptrend and above it in a
+		// downtrend, so price-versus-average and the average's slope agree —
+		// which is what the direction rule requires of both.
+		ema := closePrice - 100
+		if !rising {
+			ema = closePrice + 100
+		}
+
+		price := decimal.NewFromFloat(closePrice)
+		readings = append(readings, models.TimeframeReading{
+			Timeframe: entry.timeframe,
+			Candle: models.Candle{
+				Symbol: "BTCUSDT", MarketType: constants.MarketTypeSpot,
+				Timeframe: entry.timeframe,
+				OpenTime:  closedAt.Add(-time.Duration(entry.minutes) * time.Minute),
+				CloseTime: closedAt,
+				Open:      price, High: price, Low: price, Close: price,
+				Volume: decimal.NewFromInt(10), IsClosed: true,
+			},
+			Indicators: models.IndicatorSnapshot{OpenTime: closedAt, EMA: ema, ATR: 100},
+			CloseTime:  closedAt,
+			Ready:      true,
+		})
+	}
+	return &models.TrendSnapshot{Readings: readings}
 }
 
 func flat() strategy.Position {
@@ -53,8 +130,8 @@ func allStrategies(t *testing.T) map[string]strategy.Strategy {
 		}
 		out[entry.Name] = built
 	}
-	if len(out) != 3 {
-		t.Fatalf("registry has %d strategies, want the three phase-06 requires", len(out))
+	if len(out) != 4 {
+		t.Fatalf("registry has %d strategies, want the four phase-06 requires", len(out))
 	}
 	return out
 }
@@ -171,10 +248,12 @@ func TestNoStrategyEntersWhileAPositionIsOpen(t *testing.T) {
 	for name, strat := range allStrategies(t) {
 		// Warm it up flat, then keep feeding it bars while holding a position.
 		for i := range 400 {
-			strat.OnBar(bar(i, 27000+float64(i%50), 50, 100, flat()))
+			strat.OnBar(barAligned(i, provokingTrend(i), 50, 100, flat(),
+				alignedHigher(i, provokingTrend, true)))
 		}
 		for i := 400; i < 500; i++ {
-			for _, intent := range strat.OnBar(bar(i, 27000+float64(i%50)*3, 25+float64(i%60), 100, held)) {
+			for _, intent := range strat.OnBar(barAligned(i, provokingTrend(i), 25+float64(i%60), 100, held,
+				alignedHigher(i, provokingTrend, true))) {
 				if intent.Kind == strategy.IntentEnterLong || intent.Kind == strategy.IntentEnterShort {
 					t.Errorf("%s asked to enter while a position was already open", name)
 				}
@@ -263,7 +342,7 @@ func TestLevelsAreATRScaledNotPercentage(t *testing.T) {
 
 // TestRegistryIsStableAndComplete.
 func TestRegistryIsStableAndComplete(t *testing.T) {
-	want := []string{"ema_crossover", "rsi_reversion", "trend_pullback"}
+	want := []string{"ema_crossover", "mtf_alignment", "rsi_reversion", "trend_pullback"}
 
 	names := _strategy_us.Names()
 	if len(names) != len(want) {
@@ -320,9 +399,49 @@ func TestBadConfigurationsAreRejected(t *testing.T) {
 	}
 }
 
+// provokingTrend is the slow trend underlying the provoking series, as a pure
+// function of bar index: flat, then up, then down, then up.
+//
+// A function rather than an accumulated variable because the higher-timeframe
+// readings have to be evaluated at *their* last close, which is behind the
+// current bar. An accumulator only knows where it is now.
+func provokingTrend(i int) float64 {
+	const (
+		warmup = 300
+		leg    = 1200
+		base   = 27000.0
+		step   = 4.0
+	)
+
+	switch {
+	case i < warmup:
+		return base
+	case i < warmup+leg:
+		return base + step*float64(i-warmup)
+	case i < warmup+2*leg:
+		return base + step*float64(leg) - step*float64(i-warmup-leg)
+	default:
+		return base + step*float64(i-warmup-2*leg)
+	}
+}
+
 // driveOverProvokingSeries feeds a strategy a series shaped to make each of
-// the three fire: a long warm-up, then a trending leg, a sharp reversal, and
-// an RSI excursion in both directions.
+// the four fire: a long warm-up, then a trending leg, a reversal, and an RSI
+// excursion in both directions.
+//
+// # Why the trend and the price are separate
+//
+// The first three strategies read one timeframe, so a monotonic ramp provokes
+// them. mtf_alignment needs something a ramp cannot express: a retracement on
+// the base timeframe *inside* a higher-timeframe trend that does not turn. So
+// the series carries a slow trend, which is what the higher timeframes report,
+// and a base price that oscillates around it — a rising market that pulls back
+// and resumes, repeatedly, which is the condition this strategy waits for.
+//
+// The legs are long because a 4h contributor only advances once every 240 base
+// bars and needs two of them before it has a slope at all. A shorter leg would
+// leave the dominant timeframe reporting flat throughout, and a strategy that
+// correctly declined every bar would look like one that was never driven.
 //
 // It returns every intent produced. The series is deliberately synthetic —
 // this checks the shape of what a strategy emits, never whether it is
@@ -330,39 +449,42 @@ func TestBadConfigurationsAreRejected(t *testing.T) {
 func driveOverProvokingSeries(strat strategy.Strategy) []strategy.Intent {
 	var intents []strategy.Intent
 
-	emit := func(i int, price, rsi, atr float64) {
-		intents = append(intents, strat.OnBar(bar(i, price, rsi, atr, flat()))...)
-	}
+	const (
+		warmup = 300
+		leg    = 1200
+	)
 
-	index := 0
-	price := 27000.0
+	for i := range warmup + 3*leg {
+		trend := provokingTrend(i)
 
-	// Warm-up: enough bars for the slowest strategy EMA (5 x 50 = 250).
-	for range 300 {
-		emit(index, price, 50, 100)
-		index++
-	}
-	// A rising leg, RSI climbing into overbought and back out.
-	for i := range 120 {
-		price += 30
-		emit(index, price, 50+float64(i), 100)
-		index++
-	}
-	// A fall back through the EMA, RSI into oversold and out again.
-	for i := range 200 {
-		price -= 25
-		rsi := 70 - float64(i)
-		if rsi < 5 {
-			rsi = 5 + float64(i%40)
+		price := trend
+		rsi := 50.0
+		rising := true
+
+		switch {
+		case i < warmup:
+			// Flat: nothing has a direction yet, and the strategies' own EMAs
+			// converge.
+		case i < warmup+leg:
+			price = trend + 400*math.Sin(2*math.Pi*float64(i-warmup)/80)
+			rsi = 50 + float64((i-warmup)%50)
+		case i < warmup+2*leg:
+			price = trend + 400*math.Sin(2*math.Pi*float64(i-warmup-leg)/80)
+			rising = false
+			rsi = 70 - float64((i-warmup-leg)%70)
+			if rsi < 5 {
+				rsi = 5 + float64(i%40)
+			}
+		default:
+			price = trend + 400*math.Sin(2*math.Pi*float64(i-warmup-2*leg)/80)
+			rsi = 45 + float64(i%30)
 		}
-		emit(index, price, rsi, 100)
-		index++
-	}
-	// A second rising leg, so pullback-then-resume has a chance to complete.
-	for i := range 200 {
-		price += 20
-		emit(index, price, 45+float64(i%30), 100)
-		index++
+
+		// Higher-timeframe readings travel with every bar. Without them a
+		// multi-timeframe strategy would decline every bar and the guarantees
+		// these tests exist to check would pass by never being exercised.
+		intents = append(intents, strat.OnBar(
+			barAligned(i, price, rsi, 100, flat(), alignedHigher(i, provokingTrend, rising)))...)
 	}
 	return intents
 }

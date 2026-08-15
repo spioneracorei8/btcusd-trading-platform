@@ -35,17 +35,18 @@ var updateGolden = flag.Bool("update", false, "rewrite the golden report")
 // changed and they have stopped being comparable with anything produced
 // afterwards.
 //
-// It has been regenerated twice, both times because a change added fields to
+// It has been regenerated three times, each because a change added fields to
 // the JSON document without touching what the engine computes:
 //
 //  1. maker fees and limit fills — 68 keys added
 //  2. the spread cost model — a further 67
+//  3. the trades-per-day frequency line — one more
 //
-// Both were checked field by field against the file as first committed. All
-// 135 keys are additions: **zero existing values changed, and none removed**.
-// The trades, the equity curve and every statistic are identical to the
-// original in both. Any future regeneration deserves the same check, and the
-// same sentence in its commit message.
+// All were checked field by field against the file as first committed. All 136
+// keys are additions: **zero existing values changed, and none removed**. The
+// trades, the equity curve and every statistic are identical to the original
+// in each. Any future regeneration deserves the same check, and the same
+// sentence in its commit message.
 const goldenPath = "testdata/golden/market-orders-baseline.json"
 
 // TestTheDefaultCostModelStillProducesTheRecordedResult.

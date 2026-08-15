@@ -158,6 +158,7 @@ type tradeStatsDoc struct {
 	LargestLoss         string   `json:"largest_loss"`
 	AverageHoldSeconds  int64    `json:"average_hold_seconds"`
 	LongestLosingStreak int      `json:"longest_losing_streak"`
+	TradesPerDay        float64  `json:"trades_per_day"`
 
 	// Fills by how they reached the book, and the signals that never became
 	// trades at all. The last one is the number to read first under a limit
@@ -302,6 +303,7 @@ func BuildDocument(result backtest.Result, stats Statistics) Document {
 			LargestLoss:         stats.LargestLoss.String(),
 			AverageHoldSeconds:  int64(stats.AverageHoldingTime / time.Second),
 			LongestLosingStreak: stats.LongestLosingStreak,
+			TradesPerDay:        stats.TradesPerDay,
 			MakerEntries:        result.MakerEntries,
 			TakerEntries:        result.TakerEntries,
 			MakerExits:          result.MakerExits,
