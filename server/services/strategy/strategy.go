@@ -67,6 +67,55 @@ type BarContext struct {
 
 	// Position is what the strategy is holding right now, flat included.
 	Position Position
+
+	// Higher is the reading of each timeframe a MultiTimeframe strategy asked
+	// for, and nil for every strategy that asked for none.
+	//
+	// # Why this is not look-ahead
+	//
+	// It is the one addition to this struct since phase 04, and it is safe for
+	// the same reason the trend filter's equivalent is: every reading in it
+	// comes from a candle whose close_time is at or before *this* bar's close.
+	// The aligner enforces that; the alignment tests assert on the CloseTime
+	// each reading carries. A strategy cannot reach a bar that had not closed
+	// because no such bar is ever put in here.
+	//
+	// A pointer, so that "asked for nothing" and "asked, and nothing was
+	// ready" are different values. A strategy that never declares
+	// RequiredTimeframes finds nil here and cannot read one by accident.
+	Higher *models.TrendSnapshot
+}
+
+// MultiTimeframe is a strategy whose entry condition needs more than its base
+// timeframe.
+//
+// # Why this is an optional interface rather than a change to Strategy
+//
+// Every existing strategy fires on a single condition on the base timeframe,
+// and none of them should have to answer a question about higher ones. Adding
+// a method to Strategy would force three implementations to return nil to say
+// "not applicable", and the engine could not then tell "declined" from
+// "forgot". A type assertion says it exactly: a strategy either declares this
+// or it does not exist as far as the aligner is concerned.
+//
+// # This is not a trend filter
+//
+// A filter is a veto applied to another strategy's signals, and its
+// contribution is measured by running with and without it. A strategy that
+// implements this has alignment as its *entry condition* — there is no
+// unfiltered counterpart to compare against, and asking for one is a category
+// error the CLI refuses rather than answers.
+type MultiTimeframe interface {
+	Strategy
+
+	// RequiredTimeframes lists the higher timeframes this strategy reads,
+	// shortest first. Every one of them appears in BarContext.Higher, ready or
+	// not — a strategy is told that a timeframe is cold rather than being
+	// handed a shorter list it might mistake for agreement.
+	//
+	// All must be strictly above the base timeframe. A contributor at or below
+	// the base is a look-ahead hazard the aligner refuses to build.
+	RequiredTimeframes() []constants.Timeframe
 }
 
 // Position is the open position at a decision point, or a flat one.

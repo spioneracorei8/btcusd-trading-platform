@@ -90,30 +90,18 @@ func (b BarContext) ViewFor(timeframe constants.Timeframe) (TimeframeView, bool)
 
 // TimeframeView is one higher timeframe's contribution at a decision point.
 //
+// It is an alias, not a copy. The type moved to models when a strategy — not
+// only a filter — needed to hold one, and a service interface file may import
+// models and constants only (CLAUDE.md §5, the same move that put
+// IndicatorSnapshot there). An alias rather than a second struct because two
+// structurally identical types with a conversion between them is exactly the
+// seam where a field gets added to one and forgotten in the other.
+//
 // CloseTime is not decoration. It is the evidence that this reading came from
 // a bar that had definitively closed, and the alignment tests assert on it: a
 // value whose CloseTime is after the decision instant is look-ahead, whatever
 // else looks right about it.
-type TimeframeView struct {
-	Timeframe constants.Timeframe
-
-	// Candle is the most recent candle of this timeframe whose close_time is
-	// at or before the decision instant.
-	Candle models.Candle
-
-	// Indicators are that candle's values, computed only from candles up to
-	// and including it.
-	Indicators models.IndicatorSnapshot
-
-	// CloseTime is Candle.CloseTime, lifted out so it can be asserted on
-	// without reaching through the candle.
-	CloseTime time.Time
-
-	// Ready is false while this timeframe is still warming up, or while it is
-	// recovering from a gap. A view that is not ready contributes nothing;
-	// it is not scored as neutral, it is not scored at all.
-	Ready bool
-}
+type TimeframeView = models.TimeframeReading
 
 // TimeframeState is one timeframe's scored contribution, reported alongside
 // the aggregate so a bias can be explained rather than merely stated.

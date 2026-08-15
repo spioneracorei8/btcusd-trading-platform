@@ -150,6 +150,25 @@ func run() int {
 	)
 
 	if opts.compare {
+		// --compare measures a filter's contribution by running the same
+		// strategy with and without it. A strategy whose entry condition is
+		// already multi-timeframe agreement has no unfiltered counterpart:
+		// removing the filter does not remove the alignment, so the two sides
+		// would differ by whatever second gate happened to be configured and
+		// the difference would be attributed to the wrong thing.
+		//
+		// Refused rather than answered. A comparison that means something
+		// different from what it says is worse than no comparison.
+		if multi, ok := strategyIsMultiTimeframe(opts, cfg); ok {
+			log.Error("--compare does not apply to this strategy",
+				"strategy", multi.Name(), "timeframes", multi.RequiredTimeframes())
+			must(fmt.Fprintf(os.Stderr,
+				"\n%s reads %v itself: alignment is its entry condition, not a veto\n"+
+					"applied to one. There is no unfiltered counterpart to compare it\n"+
+					"against — run it with --no-trend-filter and read its own numbers.\n\n",
+				multi.Name(), multi.RequiredTimeframes()))
+			return exitFailure
+		}
 		return runComparison(ctx, log, engine, candles, params, opts, cfg)
 	}
 
@@ -531,6 +550,54 @@ func attachTrendFilter(params *backtest.RunParams, candles candle.CandleUsecase)
 	return nil
 }
 
+// attachStrategyAligner gives a multi-timeframe strategy the readings it asked
+// for, and does nothing for any other strategy.
+//
+// # Why this does not reuse the trend filter's aligner
+//
+// The two answer different questions from different configurations: the filter
+// watches what ADR 0018's table says to watch from this base, while a
+// multi-timeframe strategy names its own contributors. More practically, such
+// a strategy is normally run with --no-trend-filter — alignment is already its
+// entry condition, and gating it again would be scoring the same evidence
+// twice — so sharing would leave it with nothing to read in exactly the
+// configuration it is meant to run in.
+func attachStrategyAligner(params *backtest.RunParams, candles candle.CandleUsecase) error {
+	multi, ok := params.Strategy.(strategy.MultiTimeframe)
+	if !ok {
+		return nil
+	}
+
+	higher := multi.RequiredTimeframes()
+	if len(higher) == 0 {
+		return fmt.Errorf("%s declares no timeframes to read", params.Strategy.Name())
+	}
+
+	// The same check the filter gets, for the same reason: without stored
+	// candles the aligner opens a cursor over an empty series, every reading
+	// stays cold, the strategy correctly declines every bar, and the run
+	// reports a clean zero rather than an error.
+	if err := requireCandles(*params, candles, higher); err != nil {
+		return err
+	}
+
+	aligner, err := _trend_us.NewAlignerImpl(_trend_us.AlignerConfig{
+		Symbol:     params.Symbol,
+		MarketType: params.MarketType,
+		Base:       params.Timeframe,
+		Higher:     higher,
+		From:       trendCursorStart(params, higher),
+		To:         params.To,
+		Indicators: _indicator_us.DefaultSetConfig(),
+	}, candles)
+	if err != nil {
+		return err
+	}
+
+	params.StrategyAligner = aligner
+	return nil
+}
+
 // requireCandles refuses a filter whose contributors have no stored data.
 //
 // Without this the run completes and reports nothing wrong: the aligner opens
@@ -788,6 +855,23 @@ func freshStrategy(opts options, cfg *config.Config) (strategy.Strategy, error) 
 	)
 }
 
+// strategyIsMultiTimeframe reports whether the selected strategy reads higher
+// timeframes of its own.
+//
+// It builds a throwaway instance rather than inspecting a name, so the answer
+// comes from the type rather than from a list that a new strategy could be
+// left off. A build failure here is not reported: whatever is wrong with the
+// strategy will be reported properly by the run itself a moment later, and
+// this question is only "is --compare meaningful".
+func strategyIsMultiTimeframe(opts options, cfg *config.Config) (strategy.MultiTimeframe, bool) {
+	strat, err := freshStrategy(opts, cfg)
+	if err != nil {
+		return nil, false
+	}
+	multi, ok := strat.(strategy.MultiTimeframe)
+	return multi, ok
+}
+
 // prepareRun returns params carrying state that belongs to this run alone.
 //
 // # Why every run goes through here
@@ -818,6 +902,7 @@ func prepareRun(
 	params.Strategy = nil
 	params.TrendFilter = nil
 	params.TrendAligner = nil
+	params.StrategyAligner = nil
 	params.TrendConfig = trend.Config{}
 
 	strat, err := freshStrategy(opts, cfg)
@@ -825,6 +910,14 @@ func prepareRun(
 		return backtest.RunParams{}, err
 	}
 	params.Strategy = strat
+
+	// A multi-timeframe strategy gets its own aligner, built from the
+	// timeframes it names rather than from the filter's table. It is rebuilt
+	// here with everything else stateful: an aligner may not rewind, so a
+	// second pass over the same range needs a second aligner.
+	if err := attachStrategyAligner(&params, candles); err != nil {
+		return backtest.RunParams{}, err
+	}
 
 	if withFilter {
 		err := attachTrendFilter(&params, candles)

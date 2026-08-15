@@ -347,6 +347,23 @@ type RunParams struct {
 	// contribution comes from a bar that had not closed.
 	TrendAligner trend.Aligner
 
+	// StrategyAligner supplies higher-timeframe readings to the strategy
+	// itself, and is non-nil only for a strategy.MultiTimeframe.
+	//
+	// # Why this is not TrendAligner
+	//
+	// They answer different questions and can be configured differently: the
+	// filter watches what ADR 0018's table says to watch from this base, while
+	// a multi-timeframe strategy names its own contributors. Sharing one
+	// aligner would mean whichever was configured first silently decided the
+	// other's inputs — and a run with --no-trend-filter, which is the normal
+	// way such a strategy is run, would leave the strategy with nothing.
+	//
+	// They are also advanced at different points in the bar: this one before
+	// the strategy decides, the filter's after, because a veto is applied to a
+	// decision that has already been made.
+	StrategyAligner trend.Aligner
+
 	// TrendUnavailable explains why no filter is attached, when the reason is
 	// that none could be built rather than that the operator declined one.
 	//

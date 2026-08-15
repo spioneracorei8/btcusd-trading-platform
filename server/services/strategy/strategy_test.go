@@ -92,6 +92,13 @@ func TestBarContextExposesNothingBeyondTheCurrentBar(t *testing.T) {
 		"Indicators": true,
 		// A copy of what is held. The engine owns the real position.
 		"Position": true,
+		// Higher-timeframe readings, for a MultiTimeframe strategy only, and
+		// nil for every other. Added deliberately in phase 06 (fix 12): every
+		// reading in it comes from a candle whose close_time is at or before
+		// this bar's close, which is the same guarantee the trend filter has
+		// had since phase 05 and is enforced by the same aligner. It is
+		// knowable at the moment the bar closes, so it belongs here.
+		"Higher": true,
 	}
 
 	contextType := reflect.TypeOf(strategy.BarContext{})

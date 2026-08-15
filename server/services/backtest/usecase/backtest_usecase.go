@@ -189,6 +189,48 @@ func validateParams(params backtest.RunParams) error {
 	if err := params.Sizing.Validate(); err != nil {
 		return err
 	}
+	if err := validateStrategyTimeframes(params); err != nil {
+		return err
+	}
+	return nil
+}
+
+// validateStrategyTimeframes refuses a multi-timeframe strategy that was given
+// nothing to read.
+//
+// Without this the run completes and reports nothing wrong: the strategy finds
+// a nil snapshot on every bar, correctly declines to trade on evidence it does
+// not have, and the result is a clean zero-trade run indistinguishable from
+// one whose rules never triggered. That is worse than an error, because it
+// produces a number.
+//
+// The contributors must also sit strictly above the base. One at or below it
+// would hand the strategy a bar covering time the base bar has not reached —
+// the phase-05 §1 hazard, arriving through the strategy instead of the filter.
+func validateStrategyTimeframes(params backtest.RunParams) error {
+	multi, ok := params.Strategy.(strategy.MultiTimeframe)
+	if !ok {
+		return nil
+	}
+
+	if params.StrategyAligner == nil {
+		return fmt.Errorf(
+			"backtest: %s reads higher timeframes and was given no aligner; "+
+				"it would decline every bar and report a zero-trade run",
+			params.Strategy.Name())
+	}
+
+	for _, timeframe := range multi.RequiredTimeframes() {
+		if !timeframe.Valid() {
+			return fmt.Errorf("backtest: %s requires %q, which is not a timeframe",
+				params.Strategy.Name(), timeframe)
+		}
+		if timeframe.Duration() <= params.Timeframe.Duration() {
+			return fmt.Errorf(
+				"backtest: %s requires %s, which is not above the %s base",
+				params.Strategy.Name(), timeframe, params.Timeframe)
+		}
+	}
 	return nil
 }
 
@@ -384,11 +426,17 @@ func (r *runner) onCandle(bar models.Candle) error {
 	r.markEquity(bar)
 
 	// 5. Only now does the strategy see the bar, with the position state as
-	//    it stands after everything above.
+	//    it stands after everything above, and — for a multi-timeframe
+	//    strategy — the higher-timeframe readings that had closed by now.
+	higher, err := r.higherReadings(ctx, bar)
+	if err != nil {
+		return err
+	}
 	r.pending = r.params.Strategy.OnBar(strategy.BarContext{
 		Candle:     bar,
 		Indicators: snapshot,
 		Position:   r.positionView(),
+		Higher:     higher,
 	})
 	r.pendingATR = snapshot.ATR
 	r.pendingClose = bar.Close
@@ -853,6 +901,29 @@ func (r *runner) fill(result *backtest.Result) {
 // Exits are never vetoed. A filter that could trap a position in the market
 // would be making a trading decision, and this one is only allowed to refuse
 // entries.
+// higherReadings advances the strategy's own aligner to this bar's close.
+//
+// It returns nil for every strategy that did not ask for higher timeframes,
+// which is what keeps BarContext.Higher unreadable by accident: a strategy
+// that never declared RequiredTimeframes cannot find anything there.
+//
+// The instant passed to the aligner is the base bar's close_time — the moment
+// the decision is being made — so a higher-timeframe candle becomes visible
+// only once its own close_time is at or before it. That is the whole of the
+// phase-05 §1 rule, and it is enforced here by there being no other way to
+// obtain a reading.
+func (r *runner) higherReadings(ctx context.Context, bar models.Candle) (*models.TrendSnapshot, error) {
+	if r.params.StrategyAligner == nil {
+		return nil, nil
+	}
+
+	readings, err := r.params.StrategyAligner.Advance(ctx, bar.CloseTime)
+	if err != nil {
+		return nil, fmt.Errorf("advance the strategy's timeframes: %w", err)
+	}
+	return &models.TrendSnapshot{Readings: readings}, nil
+}
+
 func (r *runner) applyTrendVeto(ctx context.Context, bar models.Candle, snapshot models.IndicatorSnapshot) error {
 	if !r.params.Filtered() {
 		return nil
