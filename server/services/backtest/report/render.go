@@ -51,6 +51,16 @@ func WriteSummary(w io.Writer, result backtest.Result, stats Statistics) error {
 
 	b.WriteString("\nTRADES\n")
 	line(&b, "count", fmt.Sprintf("%d  (%d won, %d lost)", stats.TradeCount, stats.WinCount, stats.LossCount))
+
+	// A run that took no trades has no performance to describe, and every
+	// ratio below would be computed from an empty set. Said here rather than
+	// left to be inferred from a row of zeroes and n/a.
+	if stats.TradeCount == 0 {
+		b.WriteString("\n  *** THIS RUN TOOK NO TRADES ***\n")
+		b.WriteString("  Nothing below describes a strategy. Check the filter and gap lines\n")
+		b.WriteString("  above: a run that was fully vetoed or never warmed up reports the\n")
+		b.WriteString("  same empty result as one whose rules never triggered.\n")
+	}
 	line(&b, "win rate", fmt.Sprintf("%.2f%%", stats.WinRate*100))
 	line(&b, "profit factor", formatFloat(stats.ProfitFactor))
 	line(&b, "average win / loss", fmt.Sprintf("%s / %s %s",
@@ -140,7 +150,14 @@ func writeHeader(b *strings.Builder, result backtest.Result, stats Statistics) {
 	// The filter is part of what produced the numbers, so it belongs in the
 	// header beside the strategy rather than in a footnote.
 	if result.TrendFilterName == "" {
-		line(b, "trend filter", "none (unfiltered)")
+		// "none" alone reads as a choice. When the filter was wanted and could
+		// not be built, that is a limit of the collected data and a different
+		// finding entirely.
+		if result.TrendUnavailable != "" {
+			line(b, "trend filter", fmt.Sprintf("none (%s)", result.TrendUnavailable))
+		} else {
+			line(b, "trend filter", "none (unfiltered)")
+		}
 	} else {
 		line(b, "trend filter", fmt.Sprintf("%s %s", result.TrendFilterName, result.TrendFilterVersion))
 		line(b, "  configuration", result.TrendFilterConfig)

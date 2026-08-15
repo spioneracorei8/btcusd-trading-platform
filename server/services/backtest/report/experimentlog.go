@@ -2,6 +2,7 @@ package report
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -244,14 +245,28 @@ func renderExperiment(entry ExperimentEntry) string {
 }
 
 // formatProfitFactor keeps an undefined profit factor legible.
+//
+// The three cases are genuinely different and were previously conflated:
+//
+//   - NaN means there were no trades, so there is no ratio. It read as "inf"
+//     here, which in a permanent log invites being taken months later for an
+//     extraordinary result rather than an empty set. That is what the 4h runs
+//     recorded.
+//   - +Inf means trades happened and none of them lost. Rare, real, and worth
+//     distinguishing from the above.
+//   - Zero means gross profit was zero against real losses. That is a result,
+//     not a missing value, and it was previously printed as "n/a".
 func formatProfitFactor(value float64) string {
-	if value == 0 {
-		return "n/a"
+	switch {
+	case math.IsNaN(value):
+		return "n/a (no trades)"
+	case math.IsInf(value, 1):
+		return "inf (no losing trades)"
+	case math.IsInf(value, -1):
+		return "-inf"
+	default:
+		return strconv.FormatFloat(value, 'f', 2, 64)
 	}
-	if value != value || value > 1e6 {
-		return "inf"
-	}
-	return strconv.FormatFloat(value, 'f', 2, 64)
 }
 
 // thousands groups an integer, matching the hand-written entries.

@@ -1,6 +1,7 @@
 package trend
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/spioneracorei8/btcusd-trading-platform/server/constants"
@@ -118,14 +119,51 @@ var defaultContributors = []struct {
 	{constants.Timeframe1h, []constants.Timeframe{
 		constants.Timeframe4h}},
 
-	// A 4h base keeps 1d, because it has nothing else above it and 4h is not a
-	// base anything is evaluated on today. The same warm-up cost applies, and
-	// it will announce itself the same way if that changes.
-	{constants.Timeframe4h, []constants.Timeframe{
-		constants.Timeframe1d}},
+	// 4h has no usable contributor. 1d is the only thing above it and cannot
+	// warm up over the collected history, so the row is empty rather than
+	// hopeful: an entry here produced 100% not-ready and zero trades across
+	// all three strategies, which is the same defect that removed 1d from the
+	// 15m and 1h rows one shelf down.
+	//
+	// An empty row means "run unfiltered", not "refuse to run". See
+	// ErrNoUsableContributor.
+	{constants.Timeframe4h, nil},
 
-	// 1d has nothing above it. That is a hard error rather than an empty
-	// filter, and it is a real case rather than a theoretical one.
+	// 1d has nothing above it at all, and is absent for that reason. It
+	// resolves the same way: unfiltered.
+}
+
+// ErrNoUsableContributor means the filter cannot be built for a base, and the
+// run should proceed without one.
+//
+// # Why this is not an error the caller should give up on
+//
+// Round two made a base with nothing above it a hard error. That was right
+// when the alternative was a filter that silently gated on nothing. It is
+// wrong when the alternative is not running the experiment at all: the 4h
+// column of the evaluation is empty because three strategies refused to run
+// there, and an unmeasured cell in an otherwise monotonic series is exactly
+// where guessing is least defensible.
+//
+// So the caller drops the filter and says so. The distinction that matters in
+// the report is between a filter the operator turned off and one that was
+// never available — the first is a choice, the second is a limit of the data.
+var ErrNoUsableContributor = errors.New("trend: no usable contributor")
+
+// DefaultBases lists every base timeframe the default table has an opinion
+// about, in table order.
+//
+// It exists so a test can check the table rather than a list of bases somebody
+// remembered to keep in step with it. The warm-up test originally enumerated
+// four bases by hand and silently stopped covering the table when a fifth row
+// was added — which is how a 4h base shipped with a contributor that could
+// never warm up.
+func DefaultBases() []constants.Timeframe {
+	out := make([]constants.Timeframe, 0, len(defaultContributors))
+	for _, entry := range defaultContributors {
+		out = append(out, entry.Base)
+	}
+	return out
 }
 
 // defaultWeights are the shares, shortest contributor first, for a set of the
@@ -173,6 +211,11 @@ func DefaultConfigFor(base constants.Timeframe) (Config, error) {
 		if entry.Base != base {
 			continue
 		}
+		if len(entry.Higher) == 0 {
+			return Config{}, fmt.Errorf(
+				"%w: nothing above %s can warm up over the collected history",
+				ErrNoUsableContributor, base)
+		}
 
 		weights := defaultWeights(len(entry.Higher))
 		config := Config{DeadZone: DefaultConfig().DeadZone}
@@ -184,9 +227,8 @@ func DefaultConfigFor(base constants.Timeframe) (Config, error) {
 	}
 
 	return Config{}, fmt.Errorf(
-		"trend: no default contributors for a %s base; nothing this system collects "+
-			"closes less often than %s, so a trend filter has nothing to read there",
-		base, base)
+		"%w: nothing this system collects closes less often than %s",
+		ErrNoUsableContributor, base)
 }
 
 // Timeframes lists the configured contributors, in configuration order.
@@ -280,10 +322,8 @@ func (c Config) ForBase(base constants.Timeframe) (Config, error) {
 
 	if len(adapted.Weights) == 0 {
 		return Config{}, fmt.Errorf(
-			"trend: no configured contributor (%s) closes less often than the base timeframe %s; "+
-				"a filter with nothing above the base cannot contribute anything, and pretending "+
-				"to filter is worse than not filtering",
-			describeTimeframes(c.Timeframes()), base)
+			"%w: no configured contributor (%s) closes less often than %s",
+			ErrNoUsableContributor, describeTimeframes(c.Timeframes()), base)
 	}
 
 	// Rescale to the total the caller configured, so the filter's influence is

@@ -787,7 +787,15 @@ func prepareRun(
 	params.Strategy = strat
 
 	if withFilter {
-		if err := attachTrendFilter(&params, candles); err != nil {
+		err := attachTrendFilter(&params, candles)
+		switch {
+		case errors.Is(err, trend.ErrNoUsableContributor):
+			// Run, unfiltered, and say why. Refusing here would leave the cell
+			// unmeasured, and an unmeasured cell in an otherwise monotonic
+			// series is where guessing is least defensible.
+			params.TrendUnavailable = fmt.Sprintf(
+				"no contributor above %s can warm up over this range", params.Timeframe)
+		case err != nil:
 			return backtest.RunParams{}, err
 		}
 	}

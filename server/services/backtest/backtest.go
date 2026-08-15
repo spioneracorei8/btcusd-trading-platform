@@ -282,6 +282,14 @@ type RunParams struct {
 	// contribution comes from a bar that had not closed.
 	TrendAligner trend.Aligner
 
+	// TrendUnavailable explains why no filter is attached, when the reason is
+	// that none could be built rather than that the operator declined one.
+	//
+	// The two read identically in a header otherwise, and they are not the
+	// same finding: one is a choice about the experiment, the other is a limit
+	// of the collected data.
+	TrendUnavailable string
+
 	// TrendConfig is recorded in the report. A filter version says which code
 	// scored the run; the configuration says what it scored with, and two runs
 	// of the same version under different weights are not comparable.
@@ -463,6 +471,10 @@ type Result struct {
 	TrendFilterName    string
 	TrendFilterVersion string
 	TrendFilterConfig  string
+
+	// TrendUnavailable explains an absent filter that was wanted but could not
+	// be built, as distinct from one the operator turned off.
+	TrendUnavailable string
 
 	Trades []Trade
 	Equity []EquityPoint

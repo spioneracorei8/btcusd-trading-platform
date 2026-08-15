@@ -1,6 +1,7 @@
 package trend_test
 
 import (
+	"errors"
 	"math"
 	"strings"
 	"testing"
@@ -29,7 +30,6 @@ func TestEachBaseResolvesToItsDocumentedContributors(t *testing.T) {
 		{constants.Timeframe5m, "15m,1h,4h"},
 		{constants.Timeframe15m, "1h,4h"},
 		{constants.Timeframe1h, "4h"},
-		{constants.Timeframe4h, "1d"},
 	} {
 		config, err := trend.DefaultConfigFor(testCase.base)
 		if err != nil {
@@ -81,16 +81,26 @@ func TestTheOneMinuteBaseIsByteIdenticalToBefore(t *testing.T) {
 	}
 }
 
-// TestADailyBaseHasNothingAboveIt. Still a hard error, and now a real case
-// rather than a theoretical one: 1d is the slowest timeframe this system
-// collects.
-func TestADailyBaseHasNothingAboveIt(t *testing.T) {
-	_, err := trend.DefaultConfigFor(constants.Timeframe1d)
-	if err == nil {
-		t.Fatal("a 1d base resolved to a contributor set")
-	}
-	if !strings.Contains(err.Error(), "1d") {
-		t.Errorf("the error does not name the base: %v", err)
+// TestABaseWithNoUsableContributorSaysSoRatherThanFailing.
+//
+// Round two made this a hard error, which was right when the alternative was a
+// filter that silently gated on nothing. It is wrong when the alternative is
+// not running the experiment: three strategies refused to run at 4h and left
+// the one cell that could say whether the monotonic trend continues unmeasured.
+//
+// Both 4h and 1d resolve this way — 4h because 1d cannot warm up above it, 1d
+// because nothing is above it at all.
+func TestABaseWithNoUsableContributorSaysSoRatherThanFailing(t *testing.T) {
+	for _, base := range []constants.Timeframe{
+		constants.Timeframe4h, constants.Timeframe1d,
+	} {
+		_, err := trend.DefaultConfigFor(base)
+		if !errors.Is(err, trend.ErrNoUsableContributor) {
+			t.Errorf("DefaultConfigFor(%s) returned %v, want ErrNoUsableContributor", base, err)
+		}
+		if err != nil && !strings.Contains(err.Error(), base.String()) {
+			t.Errorf("the %s message does not name the base: %v", base, err)
+		}
 	}
 }
 
@@ -98,11 +108,11 @@ func TestADailyBaseHasNothingAboveIt(t *testing.T) {
 // 05 §1 applies to the table itself: an entry that listed a contributor at or
 // below its base would be a hazard shipped as a default.
 func TestEveryContributorIsStrictlyAboveItsBase(t *testing.T) {
-	for _, base := range []constants.Timeframe{
-		constants.Timeframe1m, constants.Timeframe5m, constants.Timeframe15m,
-		constants.Timeframe1h, constants.Timeframe4h,
-	} {
+	for _, base := range trend.DefaultBases() {
 		config, err := trend.DefaultConfigFor(base)
+		if errors.Is(err, trend.ErrNoUsableContributor) {
+			continue
+		}
 		if err != nil {
 			t.Fatalf("DefaultConfigFor(%s) returned error: %v", base, err)
 		}
@@ -175,7 +185,6 @@ func TestASingleContributorTakesTheWholeWeight(t *testing.T) {
 		contributor constants.Timeframe
 	}{
 		{constants.Timeframe1h, constants.Timeframe4h},
-		{constants.Timeframe4h, constants.Timeframe1d},
 	} {
 		config, err := trend.DefaultConfigFor(testCase.base)
 		if err != nil {
@@ -216,13 +225,31 @@ func TestEveryContributorCanWarmUpBeforeTheDevelopmentSet(t *testing.T) {
 	// system does not have.
 	budget := backtest.DevFrom.Sub(earliestCollected)
 
-	for _, base := range []constants.Timeframe{
-		constants.Timeframe1m, constants.Timeframe5m,
-		constants.Timeframe15m, constants.Timeframe1h,
-	} {
+	// Every base in the table, taken from the table.
+	//
+	// This originally listed four bases by hand. A fifth row was added and the
+	// test went on covering four, so a 4h base shipped with a contributor that
+	// could never warm up — 100% not-ready and zero trades across all three
+	// strategies, in the one cell the evaluation most needed measured. A test
+	// that enumerates what it checks will always lag the thing it checks.
+	bases := trend.DefaultBases()
+	if len(bases) == 0 {
+		t.Fatal("the default table is empty; this test is checking nothing")
+	}
+
+	for _, base := range bases {
 		config, err := trend.DefaultConfigFor(base)
+		if errors.Is(err, trend.ErrNoUsableContributor) {
+			// A base with no contributor is a legitimate answer: it runs
+			// unfiltered. What it must not be is a contributor that cannot
+			// warm up, which is what the loop below checks.
+			continue
+		}
 		if err != nil {
 			t.Fatalf("DefaultConfigFor(%s) returned error: %v", base, err)
+		}
+		if len(config.Weights) == 0 {
+			t.Errorf("base %s resolved to an empty filter without saying so", base)
 		}
 
 		for _, weight := range config.Weights {

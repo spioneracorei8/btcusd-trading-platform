@@ -779,6 +779,7 @@ func (r *runner) fill(result *backtest.Result) {
 	result.AmbiguousBars = r.ambiguousBars
 	result.FirstBar = r.firstBar
 	result.LastBar = r.lastBar
+	result.TrendUnavailable = r.params.TrendUnavailable
 	result.MakerEntries = r.makerEntries
 	result.TakerEntries = r.takerEntries
 	result.MakerExits = r.makerExits

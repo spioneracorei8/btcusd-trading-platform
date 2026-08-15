@@ -107,6 +107,12 @@ func Compute(result backtest.Result) Statistics {
 		AmbiguousBars:     result.AmbiguousBars,
 		TradeCount:        len(result.Trades),
 		Sharpe:            math.NaN(),
+		// NaN, not zero and not infinity. A profit factor is gross profit over
+		// gross loss; with no trades there is neither, and `inf` in a log
+		// invites being read months later as an extraordinary result rather
+		// than as an empty set. Sharpe has been NaN for the same reason since
+		// phase 04.
+		ProfitFactor: math.NaN(),
 	}
 
 	if len(result.Equity) > 0 {
