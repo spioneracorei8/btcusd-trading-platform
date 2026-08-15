@@ -4,10 +4,19 @@ import (
 	"math"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/spioneracorei8/btcusd-trading-platform/server/constants"
+	"github.com/spioneracorei8/btcusd-trading-platform/server/services/backtest"
+	_indicator_us "github.com/spioneracorei8/btcusd-trading-platform/server/services/indicator/usecase"
 	"github.com/spioneracorei8/btcusd-trading-platform/server/services/trend"
 )
+
+// earliestCollected is the oldest candle this deployment has. It is the
+// MARKET_BACKFILL_FROM in .env.example, which is also where the development
+// set begins — so in practice a contributor has no warm-up runway at all
+// unless its series was backfilled earlier on purpose.
+var earliestCollected = time.Date(2022, 7, 1, 0, 0, 0, 0, time.UTC)
 
 // TestEachBaseResolvesToItsDocumentedContributors is the table from the fix,
 // written out so a change to it has to be deliberate.
@@ -18,8 +27,8 @@ func TestEachBaseResolvesToItsDocumentedContributors(t *testing.T) {
 	}{
 		{constants.Timeframe1m, "5m,15m,1h"},
 		{constants.Timeframe5m, "15m,1h,4h"},
-		{constants.Timeframe15m, "1h,4h,1d"},
-		{constants.Timeframe1h, "4h,1d"},
+		{constants.Timeframe15m, "1h,4h"},
+		{constants.Timeframe1h, "4h"},
 		{constants.Timeframe4h, "1d"},
 	} {
 		config, err := trend.DefaultConfigFor(testCase.base)
@@ -141,34 +150,92 @@ func TestTheHighestContributorCarriesTheMostWeight(t *testing.T) {
 }
 
 // TestTheProportionsAreTheSameWhateverTheBase. A two-contributor set is the
-// top of the three-contributor one renormalised, so 1d:4h is the same 5:3 that
-// 1h:15m is at a 1m base.
+// top of the three-contributor one renormalised, so 4h:1h at a 15m base is the
+// same 5:3 that 1h:15m is at a 1m base.
 func TestTheProportionsAreTheSameWhateverTheBase(t *testing.T) {
-	oneHour, err := trend.DefaultConfigFor(constants.Timeframe1h)
+	fifteen, err := trend.DefaultConfigFor(constants.Timeframe15m)
 	if err != nil {
-		t.Fatalf("DefaultConfigFor(1h) returned error: %v", err)
+		t.Fatalf("DefaultConfigFor(15m) returned error: %v", err)
 	}
-	if len(oneHour.Weights) != 2 {
-		t.Fatalf("the 1h base has %d contributors, want 2", len(oneHour.Weights))
+	if len(fifteen.Weights) != 2 {
+		t.Fatalf("the 15m base has %d contributors, want 2", len(fifteen.Weights))
 	}
 
-	ratio := oneHour.Weights[1].Weight / oneHour.Weights[0].Weight
+	ratio := fifteen.Weights[1].Weight / fifteen.Weights[0].Weight
 	if math.Abs(ratio-5.0/3.0) > 1e-9 {
-		t.Errorf("1d:4h is %v, want the 5:3 the shipped weights use", ratio)
+		t.Errorf("4h:1h is %v, want the 5:3 the shipped weights use", ratio)
 	}
 }
 
 // TestASingleContributorTakesTheWholeWeight, so a 4h base is not a filter
 // running at half strength without saying so.
 func TestASingleContributorTakesTheWholeWeight(t *testing.T) {
-	config, err := trend.DefaultConfigFor(constants.Timeframe4h)
-	if err != nil {
-		t.Fatalf("DefaultConfigFor(4h) returned error: %v", err)
+	for _, testCase := range []struct {
+		base        constants.Timeframe
+		contributor constants.Timeframe
+	}{
+		{constants.Timeframe1h, constants.Timeframe4h},
+		{constants.Timeframe4h, constants.Timeframe1d},
+	} {
+		config, err := trend.DefaultConfigFor(testCase.base)
+		if err != nil {
+			t.Fatalf("DefaultConfigFor(%s) returned error: %v", testCase.base, err)
+		}
+		if len(config.Weights) != 1 {
+			t.Fatalf("the %s base has %d contributors, want 1", testCase.base, len(config.Weights))
+		}
+		if config.Weights[0].Timeframe != testCase.contributor {
+			t.Errorf("the %s base uses %s, want %s",
+				testCase.base, config.Weights[0].Timeframe, testCase.contributor)
+		}
+		if math.Abs(config.Weights[0].Weight-1) > 1e-9 {
+			t.Errorf("%s carries %v of a %s filter, want all of it",
+				testCase.contributor, config.Weights[0].Weight, testCase.base)
+		}
 	}
-	if len(config.Weights) != 1 {
-		t.Fatalf("the 4h base has %d contributors, want 1", len(config.Weights))
-	}
-	if math.Abs(config.Weights[0].Weight-1) > 1e-9 {
-		t.Errorf("1d carries %v of a 4h filter, want all of it", config.Weights[0].Weight)
+}
+
+// TestEveryContributorCanWarmUpBeforeTheDevelopmentSet is the reason 1d is not
+// in the 15m or 1h rows.
+//
+// The filter says nothing until every contributor has seen
+// WarmupMultiplier × EMAPeriod closes, and the aligner starts its cursors that
+// far before the range. A contributor whose warm-up reaches back further than
+// the collected history can never become ready, and a filter that is never
+// ready blocks every entry — which is not a conservative filter, it is a
+// broken one that reports zero trades and no reason.
+//
+// MARKET_BACKFILL_FROM is the development-set start, so the warm-up has to fit
+// between the earliest collectable candle and there. This asserts the table
+// against that budget rather than against anyone remembering to check.
+func TestEveryContributorCanWarmUpBeforeTheDevelopmentSet(t *testing.T) {
+	warmupCloses := constants.WarmupMultiplier * _indicator_us.DefaultSetConfig().EMAPeriod
+
+	// How far back candles actually exist. Collection starts at the
+	// development-set boundary, so anything earlier than this is history the
+	// system does not have.
+	budget := backtest.DevFrom.Sub(earliestCollected)
+
+	for _, base := range []constants.Timeframe{
+		constants.Timeframe1m, constants.Timeframe5m,
+		constants.Timeframe15m, constants.Timeframe1h,
+	} {
+		config, err := trend.DefaultConfigFor(base)
+		if err != nil {
+			t.Fatalf("DefaultConfigFor(%s) returned error: %v", base, err)
+		}
+
+		for _, weight := range config.Weights {
+			required := time.Duration(warmupCloses) * weight.Timeframe.Duration()
+			if required > budget {
+				t.Errorf(
+					"the %s base uses %s, which needs %.0f days of warm-up before the "+
+						"development set begins — only %.0f days of history exist.\n"+
+						"A filter that cannot warm up blocks every entry and reports zero "+
+						"trades. If the daily series is ever backfilled further, this test "+
+						"is what says the contributor may come back.",
+					base, weight.Timeframe, required.Hours()/24, budget.Hours()/24)
+			}
+		}
 	}
 }

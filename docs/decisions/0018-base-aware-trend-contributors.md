@@ -24,15 +24,17 @@ Two ways out were considered.
 |---|---|
 | 1m | 5m, 15m, 1h |
 | 5m | 15m, 1h, 4h |
-| 15m | 1h, 4h, 1d |
-| 1h | 4h, 1d |
+| 15m | 1h, 4h |
+| 1h | 4h |
 | 4h | 1d |
 | 1d | error — nothing above it |
 
 Weights keep the shipped proportions: the three-contributor sets are
 0.2/0.3/0.5 shortest-first, and shorter sets are the heaviest end of that
-renormalised to 1. So 1d:4h at a 1h base is the same 5:3 that 1h:15m is at a 1m
-base, and the slowest contributor is always the strongest voice.
+renormalised to 1. So 4h:1h at a 15m base is the same 5:3 that 1h:15m is at a
+1m base, and the slowest contributor is always the strongest voice. A set with
+one contributor gives it the whole weight, so a 1h filter is not running at
+half strength without saying so.
 
 ## Why not one shared list with 4h and 1d added
 
@@ -67,6 +69,35 @@ admitting a look-ahead hazard. A test asserts it drops nothing today.
 The phase 05 §1 look-ahead rule is unchanged and stays enforced for every
 surviving contributor by the aligner.
 
+## Amended 2026-08-15: 1d removed from the 15m and 1h rows
+
+As first written this ADR gave 15m the set 1h/4h/1d and 1h the set 4h/1d. Both
+were wrong for a reason the next section had already worked out and the table
+had not absorbed: **1d cannot warm up in time.**
+
+The filter says nothing until every contributor has seen 1000 closes, and the
+aligner starts its cursors that far before the range. For a daily contributor
+that is 2.7 years *before* the range begins — earlier than any candle this
+deployment has. The observed result was a filtered 1h run reporting
+`bars not ready: 100.00%` and zero trades. A filter that blocks everything is
+not a conservative filter; it is a broken one that produces a run with no
+trades and no stated reason.
+
+4h needs 1000 × 4h = 167 days, which the collected history covers.
+
+**1d was removed because of the warm-up budget, not because a daily trend says
+nothing.** It is the strongest trend signal available and it is the one this
+system cannot currently afford. If the daily series is ever backfilled to
+2020-04-06 or earlier, it belongs back in those rows.
+`TestEveryContributorCanWarmUpBeforeTheDevelopmentSet` is what enforces the
+budget: it fails if a contributor is added whose warm-up reaches further back
+than the collected history, and it is the thing that will say the daily
+contributor may return.
+
+A 4h base keeps 1d, since it has nothing else above it and 4h is not a base
+anything is evaluated on today. The same cost applies there and will announce
+itself the same way.
+
 ## Consequence: the slowest contributor sets the warm-up, and it is long
 
 The filter says nothing until every contributor is warm. Warm-up is
@@ -79,27 +110,26 @@ In wall-clock time that is:
 | 4h | ~167 days |
 | 1d | ~2.7 years |
 
-So a **1h base cannot be filtered over the development set as things stand**.
-Running from 2023-01-01 needs 4h candles from 2022-07-19 and 1d candles from
-**2020-04-06**; `MARKET_BACKFILL_FROM` is 2023-01-01, so the 1d series is far
-too short, the filter never becomes ready, and every entry is blocked. This was
-observed, not predicted: a filtered 1h run reports 100% of bars not-ready and
-zero trades.
+This is what drove the amendment above. Running from 2023-01-01 needs 4h
+candles from 2022-07-19 — affordable — and 1d candles from **2020-04-06**,
+which is not. With 1d in the set the filter never became ready and every entry
+was blocked. This was observed, not predicted.
 
 This is a data problem rather than a code one, and the code now says so — the
 CLI refuses to build a filter whose contributors have no stored candles, naming
 the timeframe and pointing at `MARKET_TIMEFRAMES`, instead of running to
 completion and reporting a filtered result that filtered nothing.
 
-Three ways forward, none of them taken here because they are evaluation
+The third option below was taken. The other two remain open and are evaluation
 decisions rather than code ones:
 
-- backfill 1d (and 4h) far enough — Binance has BTCUSDT daily candles from 2017,
-  so this is collection, not availability
+- **taken:** use only contributors that warm up inside the collected history —
+  4h at a 15m or 1h base, which needs 167 days
+- backfill 1d far enough — Binance has BTCUSDT daily candles from 2017, so this
+  is collection, not availability, and it is what would let 1d come back
 - accept a shorter warm-up for slow contributors, which means deciding what
   `WarmupMultiplier` means for a 1d EMA(200) — a parameter change, and those
   are made deliberately and separately
-- use a 15m or 1h base with only 4h as a contributor, which warms in 167 days
 
 ## Consequences
 

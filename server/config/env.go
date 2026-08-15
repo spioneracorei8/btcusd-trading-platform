@@ -11,7 +11,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/url"
-	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -98,23 +97,59 @@ type Config struct {
 	Database Database
 	Market   Market
 	Notify   Notify
+
+	// EnvFile is the .env that filled any gaps in the environment, or empty
+	// when none was found. Reported so a run can say where its configuration
+	// came from — "which .env did this actually read" is otherwise guesswork.
+	EnvFile string
 }
 
-// Load reads the configuration from the process environment.
-func Load() (*Config, error) {
-	return LoadFrom(os.LookupEnv)
+// Option narrows what a process requires.
+//
+// The three binaries share this configuration but not all of its obligations:
+// the backtest CLI opens no socket, and demanding a listen port from it turned
+// a read-only analysis tool into something that refused to start over a
+// setting it would never use.
+type Option func(*settings)
+
+type settings struct{ servesHTTP bool }
+
+// WithoutHTTPServer relaxes HTTP_PORT for a process that never listens.
+func WithoutHTTPServer() Option {
+	return func(s *settings) { s.servesHTTP = false }
+}
+
+// Load reads the configuration from the process environment, after loading a
+// .env file if one is found nearby.
+func Load(opts ...Option) (*Config, error) {
+	lookup, envFile, err := dotEnvLookup()
+	if err != nil {
+		return nil, err
+	}
+
+	cfg, err := LoadFrom(lookup, opts...)
+	if err != nil {
+		return nil, err
+	}
+	cfg.EnvFile = envFile
+	return cfg, nil
 }
 
 // LoadFrom reads the configuration through lookup. It exists so tests can
 // supply an environment without mutating the process one.
-func LoadFrom(lookup helper.LookupFunc) (*Config, error) {
+func LoadFrom(lookup helper.LookupFunc, opts ...Option) (*Config, error) {
+	set := settings{servesHTTP: true}
+	for _, opt := range opts {
+		opt(&set)
+	}
+
 	l := &loader{lookup: lookup}
 
 	cfg := &Config{
 		App: App{
 			Env:      l.appEnv("APP_ENV"),
 			LogLevel: l.logLevel("LOG_LEVEL"),
-			HTTPPort: l.requiredPort("HTTP_PORT"),
+			HTTPPort: l.port("HTTP_PORT", set.servesHTTP),
 		},
 		Database: Database{
 			URL:            l.requiredString("DATABASE_URL"),
@@ -213,10 +248,16 @@ func (l *loader) appEnv(key string) constants.AppEnv {
 	return env
 }
 
-func (l *loader) requiredPort(key string) int {
+// port reads a listen port. When the process serves no HTTP it is optional,
+// but a value that is present must still be valid: a typo in a variable this
+// process ignores is worth reporting, and silently accepting nonsense here
+// would make the same .env behave differently for the api.
+func (l *loader) port(key string, required bool) int {
 	v, ok := l.get(key)
 	if !ok {
-		l.missing = append(l.missing, key)
+		if required {
+			l.missing = append(l.missing, key)
+		}
 		return 0
 	}
 	n, err := strconv.Atoi(v)

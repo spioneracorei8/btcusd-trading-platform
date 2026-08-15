@@ -93,7 +93,10 @@ func run() int {
 		return exitUsage
 	}
 
-	cfg, err := config.Load()
+	// The CLI opens no socket, so HTTP_PORT is none of its business. It also
+	// loads the repository .env itself, which is what stops every invocation
+	// having to be preceded by sourcing the same file.
+	cfg, err := config.Load(config.WithoutHTTPServer())
 	if err != nil {
 		slog.Error("invalid configuration", "error", err)
 		return exitUsage
@@ -104,6 +107,14 @@ func run() int {
 		Format: logger.FormatForEnv(cfg.App.Env),
 	})
 	slog.SetDefault(log)
+
+	// Which file the configuration came from, because "why is it using that
+	// symbol" is otherwise answered by guessing. Debug rather than info: it is
+	// noise on a run that is working and the first thing asked for on one that
+	// is not.
+	if cfg.EnvFile != "" {
+		log.Debug("configuration filled from an environment file", "path", cfg.EnvFile)
+	}
 
 	if opts.listStrategies {
 		printStrategies(os.Stdout)

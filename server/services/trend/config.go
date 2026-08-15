@@ -100,12 +100,30 @@ var defaultContributors = []struct {
 		constants.Timeframe5m, constants.Timeframe15m, constants.Timeframe1h}},
 	{constants.Timeframe5m, []constants.Timeframe{
 		constants.Timeframe15m, constants.Timeframe1h, constants.Timeframe4h}},
+
+	// 1d is deliberately absent from the 15m and 1h rows. It is not that a
+	// daily contributor says nothing useful — it is the strongest trend signal
+	// available — but that it cannot say anything in time.
+	//
+	// The filter waits WarmupMultiplier × EMAPeriod = 1000 closes of every
+	// contributor. For 1d that is 2.7 years *before* the range starts, so a
+	// run over the development set from 2023-01-01 needs daily candles back to
+	// 2020-04-06. They do not exist here, and the observed result was a 1h run
+	// reporting 100% of bars not-ready and zero trades: a filter that blocks
+	// everything is not a conservative filter, it is a broken one.
+	//
+	// 4h needs 1000 × 4h = 167 days, which July 2022 onward covers. ADR 0018.
 	{constants.Timeframe15m, []constants.Timeframe{
-		constants.Timeframe1h, constants.Timeframe4h, constants.Timeframe1d}},
+		constants.Timeframe1h, constants.Timeframe4h}},
 	{constants.Timeframe1h, []constants.Timeframe{
-		constants.Timeframe4h, constants.Timeframe1d}},
+		constants.Timeframe4h}},
+
+	// A 4h base keeps 1d, because it has nothing else above it and 4h is not a
+	// base anything is evaluated on today. The same warm-up cost applies, and
+	// it will announce itself the same way if that changes.
 	{constants.Timeframe4h, []constants.Timeframe{
 		constants.Timeframe1d}},
+
 	// 1d has nothing above it. That is a hard error rather than an empty
 	// filter, and it is a real case rather than a theoretical one.
 }
