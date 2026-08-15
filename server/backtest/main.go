@@ -140,11 +140,10 @@ func run() int {
 		return runComparison(ctx, log, engine, candles, params, opts, cfg)
 	}
 
-	if opts.trendFilter != "" {
-		if err := attachTrendFilter(&params, candles); err != nil {
-			log.Error("could not build the trend filter", "error", err)
-			return exitFailure
-		}
+	params, err = prepareRun(params, opts, cfg, candles, opts.trendFilter != "")
+	if err != nil {
+		log.Error("could not prepare the run", "error", err)
+		return exitFailure
 	}
 
 	result, runErr := engine.Run(ctx, params)
@@ -180,7 +179,7 @@ func run() int {
 	}
 
 	if opts.costSweep {
-		if err := runCostSweep(ctx, log, engine, params, opts, cfg); err != nil {
+		if err := runCostSweep(ctx, log, engine, candles, params, opts, cfg); err != nil {
 			log.Error("could not run the cost sweep", "error", err)
 			return exitFailure
 		}
@@ -511,26 +510,28 @@ func runComparison(
 	opts options,
 	cfg *config.Config,
 ) int {
-	unfiltered, err := engine.Run(ctx, params)
+	// Both passes are built the same way, from the same base, each with its own
+	// state. Previously the unfiltered pass ran on whatever params the caller
+	// happened to hand over, which was unfiltered only because the caller
+	// returned here before attaching a filter — correct by accident of
+	// ordering. Moving the compare check three lines down would have silently
+	// made "unfiltered" a second filtered run.
+	unfilteredParams, err := prepareRun(params, opts, cfg, candles, false)
+	if err != nil {
+		log.Error("could not prepare the unfiltered run", "error", err)
+		return exitFailure
+	}
+	unfiltered, err := engine.Run(ctx, unfilteredParams)
 	if err != nil {
 		log.Error("the unfiltered run failed", "error", err)
 		return exitFailure
 	}
 
-	// A fresh instance: a strategy carries state, and reusing the one the
-	// unfiltered run left behind would make the two incomparable — which is
-	// the only thing this mode is for.
-	filteredParams := params
-	filteredParams.Strategy, err = freshStrategy(opts, cfg)
+	filteredParams, err := prepareRun(params, opts, cfg, candles, true)
 	if err != nil {
-		log.Error("could not rebuild the strategy for the filtered run", "error", err)
+		log.Error("could not prepare the filtered run", "error", err)
 		return exitFailure
 	}
-	if err := attachTrendFilter(&filteredParams, candles); err != nil {
-		log.Error("could not build the trend filter", "error", err)
-		return exitFailure
-	}
-
 	filtered, err := engine.Run(ctx, filteredParams)
 	if err != nil {
 		log.Error("the filtered run failed", "error", err)
@@ -541,6 +542,18 @@ func runComparison(
 	if err := report.WriteComparison(os.Stdout, comparison); err != nil {
 		log.Error("could not write the comparison", "error", err)
 		return exitFailure
+	}
+
+	// --cost-sweep asked for alongside --compare used to be dropped on the
+	// floor, because this function returns before main reaches the sweep. A
+	// silently ignored flag is the same defect as a silently dropped trend
+	// contributor. The sweep runs against the filtered configuration, which is
+	// the headline of a comparison.
+	if opts.costSweep {
+		if err := runCostSweep(ctx, log, engine, candles, filteredParams, opts, cfg); err != nil {
+			log.Error("could not run the cost sweep", "error", err)
+			return exitFailure
+		}
 	}
 
 	if opts.out != "" {
@@ -578,24 +591,28 @@ func runCostSweep(
 	ctx context.Context,
 	log *slog.Logger,
 	engine backtest.BacktestUsecase,
+	candles candle.CandleUsecase,
 	params backtest.RunParams,
 	opts options,
 	cfg *config.Config,
 ) error {
 	var runs []report.CostSensitivity
 
-	for _, multiplier := range []float64{1, 1.5, 2} {
-		scaled := params
-		scaled.Costs = params.Costs
+	// Whether the base run was filtered decides whether each pass is. A sweep
+	// that quietly dropped the filter would be answering a different question
+	// from the run it is attached to.
+	withFilter := params.TrendFilter != nil
 
-		// One instance per run. Sharing would start each sweep step wherever
-		// the last one stopped, and the 1.0x row would not reproduce the
-		// headline figure it exists to anchor.
-		fresh, err := freshStrategy(opts, cfg)
+	for _, multiplier := range []float64{1, 1.5, 2} {
+		// Every stateful component rebuilt, not just the strategy. Rebuilding
+		// the strategy alone is what left the aligner parked at the end of the
+		// range: the second pass then tried to restart at the beginning and
+		// hit the forward-only invariant.
+		scaled, err := prepareRun(params, opts, cfg, candles, withFilter)
 		if err != nil {
 			return fmt.Errorf("cost sweep at %.1fx: %w", multiplier, err)
 		}
-		scaled.Strategy = fresh
+
 		scaled.Costs.FeeTakerPct = params.Costs.FeeTakerPct.
 			Mul(decimal.NewFromFloat(multiplier))
 		scaled.Costs.SlippageTicks = int(math.Round(float64(params.Costs.SlippageTicks) * multiplier))
@@ -639,4 +656,50 @@ func freshStrategy(opts options, cfg *config.Config) (strategy.Strategy, error) 
 		roundTripCostPct(cfg),
 		cfg.Market.Type == constants.MarketTypeSpot,
 	)
+}
+
+// prepareRun returns params carrying state that belongs to this run alone.
+//
+// # Why every run goes through here
+//
+// RunParams is a struct, so `next := params` copies the fields and shares
+// everything they point at. The strategy, the trend filter and the aligner are
+// all stateful, and the aligner's cursors only move forward — so a second run
+// built by copying inherited a filter parked at the end of the range and died
+// on its first bar with "Advance called with <start> after <end>".
+//
+// The earlier fix rebuilt the strategy and left the filter shared, which is
+// the shape of the mistake: remembering to reset one stateful component is not
+// a policy, it is a thing somebody remembered once. This clears every one of
+// them first, so a component that is not rebuilt below is nil and fails loudly
+// rather than carrying state into a run that must not have it.
+//
+// Reconstruction rather than Reset(): phase 03 proves an indicator reset
+// equals reconstruction, and nothing proves it for the filter. Construction is
+// the version that cannot be subtly wrong.
+func prepareRun(
+	base backtest.RunParams,
+	opts options,
+	cfg *config.Config,
+	candles candle.CandleUsecase,
+	withFilter bool,
+) (backtest.RunParams, error) {
+	params := base
+	params.Strategy = nil
+	params.TrendFilter = nil
+	params.TrendAligner = nil
+	params.TrendConfig = trend.Config{}
+
+	strat, err := freshStrategy(opts, cfg)
+	if err != nil {
+		return backtest.RunParams{}, err
+	}
+	params.Strategy = strat
+
+	if withFilter {
+		if err := attachTrendFilter(&params, candles); err != nil {
+			return backtest.RunParams{}, err
+		}
+	}
+	return params, nil
 }
