@@ -19,7 +19,7 @@
 # Options:
 #   -s, --strategies   comma separated; default every registered strategy
 #   -t, --timeframes   comma separated; default 1m,5m,15m,1h,4h
-#   -m, --modes        cmp and/or sweep; default both
+#   -m, --modes        cmp and/or sweep; default both, combined into one run
 #   -o, --out          output directory; default results/
 #       --halt-on-gaps use --allow-gaps=halt instead of skip
 #       --dry-run      print what would run
@@ -126,7 +126,29 @@ IFS=',' read -r -a strategy_list <<<"${STRATEGIES}"
 IFS=',' read -r -a timeframe_list <<<"${TIMEFRAMES}"
 IFS=',' read -r -a mode_list <<<"${MODES}"
 
-total=$((${#strategy_list[@]} * ${#timeframe_list[@]} * ${#mode_list[@]}))
+# One run per cell, whatever the modes.
+#
+# The modes used to multiply the matrix: --compare and --cost-sweep each
+# execute the base run, so running them as two invocations computed the same
+# configuration twice and logged it twice. The log read as 48 experiments when
+# roughly 24 distinct configurations had been tested, and the count above a
+# result is the only thing that says how much weight it deserves.
+total=$((${#strategy_list[@]} * ${#timeframe_list[@]}))
+
+# The flags every cell gets, built once from the requested modes.
+mode_args=()
+mode_label=""
+for mode in "${mode_list[@]}"; do
+	case ${mode} in
+	cmp) mode_args+=(--compare) ;;
+	sweep) mode_args+=(--cost-sweep) ;;
+	*)
+		echo "unknown mode: ${mode}" >&2
+		exit 2
+		;;
+	esac
+	mode_label="${mode_label:+${mode_label}-}${mode}"
+done
 
 echo
 echo "strategies : ${STRATEGIES}"
@@ -152,9 +174,7 @@ echo
 if ((DRY_RUN)); then
 	for strategy in "${strategy_list[@]}"; do
 		for timeframe in "${timeframe_list[@]}"; do
-			for mode in "${mode_list[@]}"; do
-				echo "would run: ${strategy} ${timeframe} ${mode} -> ${OUT}/${strategy}-${timeframe}-${mode}.json"
-			done
+			echo "would run: ${strategy} ${timeframe} ${mode_label} -> ${OUT}/${strategy}-${timeframe}-${mode_label}.json"
 		done
 	done
 	echo
@@ -170,40 +190,31 @@ started_all=$(date +%s)
 
 for strategy in "${strategy_list[@]}"; do
 	for timeframe in "${timeframe_list[@]}"; do
-		for mode in "${mode_list[@]}"; do
-			out="${OUT}/${strategy}-${timeframe}-${mode}.json"
+		out="${OUT}/${strategy}-${timeframe}-${mode_label}.json"
 
-			args=(--strategy="${strategy}" --timeframe="${timeframe}"
-				--allow-gaps="${GAPS}" --out="${out}")
-			case ${mode} in
-			cmp) args+=(--compare) ;;
-			sweep) args+=(--cost-sweep) ;;
-			*)
-				echo "unknown mode: ${mode}" >&2
-				exit 2
-				;;
-			esac
-			if [[ ${#PASSTHROUGH[@]} -gt 0 ]]; then
-				args+=("${PASSTHROUGH[@]}")
-			fi
+		args=(--strategy="${strategy}" --timeframe="${timeframe}"
+			--allow-gaps="${GAPS}" --out="${out}")
+		args+=("${mode_args[@]}")
+		if [[ ${#PASSTHROUGH[@]} -gt 0 ]]; then
+			args+=("${PASSTHROUGH[@]}")
+		fi
 
-			printf '  %-16s %-5s %-6s ' "${strategy}" "${timeframe}" "${mode}"
-			started=$(date +%s)
+		printf '  %-16s %-5s %-10s ' "${strategy}" "${timeframe}" "${mode_label}"
+		started=$(date +%s)
 
-			# Sequential, deliberately. Parallel runs would interleave their
-			# appends to docs/experiments.md, and a corrupted log is worse than
-			# a slow sweep.
-			#
-			# A failure does not stop the matrix: one strategy that cannot build
-			# a filter at one timeframe should not cost the other twenty runs.
-			if "${BACKTEST}" "${args[@]}" >"${out}.log" 2>&1; then
-				printf 'ok    %4ss\n' "$(($(date +%s) - started))"
-				completed=$((completed + 1))
-			else
-				printf 'FAIL  %4ss  (%s)\n' "$(($(date +%s) - started))" "${out}.log"
-				failed+=("${strategy} ${timeframe} ${mode}")
-			fi
-		done
+		# Sequential, deliberately. Parallel runs would interleave their
+		# appends to docs/experiments.md, and a corrupted log is worse than
+		# a slow sweep.
+		#
+		# A failure does not stop the matrix: one strategy that cannot build
+		# a filter at one timeframe should not cost the other twenty runs.
+		if "${BACKTEST}" "${args[@]}" >"${out}.log" 2>&1; then
+			printf 'ok    %4ss\n' "$(($(date +%s) - started))"
+			completed=$((completed + 1))
+		else
+			printf 'FAIL  %4ss  (%s)\n' "$(($(date +%s) - started))" "${out}.log"
+			failed+=("${strategy} ${timeframe} ${mode_label}")
+		fi
 	done
 done
 

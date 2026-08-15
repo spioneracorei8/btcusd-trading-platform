@@ -14,6 +14,26 @@ been disappointed.
 The tool fills everything except **Note**, which is a judgement and stays
 yours.
 
+## 2026-08-15 — entries up to 48 contain duplicates
+
+`--compare` and `--cost-sweep` each execute the base run, and the sweep script
+ran both modes for every cell. The same configuration was therefore computed
+twice and logged twice. **The number of distinct configurations tested is
+roughly half the number of entries up to 48.**
+
+The defect is fixed: a cell now runs once with both modes and produces one
+entry carrying both the comparison and the sweep line.
+
+The affected entries are **left exactly as they are**. This file exists to be
+an honest record, and quietly rewriting it to look tidier would cost more than
+the inflated count does — a reader who found the edit later would have no way
+to know what else had been adjusted. An inflated denominator is the safer
+direction of error in any case: it understates how much weight a result
+deserves rather than overstating it.
+
+When counting the entries above a result, count distinct configurations up to
+48, and entries after that.
+
 ## Why this file exists
 
 Two reasons, and the second matters more.

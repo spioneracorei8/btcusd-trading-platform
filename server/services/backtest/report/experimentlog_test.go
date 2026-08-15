@@ -421,3 +421,98 @@ func TestChangingAThresholdChangesTheVerdict(t *testing.T) {
 		t.Errorf("1.45 passed against a 1.5 bar: %s", verdict)
 	}
 }
+
+// TestOneEntryCarriesBothTheComparisonAndTheSweep.
+//
+// --compare and --cost-sweep each execute the base run. Running them as two
+// invocations computed the same configuration twice and logged it twice, which
+// left the log reading as twice as many experiments as had actually been
+// tried. The count above a result is the only thing that says how much weight
+// it deserves, so an inflated denominator is not cosmetic.
+func TestOneEntryCarriesBothTheComparisonAndTheSweep(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "experiments.md")
+	criteria, _ := report.LoadCriteria(criteriaFile(t))
+	result, stats, analysis := passingRun()
+
+	entry := report.ExperimentEntryFor(result, stats, analysis, criteria, nil,
+		"dev", time.Now().UTC(), []report.CostSensitivity{
+			{Multiplier: 1, NetReturn: 0.2560, TradeCount: 324, ProfitFactor: 1.13},
+			{Multiplier: 1.5, NetReturn: 0.0412, TradeCount: 324, ProfitFactor: 1.02},
+			{Multiplier: 2, NetReturn: -0.1731, TradeCount: 324, ProfitFactor: 0.91},
+		})
+	entry.Comparison = &report.ComparisonLine{
+		UnfilteredNetReturn: 0.3140, UnfilteredTrades: 512,
+		FilteredNetReturn: 0.2560, FilteredTrades: 324,
+	}
+
+	if _, err := report.AppendExperiment(path, entry); err != nil {
+		t.Fatalf("AppendExperiment() returned error: %v", err)
+	}
+
+	content := readFile(t, path)
+	if got := strings.Count(content, "\n### "); got != 1 {
+		t.Fatalf("the log has %d entries for one configuration, want 1:\n%s", got, content)
+	}
+	for _, want := range []string{
+		"- **Filter comparison:** unfiltered +31.40% (512 trades) | filtered +25.60% (324 trades)",
+		"- **Cost sweep:** 1.0x +25.60%",
+	} {
+		if !strings.Contains(content, want) {
+			t.Errorf("the entry is missing %q:\n%s", want, content)
+		}
+	}
+}
+
+// TestARepeatedConfigurationIsStillLogged.
+//
+// Only the same run appearing twice from one invocation was the defect. A
+// deliberate re-run is data — it is how a result gets confirmed — and
+// suppressing it would be a worse failure than the duplicates were.
+func TestARepeatedConfigurationIsStillLogged(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "experiments.md")
+	criteria, _ := report.LoadCriteria(criteriaFile(t))
+	result, stats, analysis := passingRun()
+
+	for i := range 2 {
+		number, err := report.AppendExperiment(path, report.ExperimentEntryFor(
+			result, stats, analysis, criteria, nil, "dev", time.Now().UTC(), nil))
+		if err != nil {
+			t.Fatalf("append %d returned error: %v", i, err)
+		}
+		if number != i+1 {
+			t.Errorf("append %d was numbered %d, want %d", i, number, i+1)
+		}
+	}
+
+	if got := strings.Count(readFile(t, path), "\n### "); got != 2 {
+		t.Errorf("two deliberate runs of the same configuration produced %d entries, want 2", got)
+	}
+}
+
+// TestAZeroTradeRunReportsNoProfitFactor.
+//
+// The 4h runs recorded "inf", which in a permanent log invites being read
+// months later as an extraordinary result rather than as an empty set.
+func TestAZeroTradeRunReportsNoProfitFactor(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "experiments.md")
+	criteria, _ := report.LoadCriteria(criteriaFile(t))
+
+	result, _, _ := passingRun()
+	result.Trades = nil
+	result.Equity = nil
+	stats := report.Compute(result)
+	analysis := report.Analyse(result, stats)
+
+	if _, err := report.AppendExperiment(path, report.ExperimentEntryFor(
+		result, stats, analysis, criteria, nil, "dev", time.Now().UTC(), nil)); err != nil {
+		t.Fatalf("AppendExperiment() returned error: %v", err)
+	}
+
+	content := readFile(t, path)
+	if strings.Contains(content, "inf") {
+		t.Errorf("a run with no trades reported an infinite profit factor:\n%s", content)
+	}
+	if !strings.Contains(content, "n/a (no trades)") {
+		t.Errorf("the entry does not say the profit factor is undefined:\n%s", content)
+	}
+}

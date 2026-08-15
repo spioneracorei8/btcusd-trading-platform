@@ -204,7 +204,7 @@ func run() int {
 	// Recorded before the holdout log and before the JSON report, because a
 	// run that happened is a run the denominator has to include. Everything
 	// after this point is output; the run itself is already finished.
-	if err := recordExperiment(log, opts, result, stats, analysis, sweep); err != nil {
+	if err := recordExperiment(log, opts, result, stats, analysis, sweep, nil); err != nil {
 		log.Error("could not append to the experiment log", "error", err)
 		return exitFailure
 	}
@@ -639,8 +639,17 @@ func runComparison(
 	// A comparison is two runs and one entry: the filtered run is what the
 	// comparison is about, and logging both would inflate the denominator with
 	// a control that was never a candidate.
+	// One entry, carrying both halves. Two invocations of the same cell —
+	// once for --compare, once for --cost-sweep — recorded it twice and
+	// inflated the denominator the log exists to keep honest.
 	if err := recordExperiment(log, opts, filtered,
-		comparison.FilteredStats, report.Analyse(filtered, comparison.FilteredStats), sweep); err != nil {
+		comparison.FilteredStats, report.Analyse(filtered, comparison.FilteredStats), sweep,
+		&report.ComparisonLine{
+			UnfilteredNetReturn: comparison.UnfilteredStats.NetReturn,
+			UnfilteredTrades:    comparison.UnfilteredStats.TradeCount,
+			FilteredNetReturn:   comparison.FilteredStats.NetReturn,
+			FilteredTrades:      comparison.FilteredStats.TradeCount,
+		}); err != nil {
 		log.Error("could not append to the experiment log", "error", err)
 		return exitFailure
 	}
@@ -822,6 +831,7 @@ func recordExperiment(
 	stats report.Statistics,
 	analysis report.Analysis,
 	sweep []report.CostSensitivity,
+	comparison *report.ComparisonLine,
 ) error {
 	if opts.experimentLog == "" {
 		return nil
@@ -839,6 +849,7 @@ func recordExperiment(
 
 	entry := report.ExperimentEntryFor(result, stats, analysis,
 		criteria, criteriaErr, opts.dataset, time.Now().UTC(), sweep)
+	entry.Comparison = comparison
 	entry.Suppressed = opts.noExperimentLog
 
 	number, err := report.AppendExperiment(path, entry)

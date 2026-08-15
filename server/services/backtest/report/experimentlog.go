@@ -63,6 +63,10 @@ type ExperimentEntry struct {
 	GrossProfit    string
 	Concentration  float64
 
+	// Comparison is present when the run was a --compare, so one entry can
+	// carry what two separate runs used to record separately.
+	Comparison *ComparisonLine
+
 	// CostSweep is empty unless --cost-sweep ran. It matters more than most
 	// lines here: costs are the dominant variable in this system, so how fast
 	// an edge decays as they rise is closer to the real question than the
@@ -74,6 +78,19 @@ type ExperimentEntry struct {
 	// Suppressed marks an entry written for a run whose details were withheld
 	// with --no-experiment-log.
 	Suppressed bool
+}
+
+// ComparisonLine is the filtered-versus-unfiltered result of one --compare.
+//
+// It exists so that --compare and --cost-sweep together produce a single
+// entry. Running them as two invocations recorded the same configuration twice
+// and inflated the log's denominator by roughly a factor of two — and the
+// denominator is the only thing that says how much weight a result deserves.
+type ComparisonLine struct {
+	UnfilteredNetReturn float64
+	UnfilteredTrades    int
+	FilteredNetReturn   float64
+	FilteredTrades      int
 }
 
 // To is the range a run covered, kept as one field so the formatter cannot
@@ -222,6 +239,13 @@ func renderExperiment(entry ExperimentEntry) string {
 	}
 
 	fmt.Fprintf(&b, "- **Concentration (best 5):** %.2f%%\n", entry.Concentration*100)
+
+	if entry.Comparison != nil {
+		fmt.Fprintf(&b, "- **Filter comparison:** unfiltered %+.2f%% (%s trades) | "+
+			"filtered %+.2f%% (%s trades)\n",
+			entry.Comparison.UnfilteredNetReturn*100, thousands(entry.Comparison.UnfilteredTrades),
+			entry.Comparison.FilteredNetReturn*100, thousands(entry.Comparison.FilteredTrades))
+	}
 
 	if len(entry.CostSweep) > 0 {
 		b.WriteString("- **Cost sweep:** ")
