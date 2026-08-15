@@ -74,6 +74,103 @@ func DefaultConfig() Config {
 	}
 }
 
+// defaultContributors maps a base timeframe to the contributors above it.
+//
+// # Why this is per-base rather than one shared list
+//
+// There is no reason the right contributor set for a 1m base should also be
+// right for a 1h base. One shared list would force two different situations to
+// use the same value because it is convenient, not because it is correct.
+//
+// The concrete cost of the shared version decided it: adding 4h and 1d to a
+// single default would have changed the filter for a 1m base too, and the
+// three completed 1m runs would have stopped being comparable with anything
+// run afterwards. Seven evaluation runs exist; discarding the comparability of
+// three of them to save a few lines is the wrong trade. ADR 0018.
+//
+// A slice rather than a map, for the determinism reason that applies
+// everywhere here: Go randomises map iteration and a report must be
+// byte-identical across runs.
+var defaultContributors = []struct {
+	Base   constants.Timeframe
+	Higher []constants.Timeframe
+}{
+	// Unchanged, and pinned by a test. This is what the completed runs used.
+	{constants.Timeframe1m, []constants.Timeframe{
+		constants.Timeframe5m, constants.Timeframe15m, constants.Timeframe1h}},
+	{constants.Timeframe5m, []constants.Timeframe{
+		constants.Timeframe15m, constants.Timeframe1h, constants.Timeframe4h}},
+	{constants.Timeframe15m, []constants.Timeframe{
+		constants.Timeframe1h, constants.Timeframe4h, constants.Timeframe1d}},
+	{constants.Timeframe1h, []constants.Timeframe{
+		constants.Timeframe4h, constants.Timeframe1d}},
+	{constants.Timeframe4h, []constants.Timeframe{
+		constants.Timeframe1d}},
+	// 1d has nothing above it. That is a hard error rather than an empty
+	// filter, and it is a real case rather than a theoretical one.
+}
+
+// defaultWeights are the shares, shortest contributor first, for a set of the
+// given size.
+//
+// The three-contributor row is the shipped 1m configuration. The shorter rows
+// are the top of it renormalised, so the proportions between the surviving
+// contributors are the same whichever base they are serving: the highest
+// timeframe always carries 5/8ths of the weight of the pair below it, and the
+// dominant-trend veto stays the strongest voice.
+func defaultWeights(count int) []float64 {
+	full := []float64{0.2, 0.3, 0.5}
+	if count >= len(full) {
+		return full
+	}
+
+	// Take the heaviest `count` of them and renormalise to 1.
+	taken := full[len(full)-count:]
+	total := 0.0
+	for _, weight := range taken {
+		total += weight
+	}
+
+	out := make([]float64, 0, count)
+	for _, weight := range taken {
+		out = append(out, weight/total)
+	}
+	return out
+}
+
+// DefaultConfigFor is the documented contributor set for a given base.
+//
+// # These numbers are not tuned and must not be
+//
+// The same warning as DefaultConfig: tuning weights against the data used to
+// evaluate the result fits the filter to the past. The per-base sets below are
+// chosen by the same reasoning — each base is watched by the two or three
+// timeframes above it, weighted towards the slowest.
+func DefaultConfigFor(base constants.Timeframe) (Config, error) {
+	if !base.Valid() {
+		return Config{}, fmt.Errorf("trend: base timeframe %q is not valid", base)
+	}
+
+	for _, entry := range defaultContributors {
+		if entry.Base != base {
+			continue
+		}
+
+		weights := defaultWeights(len(entry.Higher))
+		config := Config{DeadZone: DefaultConfig().DeadZone}
+		for i, timeframe := range entry.Higher {
+			config.Weights = append(config.Weights,
+				Weight{Timeframe: timeframe, Weight: weights[i]})
+		}
+		return config, nil
+	}
+
+	return Config{}, fmt.Errorf(
+		"trend: no default contributors for a %s base; nothing this system collects "+
+			"closes less often than %s, so a trend filter has nothing to read there",
+		base, base)
+}
+
 // Timeframes lists the configured contributors, in configuration order.
 func (c Config) Timeframes() []constants.Timeframe {
 	out := make([]constants.Timeframe, 0, len(c.Weights))

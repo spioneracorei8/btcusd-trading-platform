@@ -444,11 +444,23 @@ func writeJSONReport(path string, result backtest.Result, stats report.Statistic
 // range earning one. At the production EMA(200) that is six weeks of hourly
 // history — which is why it is computed rather than guessed.
 func attachTrendFilter(params *backtest.RunParams, candles candle.CandleUsecase) error {
-	// Contributors at or below this run's base have nothing to say at this
-	// base. They are dropped and the survivors rescaled, and the drop is
-	// recorded on the config so the run header states it.
-	config, err := trend.DefaultConfig().ForBase(params.Timeframe)
+	// The contributor set depends on the base: the right timeframes to watch
+	// from 1m are not the right ones to watch from 1h (ADR 0018).
+	base, err := trend.DefaultConfigFor(params.Timeframe)
 	if err != nil {
+		return err
+	}
+
+	// ForBase still runs. The per-base sets are already above their base, so
+	// it drops nothing — but it is what enforces that, and a future edit to
+	// the table that got it wrong should fail here rather than silently
+	// admit a look-ahead hazard.
+	config, err := base.ForBase(params.Timeframe)
+	if err != nil {
+		return err
+	}
+
+	if err := requireCandles(*params, candles, config.Timeframes()); err != nil {
 		return err
 	}
 
@@ -474,6 +486,38 @@ func attachTrendFilter(params *backtest.RunParams, candles candle.CandleUsecase)
 	params.TrendFilter = filter
 	params.TrendAligner = aligner
 	params.TrendConfig = config
+	return nil
+}
+
+// requireCandles refuses a filter whose contributors have no stored data.
+//
+// Without this the run completes and reports nothing wrong: the aligner opens
+// a cursor over an empty series, the filter never becomes ready, every bar is
+// counted as not-ready, and the result is a full run that gated on nothing.
+// That is worse than an error, because it produces a number.
+//
+// The check is one indexed lookup per contributor — an index scan on the
+// candles primary key, measured at well under a millisecond — so it costs
+// nothing against a run that is about to replay hundreds of thousands of bars.
+func requireCandles(
+	params backtest.RunParams,
+	candles candle.CandleUsecase,
+	timeframes []constants.Timeframe,
+) error {
+	for _, timeframe := range timeframes {
+		_, err := candles.FetchEarliestCandle(
+			context.Background(), params.Symbol, params.MarketType, timeframe)
+		if errors.Is(err, constants.ErrNotFound) {
+			return fmt.Errorf(
+				"the trend filter for a %s base needs %s candles and none are stored for %s. "+
+					"Add %s to MARKET_TIMEFRAMES and let the collector backfill it, or run with "+
+					"--no-trend-filter",
+				params.Timeframe, timeframe, params.Symbol, timeframe)
+		}
+		if err != nil {
+			return fmt.Errorf("check stored %s candles: %w", timeframe, err)
+		}
+	}
 	return nil
 }
 
