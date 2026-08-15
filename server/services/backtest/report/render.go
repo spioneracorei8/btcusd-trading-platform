@@ -32,7 +32,8 @@ func WriteSummary(w io.Writer, result backtest.Result, stats Statistics) error {
 	b.WriteString("\nPERFORMANCE\n")
 	line(&b, "net return after costs", fmt.Sprintf("%+.4f%%  (%s %s)",
 		stats.NetReturn*100, signed(stats.TotalNetPnL), quoteUnit(result)))
-	line(&b, "total costs paid", fmt.Sprintf("%s %s", stats.TotalCosts.StringFixed(2), quoteUnit(result)))
+	line(&b, "total costs paid", fmt.Sprintf("%s %s  (%s)",
+		stats.TotalCosts.StringFixed(2), quoteUnit(result), formatCostShare(stats.CostShareOfGross)))
 	line(&b, "gross return before costs", fmt.Sprintf("%+.4f%%", stats.GrossReturn*100))
 	line(&b, "equity", fmt.Sprintf("%s → %s %s",
 		stats.InitialEquity.StringFixed(2), stats.FinalEquity.StringFixed(2), quoteUnit(result)))
@@ -74,6 +75,30 @@ func WriteSummary(w io.Writer, result backtest.Result, stats Statistics) error {
 	line(&b, "exit fills", fmt.Sprintf("%d maker, %d taker",
 		result.MakerExits, result.TakerExits))
 	line(&b, "effective cost", fmt.Sprintf("%.2f bps per round trip", stats.CostPerTripBps))
+	line(&b, "average cost", fmt.Sprintf("%s %s per round trip",
+		stats.AverageCostPerTrade.StringFixed(4), quoteUnit(result)))
+
+	if result.EntriesBelowMinLot > 0 {
+		line(&b, "skipped for size", fmt.Sprintf(
+			"%d entries were below the %s lot minimum and were not taken",
+			result.EntriesBelowMinLot, result.Params.Costs.MinLot))
+		b.WriteString("  (the size the strategy asked for was smaller than the venue can\n")
+		b.WriteString("   trade. Refused rather than rounded up: a larger position is a\n")
+		b.WriteString("   different bet from the one that was tested)\n")
+	}
+
+	// The absolute figures. On a small balance a percentage hides the thing
+	// that decides whether a drawdown is survivable: "-45%" and "-45 USD" on a
+	// 100 USD account are the same number and read completely differently.
+	//
+	// The two rows are separate because the worst share and the worst absolute
+	// risk need not be the same trade — on a compounding account the largest
+	// position is usually the last one, while the most dangerous is whichever
+	// consumed most of the balance available at the time.
+	line(&b, "risk per trade", fmt.Sprintf("%s %s average, %s worst",
+		stats.AverageRisk.StringFixed(2), quoteUnit(result), stats.WorstRisk.StringFixed(2)))
+	line(&b, "  as a share of balance", fmt.Sprintf("%.2f%% average, %.2f%% worst (measured at each entry)",
+		stats.AverageRiskPct*100, stats.WorstRiskPct*100))
 
 	// The line to watch under a limit entry model, so it is printed where it
 	// cannot be skipped rather than left to be derived.
@@ -215,6 +240,18 @@ func formatFloat(v float64) string {
 	}
 }
 
+// formatCostShare renders costs as a share of gross profit.
+//
+// The undefined case is spelled out rather than shown as a number. A run that
+// made no gross profit has no share for its costs to be, and "0.00%" there
+// would read as the opposite of what happened.
+func formatCostShare(v float64) string {
+	if math.IsNaN(v) {
+		return "the run made no gross profit for them to be a share of"
+	}
+	return fmt.Sprintf("%.2f%% of gross profit", v*100)
+}
+
 // formatTime renders a timestamp that may be unset.
 func formatTime(t time.Time) string {
 	if t.IsZero() {
@@ -260,6 +297,31 @@ func usesLimitOrders(result backtest.Result) bool {
 func writeCostModel(b *strings.Builder, result backtest.Result) {
 	costs := result.Params.Costs
 	execution := result.Params.Execution
+
+	if costs.CostModel() == constants.CostModelSpread {
+		unit := quoteUnit(result)
+		line(b, "cost model", fmt.Sprintf("spread (%s %s typical, %d points, half each side)",
+			costs.SpreadPrice().StringFixed(2), unit, costs.SpreadPoints))
+		line(b, "commission", fmt.Sprintf("%s %s per lot per side",
+			costs.CommissionPerLot.StringFixed(2), unit))
+		line(b, "contract size", fmt.Sprintf("%s per lot, min %s, step %s",
+			costs.ContractSize, costs.MinLot, costs.LotStep))
+		line(b, "point value", fmt.Sprintf("%s %s of price per point", costs.PointValue, unit))
+		line(b, "slippage applied", fmt.Sprintf("%d tick(s) of %s, market fills only, always against",
+			costs.SlippageTicks, costs.TickSize))
+		if execution.Entry() == constants.OrderTypeLimit || execution.Exit() == constants.OrderTypeLimit {
+			line(b, "limit order timeout", fmt.Sprintf("%d bar(s)", execution.Timeout()))
+		}
+
+		// Printed on every spread run rather than left to be remembered. The
+		// cost model can be made to match the venue; the price series cannot,
+		// without collecting from it.
+		b.WriteString("  note: prices are Binance BTCUSDT; costs model IUX BTCUSD CFD.\n")
+		b.WriteString("        Spread behaviour and quotes on the trading venue will differ,\n")
+		b.WriteString("        so treat the direction of this result as the finding and the\n")
+		b.WriteString("        magnitude as an estimate.\n")
+		return
+	}
 
 	rate := func(orderType constants.OrderType) string {
 		if orderType == constants.OrderTypeLimit {

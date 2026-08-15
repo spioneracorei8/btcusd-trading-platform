@@ -86,6 +86,13 @@ type costsDoc struct {
 	FeeTakerPct string `json:"fee_taker_pct"`
 	FeeMakerPct string `json:"fee_maker_pct"`
 
+	// The venue model. Recorded because neither fee rate says what a fill
+	// cost once the charge can be a spread in price points instead.
+	CostModel        string `json:"cost_model"`
+	SpreadPoints     int    `json:"spread_points"`
+	SpreadPrice      string `json:"spread_price"`
+	CommissionPerLot string `json:"commission_per_lot"`
+
 	// EntryOrderType and ExitOrderType are recorded because the fee rates
 	// alone no longer say what a fill cost.
 	EntryOrderType   string  `json:"entry_order_type"`
@@ -121,6 +128,11 @@ type performanceDoc struct {
 	GrossReturn float64 `json:"gross_return"`
 	GrossPnL    string  `json:"gross_pnl"`
 
+	// CostShareOfGross is null when the run made no gross profit, for the same
+	// reason Sharpe is: a share of nothing is undefined, and zero would be
+	// read as "costs were negligible".
+	CostShareOfGross *float64 `json:"cost_share_of_gross_profit"`
+
 	FinalEquity string `json:"final_equity"`
 }
 
@@ -151,13 +163,19 @@ type tradeStatsDoc struct {
 	// trades at all. The last one is the number to read first under a limit
 	// entry model: a large share means the statistics above describe a subset
 	// of the strategy's intent rather than the strategy.
-	MakerEntries       int64   `json:"maker_entries"`
-	TakerEntries       int64   `json:"taker_entries"`
-	MakerExits         int64   `json:"maker_exits"`
-	TakerExits         int64   `json:"taker_exits"`
-	EntriesRequested   int64   `json:"entries_requested"`
-	LimitOrdersExpired int64   `json:"limit_orders_expired"`
-	CancelledPercent   float64 `json:"limit_orders_cancelled_percent"`
+	MakerEntries        int64   `json:"maker_entries"`
+	TakerEntries        int64   `json:"taker_entries"`
+	MakerExits          int64   `json:"maker_exits"`
+	TakerExits          int64   `json:"taker_exits"`
+	EntriesRequested    int64   `json:"entries_requested"`
+	EntriesBelowMinLot  int64   `json:"entries_below_min_lot"`
+	AverageCostPerTrade string  `json:"average_cost_per_trade"`
+	AverageRisk         string  `json:"average_risk"`
+	WorstRisk           string  `json:"worst_risk"`
+	AverageRiskPct      float64 `json:"average_risk_pct_of_balance"`
+	WorstRiskPct        float64 `json:"worst_risk_pct_of_balance"`
+	LimitOrdersExpired  int64   `json:"limit_orders_expired"`
+	CancelledPercent    float64 `json:"limit_orders_cancelled_percent"`
 }
 
 type tradeDoc struct {
@@ -177,8 +195,10 @@ type tradeDoc struct {
 	EntryNote  string `json:"entry_note"`
 	ExitNote   string `json:"exit_note"`
 
-	EntryMaker bool `json:"entry_maker"`
-	ExitMaker  bool `json:"exit_maker"`
+	StopPrice     string `json:"stop_price"`
+	EquityAtEntry string `json:"equity_at_entry"`
+	EntryMaker    bool   `json:"entry_maker"`
+	ExitMaker     bool   `json:"exit_maker"`
 
 	StopAndTargetBothReachable bool `json:"stop_and_target_both_reachable"`
 	ForcedByGap                bool `json:"forced_by_gap"`
@@ -230,6 +250,10 @@ func BuildDocument(result backtest.Result, stats Statistics) Document {
 		Costs: costsDoc{
 			FeeTakerPct:      result.Params.Costs.FeeTakerPct.String(),
 			FeeMakerPct:      result.Params.Costs.MakerFeePct().String(),
+			CostModel:        result.Params.Costs.CostModel().String(),
+			SpreadPoints:     result.Params.Costs.SpreadPoints,
+			SpreadPrice:      result.Params.Costs.SpreadPrice().String(),
+			CommissionPerLot: result.Params.Costs.CommissionPerLot.String(),
 			EntryOrderType:   result.Params.Execution.Entry().String(),
 			ExitOrderType:    result.Params.Execution.Exit().String(),
 			LimitTimeoutBars: result.Params.Execution.Timeout(),
@@ -252,6 +276,9 @@ func BuildDocument(result backtest.Result, stats Statistics) Document {
 			TotalCosts:  stats.TotalCosts.String(),
 			GrossReturn: stats.GrossReturn,
 			GrossPnL:    stats.TotalGrossPnL.String(),
+
+			CostShareOfGross: finite(stats.CostShareOfGross),
+
 			FinalEquity: stats.FinalEquity.String(),
 		},
 		Risk: riskDoc{
@@ -280,6 +307,12 @@ func BuildDocument(result backtest.Result, stats Statistics) Document {
 			MakerExits:          result.MakerExits,
 			TakerExits:          result.TakerExits,
 			EntriesRequested:    result.EntriesRequested,
+			EntriesBelowMinLot:  result.EntriesBelowMinLot,
+			AverageCostPerTrade: stats.AverageCostPerTrade.String(),
+			AverageRisk:         stats.AverageRisk.String(),
+			WorstRisk:           stats.WorstRisk.String(),
+			AverageRiskPct:      stats.AverageRiskPct,
+			WorstRiskPct:        stats.WorstRiskPct,
 			LimitOrdersExpired:  result.LimitOrdersExpired,
 			CancelledPercent:    percent(result.LimitOrdersExpired, result.EntriesRequested),
 		},
@@ -310,6 +343,8 @@ func BuildDocument(result backtest.Result, stats Statistics) Document {
 			EntryNote:                  trade.EntryNote,
 			ExitNote:                   trade.ExitNote,
 			StopAndTargetBothReachable: trade.StopAndTargetBothReachable,
+			StopPrice:                  trade.StopPrice.String(),
+			EquityAtEntry:              trade.EquityAtEntry.String(),
 			EntryMaker:                 trade.EntryMaker,
 			ExitMaker:                  trade.ExitMaker,
 			ForcedByGap:                trade.ForcedByGap,

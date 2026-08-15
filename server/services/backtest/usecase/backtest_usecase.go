@@ -254,6 +254,10 @@ type runner struct {
 	// strategy's intent that never became a trade.
 	entriesRequested   int64
 	limitOrdersExpired int64
+
+	// entriesBelowMinLot counts entries refused because the size the strategy
+	// asked for fell below the venue's minimum tradeable lot.
+	entriesBelowMinLot int64
 }
 
 // restingOrder is a limit entry sitting on the book.
@@ -545,6 +549,14 @@ func (r *runner) openAt(
 	if !size.IsPositive() {
 		return
 	}
+
+	size, tradeable := r.onLotGrid(size)
+	if !tradeable {
+		// The position the strategy asked for is smaller than the venue can
+		// trade. Refused, not rounded up.
+		r.entriesBelowMinLot++
+		return
+	}
 	if capped {
 		r.entriesSizeCapped++
 	}
@@ -557,7 +569,7 @@ func (r *runner) openAt(
 		entryReference: reference,
 		size:           size,
 		equityAtEntry:  r.equity,
-		entryFee:       feeOn(notional, r.params.Costs, maker),
+		entryFee:       feeOn(notional, size, r.params.Costs, maker),
 		entryMaker:     maker,
 		entryNote:      intent.Reason,
 		entryATR:       entryATR,
@@ -611,6 +623,41 @@ func (r *runner) sizeFor(price, stop decimal.Decimal) (size decimal.Decimal, cap
 		return affordable, true
 	}
 	return wanted, false
+}
+
+// onLotGrid rounds a size down to the venue's tradeable increments.
+//
+// # Why down, and why a shortfall is refused rather than rounded up
+//
+// The size the strategy asked for is the size that risks what the
+// configuration says. Rounding up to reach the minimum lot would take a
+// different, larger bet than the strategy asked for — and on a 100 USD account
+// with a 0.01 lot floor, "a bit larger" can be several times the intended
+// risk. Quietly upsizing is how an account dies while the report still looks
+// like the strategy that was tested.
+//
+// So a size below the minimum is not a trade. The refusals are counted,
+// because with a small balance there may be many of them, and that is a fact
+// about the account rather than about the strategy.
+func (r *runner) onLotGrid(size decimal.Decimal) (decimal.Decimal, bool) {
+	costs := r.params.Costs
+	if !costs.LotConstrained() || !size.IsPositive() {
+		return size, true
+	}
+
+	lots := size.Div(costs.ContractSize)
+	// DivisionPrecision rounding can leave a value a hair under a step
+	// boundary; floor on the step grid is what the venue does.
+	steps := lots.Div(costs.LotStep).Floor()
+	lots = steps.Mul(costs.LotStep)
+
+	if costs.MinLot.IsPositive() && lots.LessThan(costs.MinLot) {
+		return decimal.Zero, false
+	}
+	if !lots.IsPositive() {
+		return decimal.Zero, false
+	}
+	return lots.Mul(costs.ContractSize), true
 }
 
 // checkLevels resolves a stop or target reached inside this bar.
@@ -672,7 +719,7 @@ func (r *runner) closeAt(at time.Time, reference decimal.Decimal, reason backtes
 	if !maker {
 		fill = fillPrice(reference, p.direction == constants.DirectionShort, r.params.Costs)
 	}
-	exitFee := feeOn(fill.Mul(p.size), r.params.Costs, maker)
+	exitFee := feeOn(fill.Mul(p.size), p.size, r.params.Costs, maker)
 
 	fees := p.entryFee.Add(exitFee)
 	slippage := p.slippageCost(r.params.Costs, maker)
@@ -706,6 +753,8 @@ func (r *runner) closeAt(at time.Time, reference decimal.Decimal, reason backtes
 		EntryNote:                  p.entryNote,
 		ExitNote:                   note,
 		EntryATR:                   p.entryATR,
+		StopPrice:                  p.stop,
+		EquityAtEntry:              p.equityAtEntry,
 		EntryMaker:                 p.entryMaker,
 		ExitMaker:                  maker,
 		StopAndTargetBothReachable: ambiguous,
@@ -784,6 +833,7 @@ func (r *runner) fill(result *backtest.Result) {
 	result.TakerEntries = r.takerEntries
 	result.MakerExits = r.makerExits
 	result.TakerExits = r.takerExits
+	result.EntriesBelowMinLot = r.entriesBelowMinLot
 	result.EntriesRequested = r.entriesRequested
 	result.LimitOrdersExpired = r.limitOrdersExpired
 	result.Trades = r.trades

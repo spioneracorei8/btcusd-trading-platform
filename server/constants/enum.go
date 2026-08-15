@@ -338,3 +338,51 @@ func ParseOrderType(s string) (OrderType, error) {
 	}
 	return o, nil
 }
+
+// CostModel selects how the cost of trading is computed.
+//
+// # Why this is a choice rather than one formula
+//
+// A percentage of notional and a fixed spread in price points are not two
+// parameterisations of the same thing. On an exchange charging 0.05% the cost
+// of a round trip scales with price; on a CFD venue quoting a 25 USD spread it
+// does not. At 1m, where price moves and the spread are the same order of
+// magnitude, using the wrong one misprices every trade — and in opposite
+// directions depending on where price happens to be.
+type CostModel string
+
+// The cost models.
+const (
+	// CostModelPercentage charges a fee as a share of notional, per side. It
+	// is what every evaluation before this used, and stays the default so
+	// those results remain comparable.
+	CostModelPercentage CostModel = "percentage"
+
+	// CostModelSpread charges the bid/ask spread in price points, plus an
+	// optional commission per lot. The cost of a round trip is then
+	// independent of the price level.
+	CostModelSpread CostModel = "spread"
+)
+
+// Valid reports whether m is a known cost model.
+func (m CostModel) Valid() bool {
+	switch m {
+	case CostModelPercentage, CostModelSpread:
+		return true
+	default:
+		return false
+	}
+}
+
+// String returns the configuration representation of the cost model.
+func (m CostModel) String() string { return string(m) }
+
+// ParseCostModel converts s into a CostModel, rejecting unknown values.
+func ParseCostModel(s string) (CostModel, error) {
+	m := CostModel(s)
+	if !m.Valid() {
+		return "", fmt.Errorf("unknown cost model %q (want %q or %q)",
+			s, CostModelPercentage, CostModelSpread)
+	}
+	return m, nil
+}

@@ -358,6 +358,14 @@ func buildParams(opts options, cfg *config.Config) (backtest.RunParams, error) {
 			FeeMakerPct:   cfg.Market.FeeMakerPct,
 			SlippageTicks: cfg.Market.SlippageTicks,
 			TickSize:      cfg.Market.TickSize,
+
+			Model:            cfg.Market.CostModel,
+			SpreadPoints:     cfg.Market.SpreadPoints,
+			PointValue:       cfg.Market.PointValue,
+			ContractSize:     cfg.Market.ContractSize,
+			MinLot:           cfg.Market.MinLot,
+			LotStep:          cfg.Market.LotStep,
+			CommissionPerLot: cfg.Market.CommissionPerLot,
 		},
 		Execution: backtest.Execution{
 			EntryOrderType:   cfg.Market.EntryOrderType,
@@ -706,14 +714,7 @@ func runCostSweep(
 			return nil, fmt.Errorf("cost sweep at %.1fx: %w", multiplier, err)
 		}
 
-		// Both rates move together. Scaling only the taker rate would make a
-		// maker-configured run look progressively cheaper relative to its own
-		// assumption, which is the opposite of what a stress test is for.
-		scaled.Costs.FeeTakerPct = params.Costs.FeeTakerPct.
-			Mul(decimal.NewFromFloat(multiplier))
-		scaled.Costs.FeeMakerPct = params.Costs.MakerFeePct().
-			Mul(decimal.NewFromFloat(multiplier))
-		scaled.Costs.SlippageTicks = int(math.Round(float64(params.Costs.SlippageTicks) * multiplier))
+		scaled.Costs = scaleCosts(params.Costs, multiplier)
 
 		result, err := engine.Run(ctx, scaled)
 		if err != nil {
@@ -731,6 +732,36 @@ func runCostSweep(
 			"multiplier", multiplier, "net_return", stats.NetReturn)
 	}
 	return runs, report.WriteCostSensitivity(os.Stdout, runs, report.CostSensitivityHeading(params))
+}
+
+// scaleCosts raises every assumed cost by the same multiplier.
+//
+// # Why all of them, and not just the headline rate
+//
+// Scaling only the taker rate would make a maker-configured run look
+// progressively cheaper relative to its own assumption, which is the opposite
+// of what a stress test is for. The same argument covers the spread: on a
+// floating-spread venue widening is the realistic failure mode rather than a
+// pessimistic one — 25 USD is a typical figure, not a guaranteed one, and it
+// widens exactly when a strategy most wants to trade. A 2x sweep there is a
+// normal Tuesday during a news release.
+//
+// Which of these actually bite depends on the cost model in force, and that is
+// deliberate: the sweep does not need to know which one is running.
+func scaleCosts(base backtest.Costs, multiplier float64) backtest.Costs {
+	factor := decimal.NewFromFloat(multiplier)
+
+	scaled := base
+	scaled.FeeTakerPct = base.FeeTakerPct.Mul(factor)
+	scaled.FeeMakerPct = base.MakerFeePct().Mul(factor)
+	scaled.CommissionPerLot = base.CommissionPerLot.Mul(factor)
+
+	// Points and ticks are integers on the venue, so they round rather than
+	// carrying a fraction no quote could have.
+	scaled.SpreadPoints = int(math.Round(float64(base.SpreadPoints) * multiplier))
+	scaled.SlippageTicks = int(math.Round(float64(base.SlippageTicks) * multiplier))
+
+	return scaled
 }
 
 // quoteUnit names the currency the money figures are in.

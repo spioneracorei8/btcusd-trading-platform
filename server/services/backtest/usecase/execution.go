@@ -35,17 +35,43 @@ func fillPrice(reference decimal.Decimal, buying bool, costs backtest.Costs) dec
 	return filled
 }
 
-// feeOn is the fee charged on one side of a round trip, in quote currency.
+// feeOn is the cost charged on one side of a round trip, in quote currency.
 //
 // maker is whether that side rested on the book rather than crossing the
 // spread. It is a property of the fill, not of the configuration: an exit
 // configured as a limit still pays taker when it leaves through a stop.
-func feeOn(notional decimal.Decimal, costs backtest.Costs, maker bool) decimal.Decimal {
+//
+// Under the spread model the charge is in price points rather than a share of
+// notional, so it does not scale with the price level — which is the entire
+// reason that model exists. A resting order does not cross the spread and pays
+// only commission.
+func feeOn(notional, size decimal.Decimal, costs backtest.Costs, maker bool) decimal.Decimal {
+	if costs.CostModel() == constants.CostModelSpread {
+		return spreadCostOn(size, costs, maker)
+	}
+
 	rate := costs.FeeTakerPct
 	if maker {
 		rate = costs.MakerFeePct()
 	}
 	return notional.Mul(rate).Div(hundred)
+}
+
+// spreadCostOn is one side's share of the quoted spread, plus commission.
+func spreadCostOn(size decimal.Decimal, costs backtest.Costs, maker bool) decimal.Decimal {
+	cost := decimal.Zero
+
+	// A maker fill rested on the book and was crossed *to*, so it gives up no
+	// spread. That is the same reasoning that exempts it from slippage.
+	if !maker {
+		cost = costs.HalfSpread().Mul(size)
+	}
+
+	if costs.CommissionPerLot.IsPositive() && costs.ContractSize.IsPositive() {
+		lots := size.Div(costs.ContractSize)
+		cost = cost.Add(costs.CommissionPerLot.Mul(lots))
+	}
+	return cost
 }
 
 // openPosition is the engine's own view of what is held.
@@ -162,7 +188,7 @@ func (p *openPosition) equityAt(reference decimal.Decimal, costs backtest.Costs)
 	}
 
 	fill := fillPrice(reference, p.direction == constants.DirectionShort, costs)
-	exitFee := feeOn(fill.Mul(p.size), costs, false)
+	exitFee := feeOn(fill.Mul(p.size), p.size, costs, false)
 
 	return p.equityAtEntry.
 		Sub(p.entryFee).

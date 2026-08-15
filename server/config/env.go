@@ -67,6 +67,17 @@ type Market struct {
 	// LimitOrderTimeoutBars is how many bars an unfilled limit order rests
 	// before it is cancelled and the trade never happens.
 	LimitOrderTimeoutBars int
+
+	// CostModel selects percentage-of-notional or spread-in-points, and the
+	// venue parameters the second one needs. They take effect together: a
+	// percentage run ignores all of them.
+	CostModel        constants.CostModel
+	SpreadPoints     int
+	PointValue       decimal.Decimal
+	ContractSize     decimal.Decimal
+	MinLot           decimal.Decimal
+	LotStep          decimal.Decimal
+	CommissionPerLot decimal.Decimal
 	// SlippageTicks is the assumed slippage of a fill, in price ticks.
 	SlippageTicks int
 	// TickSize is what one of those ticks is worth in quote currency. Without
@@ -181,8 +192,16 @@ func LoadFrom(lookup helper.LookupFunc, opts ...Option) (*Config, error) {
 			ExitOrderType:  l.orderType("EXIT_ORDER_TYPE", constants.DefaultExitOrderType),
 			LimitOrderTimeoutBars: l.optionalInt("LIMIT_ORDER_TIMEOUT_BARS",
 				constants.DefaultLimitOrderTimeoutBars, 1, 1000),
-			SlippageTicks: l.optionalInt("SLIPPAGE_TICKS", constants.DefaultSlippageTicks, 0, 1000),
-			TickSize:      l.tickSize("MARKET_TICK_SIZE"),
+
+			CostModel:        l.costModel("COST_MODEL"),
+			SpreadPoints:     l.optionalInt("SPREAD_POINTS", constants.DefaultSpreadPoints, 0, 10_000_000),
+			PointValue:       l.positiveDecimal("POINT_VALUE", constants.DefaultPointValue),
+			ContractSize:     l.positiveDecimal("CONTRACT_SIZE", constants.DefaultContractSize),
+			MinLot:           l.positiveDecimal("MIN_LOT", constants.DefaultMinLot),
+			LotStep:          l.positiveDecimal("LOT_STEP", constants.DefaultLotStep),
+			CommissionPerLot: l.nonNegativeDecimal("COMMISSION_PER_LOT", constants.DefaultCommissionPerLot),
+			SlippageTicks:    l.optionalInt("SLIPPAGE_TICKS", constants.DefaultSlippageTicks, 0, 1000),
+			TickSize:         l.tickSize("MARKET_TICK_SIZE"),
 
 			RESTBaseURL:       l.baseURL("BINANCE_REST_BASE_URL", constants.DefaultBinanceRESTBaseURL, "https"),
 			WSBaseURL:         l.baseURL("BINANCE_WS_BASE_URL", constants.DefaultBinanceWSBaseURL, "wss"),
@@ -469,6 +488,51 @@ func (l *loader) makerFeePct(key string) decimal.Decimal {
 	}
 	if d.IsNegative() || d.GreaterThanOrEqual(decimal.NewFromInt(100)) {
 		l.invalidf(key, "%s is outside 0-100 (percent)", d)
+		return decimal.Zero
+	}
+	return d
+}
+
+// costModel parses percentage or spread.
+func (l *loader) costModel(key string) constants.CostModel {
+	v := l.optionalString(key, constants.DefaultCostModel)
+	parsed, err := constants.ParseCostModel(v)
+	if err != nil {
+		l.invalidf(key, "%v", err)
+		return ""
+	}
+	return parsed
+}
+
+// positiveDecimal reads a value that would be meaningless at zero.
+//
+// A zero contract size or lot step would make the sizing arithmetic divide by
+// nothing; a zero point value would make the spread free, which is the
+// flattering-by-default failure CLAUDE.md §3.4 rules out.
+func (l *loader) positiveDecimal(key, def string) decimal.Decimal {
+	v := l.optionalString(key, def)
+	d, err := decimal.NewFromString(v)
+	if err != nil {
+		l.invalidf(key, "%q is not a decimal number", v)
+		return decimal.Zero
+	}
+	if !d.IsPositive() {
+		l.invalidf(key, "%s is not positive", d)
+		return decimal.Zero
+	}
+	return d
+}
+
+// nonNegativeDecimal reads a value that may legitimately be zero.
+func (l *loader) nonNegativeDecimal(key, def string) decimal.Decimal {
+	v := l.optionalString(key, def)
+	d, err := decimal.NewFromString(v)
+	if err != nil {
+		l.invalidf(key, "%q is not a decimal number", v)
+		return decimal.Zero
+	}
+	if d.IsNegative() {
+		l.invalidf(key, "%s is negative", d)
 		return decimal.Zero
 	}
 	return d

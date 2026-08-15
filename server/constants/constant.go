@@ -30,6 +30,23 @@ const (
 	DefaultEntryOrderType = "market"
 	DefaultExitOrderType  = "market"
 
+	// The venue model. Defaults describe an IUX Standard account trading
+	// BTCUSD as a CFD, but they only take effect under COST_MODEL=spread —
+	// the default model is percentage, so a run that mentions none of this
+	// prices exactly as it always did.
+	//
+	// A quoted spread of 25 USD is 2500 points at 0.01 USD of price per point.
+	// One lot is one BTC, so a round trip at the 0.01 lot minimum costs
+	// 25 x 0.01 = 0.25 USD whatever the price level — against 0.63 USD for the
+	// same size on Binance at 63,000.
+	DefaultCostModel        = "percentage"
+	DefaultSpreadPoints     = 2500
+	DefaultPointValue       = "0.01"
+	DefaultContractSize     = "1"
+	DefaultMinLot           = "0.01"
+	DefaultLotStep          = "0.01"
+	DefaultCommissionPerLot = "0"
+
 	// DefaultLimitOrderTimeoutBars is how long an unfilled limit order rests
 	// before it is cancelled. One bar means the order gets a single bar of
 	// opportunity, which is the same window a market entry would have used.

@@ -307,13 +307,27 @@ type CostSensitivity struct {
 // at maker rates is a materially stronger result than the same multiple at
 // taker rates, and the two are otherwise indistinguishable in the table.
 func CostSensitivityHeading(params backtest.RunParams) string {
+	costs := params.Costs
+
+	// Under the spread model no fee rate priced anything, and quoting one here
+	// would name a cost the run never paid — which is worse than saying
+	// nothing, because it reads as a description of what was scaled.
+	if costs.CostModel() == constants.CostModelSpread {
+		heading := fmt.Sprintf("scaling a %s spread (%d points) on both sides",
+			costs.SpreadPrice().StringFixed(2), costs.SpreadPoints)
+		if costs.CommissionPerLot.IsPositive() {
+			heading += fmt.Sprintf(" and %s per lot per side", costs.CommissionPerLot.StringFixed(2))
+		}
+		return heading
+	}
+
 	entry := params.Execution.Entry()
 	exit := params.Execution.Exit()
 	if entry == constants.OrderTypeMarket && exit == constants.OrderTypeMarket {
-		return fmt.Sprintf("scaling taker %s%% on both sides", params.Costs.FeeTakerPct)
+		return fmt.Sprintf("scaling taker %s%% on both sides", costs.FeeTakerPct)
 	}
 	return fmt.Sprintf("scaling maker %s%% and taker %s%% together (entry %s, exit %s)",
-		params.Costs.MakerFeePct(), params.Costs.FeeTakerPct, entry, exit)
+		costs.MakerFeePct(), costs.FeeTakerPct, entry, exit)
 }
 
 func WriteCostSensitivity(w io.Writer, runs []CostSensitivity, heading string) error {

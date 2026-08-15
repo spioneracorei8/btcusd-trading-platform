@@ -89,9 +89,74 @@ type Costs struct {
 	// against the trade. TickSize is what one tick is worth.
 	//
 	// It applies to market fills only. A resting order does not cross the
-	// spread, which is the entire reason to use one.
+	// spread, which is the entire reason to use one. Slippage is charged on
+	// top of the spread under either cost model: the spread is what crossing
+	// costs, slippage is the book moving while you cross, and they are
+	// different things.
 	SlippageTicks int
 	TickSize      decimal.Decimal
+
+	// Model selects percentage-of-notional or spread-in-points. Its zero
+	// value is percentage, which is what every earlier evaluation used.
+	Model constants.CostModel
+
+	// SpreadPoints x PointValue is the quoted spread in price terms: 2500
+	// points at 0.01 gives 25.00 of price.
+	SpreadPoints int
+	PointValue   decimal.Decimal
+
+	// ContractSize is units per lot, MinLot the smallest tradeable size and
+	// LotStep the increment between sizes. They describe the venue, not the
+	// strategy, and apply only under the spread model.
+	ContractSize decimal.Decimal
+	MinLot       decimal.Decimal
+	LotStep      decimal.Decimal
+
+	// CommissionPerLot is charged per lot per side. Zero on a Standard
+	// account, where the cost is entirely in the spread.
+	CommissionPerLot decimal.Decimal
+}
+
+// CostModel returns the model in force, defaulting to percentage.
+func (c Costs) CostModel() constants.CostModel {
+	if c.Model == "" {
+		return constants.CostModelPercentage
+	}
+	return c.Model
+}
+
+// SpreadPrice is the quoted spread expressed in price.
+func (c Costs) SpreadPrice() decimal.Decimal {
+	return c.PointValue.Mul(decimal.NewFromInt(int64(c.SpreadPoints)))
+}
+
+// HalfSpread is what one side of a round trip pays in price terms.
+//
+// # Why half, and not a full crossing on each side
+//
+// A quoted spread of 25 is the distance between bid and ask. Buying at the ask
+// and later selling at the bid gives up that distance once across the round
+// trip, not twice: 25 x 0.01 BTC = 0.25 USD at the minimum lot, which is the
+// figure the venue's own arithmetic gives. Charging a full spread per side
+// would double every cost in the model and make a strategy look half as
+// viable as it is — an error in the safe direction, and still an error.
+//
+// Modelled as half on each side of the mid so that entry and exit are
+// symmetric, and so a long and a short of the same size cost the same.
+func (c Costs) HalfSpread() decimal.Decimal {
+	return c.SpreadPrice().Div(decimal.NewFromInt(2))
+}
+
+// LotConstrained reports whether position sizes must land on the venue's lot
+// grid.
+//
+// Tied to the spread model rather than to MinLot being set, because the
+// constraint arrives with the venue. A percentage run keeps the continuous
+// sizing every earlier evaluation used, which is what lets those results stay
+// comparable.
+func (c Costs) LotConstrained() bool {
+	return c.CostModel() == constants.CostModelSpread &&
+		c.ContractSize.IsPositive() && c.LotStep.IsPositive()
 }
 
 // MakerFeePct is the resting-order rate, falling back to the taker rate.
@@ -358,6 +423,22 @@ type Trade struct {
 	EntryNote  string
 	ExitNote   string
 
+	// StopPrice is the protective level the position was opened with, or zero
+	// when it had none. Recorded so the report can state what each trade
+	// risked rather than only what it made: on a small balance the intended
+	// risk in currency is what decides whether a losing streak is survivable.
+	StopPrice decimal.Decimal
+
+	// EquityAtEntry is what the account was worth the instant before this
+	// position opened.
+	//
+	// It is what the trade's risk is a share *of*. Measuring every trade
+	// against the run's starting balance instead would be wrong the moment
+	// equity compounds: a trade risking 1% of a grown account reports as
+	// hundreds of percent "of balance", which is alarming, meaningless, and
+	// not what the sizing rule did.
+	EquityAtEntry decimal.Decimal
+
 	// EntryMaker and ExitMaker record how each side of the round trip filled.
 	//
 	// They are per-trade rather than per-run because a run can be
@@ -459,6 +540,14 @@ type Result struct {
 	// other than the strategy as written.
 	EntriesRequested   int64
 	LimitOrdersExpired int64
+
+	// EntriesBelowMinLot counts entries the venue could not have taken: the
+	// size the strategy asked for was under the minimum lot, so the trade did
+	// not happen rather than happening larger.
+	//
+	// On a small balance this can be most of the signals, and it is a fact
+	// about the account rather than about the strategy.
+	EntriesBelowMinLot int64
 
 	// BarsFilterNotReady counts bars where the filter had no answer yet —
 	// warming up, or recovering from a gap. Reported apart from BarsVetoed
