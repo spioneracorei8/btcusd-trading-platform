@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
+#
+# Pull, rebuild the binaries, and restart the stack.
 set -euo pipefail
-cd "$(dirname "$0")"
+
+cd "$(dirname "$0")/.."
 
 git pull
-
-cd ..
 make build
+make up
 
-podman compose --env-file .env -f deploy/docker-compose.yml up -d --build
-echo "done — remember: source .env in your shell before running backtest"
+echo
+echo "done. The backtest CLI reads .env itself — no need to source it first."

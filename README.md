@@ -212,6 +212,8 @@ phase 06 decided about strategies and how they get evaluated.
 | `make adminer` / `make adminer-stop` | database browser on `127.0.0.1:8081` |
 | `go run ./backtest --help` | backtest CLI flags |
 | `go run ./backtest --list-strategies` | strategies this binary can run, and their defaults |
+| `scripts/sweep.sh --dry-run` | print the full strategy × timeframe matrix without running it |
+| `scripts/sweep.sh` | run the matrix; every run appends to the experiment log |
 | `go run ./backtest --compare ...` | same strategy, filter on and off, side by side |
 | `make check` | build + vet + lint + test |
 
