@@ -34,3 +34,6 @@ deploy/pgdata/
 node_modules/
 mobile/.expo/
 mobile/.expo-shared/
+
+backup/
+results/
