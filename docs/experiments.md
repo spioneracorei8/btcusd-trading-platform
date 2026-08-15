@@ -278,3 +278,30 @@ of the arithmetic, not a market observation. Ignore that section in runs 1–7.
 - **Cost sweep:** 1.0x +0.00% (PF inf) | 1.5x +0.00% (PF inf) | 2.0x +0.00% (PF inf)
 - **Verdict:** fail — Net return after costs (0.00%, needs > 0.00%), Profit factor (not measurable), Trades in the development period (0, needs >= 200), Total costs as a share of gross profit (not measurable)
 - **Note:** _(bug from contributor warm-up)_
+
+### 14. 2026-08-15 — ema_crossover v1 (1h)
+
+- **Dataset:** dev (2023-01-01 .. 2024-12-31), `--allow-gaps=skip`
+- **Parameters:** defaults, timeframe 1h
+- **Filter:** ema_rsi_mtf v1 (4h=1.00 deadzone=0.15) — vetoed 0.97%, not-ready 0.00%
+- **Sizing:** risk 1% of equity
+- **Net return after costs:** +7.6832%
+- **Profit factor / max drawdown / trades:** 1.07 / -11.57% / 185
+- **Costs as share of gross profit:** 70% (costs 1814 vs gross profit 2582)
+- **Concentration (best 5):** 9.01%
+- **Verdict:** fail — Profit factor (1.07, needs > 1.30), Trades in the development period (185, needs >= 200), Total costs as a share of gross profit (70.25%, needs < 50.00%)
+- **Note:** _(to fill in — what you learned, not what you hoped)_
+
+### 15. 2026-08-15 — ema_crossover v1 (1h)
+
+- **Dataset:** dev (2023-01-01 .. 2024-12-31), `--allow-gaps=skip`
+- **Parameters:** defaults, timeframe 1h
+- **Filter:** ema_rsi_mtf v1 (4h=1.00 deadzone=0.15) — vetoed 0.97%, not-ready 0.00%
+- **Sizing:** risk 1% of equity
+- **Net return after costs:** +7.6832%
+- **Profit factor / max drawdown / trades:** 1.07 / -11.57% / 185
+- **Costs as share of gross profit:** 70% (costs 1814 vs gross profit 2582)
+- **Concentration (best 5):** 9.01%
+- **Cost sweep:** 1.0x +7.68% (PF 1.07) | 1.5x -1.10% (PF 0.99) | 2.0x -9.16% (PF 0.92)
+- **Verdict:** fail — Profit factor (1.07, needs > 1.30), Trades in the development period (185, needs >= 200), Total costs as a share of gross profit (70.25%, needs < 50.00%)
+- **Note:** _(to fill in — what you learned, not what you hoped)_
