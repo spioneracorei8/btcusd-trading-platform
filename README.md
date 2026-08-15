@@ -41,11 +41,20 @@ shorter run is vetoed end to end — the report separates `bars_vetoed` from
 ## Quick start
 
 ```bash
-cp .env.example .env      # then edit the password before any real deployment
+cp .env.example .env      # required — then edit the password before any real deployment
 make engine               # check which container engine will be used
 make up                   # build and start postgres + migrate + api + collector
 curl localhost:8080/health
 ```
+
+The first line is not optional. The compose file has no defaults for the
+values that decide what the system collects or what its numbers mean — symbol,
+timeframes, fees, tick size, backfill start — so it refuses to start without
+them rather than substituting something plausible. Every `make` target passes
+`.env` to compose by absolute path; a bare `docker compose ...` reads no
+environment file at all, because compose looks for one next to the compose file
+rather than at the repository root. See
+[ADR 0019](docs/decisions/0019-configuration-is-explicit.md).
 
 The schema is applied by the `migrate` service, which runs before `api` and
 `collector` start; `make migrate-up` is only needed against a database outside

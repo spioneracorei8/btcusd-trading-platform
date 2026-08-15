@@ -38,8 +38,8 @@ reconstruct later.
 **The volume is the thing that must survive everything else.** The checkout can
 be re-cloned, the images rebuilt, the host rebuilt. Two years of 1m candles
 cannot be re-fetched — Binance serves recent klines, not deep history on
-demand. `docker compose down` keeps it; `docker compose down -v` destroys it.
-Never type the second one on this host.
+demand. `make prod-down` keeps it; adding `-v` to a compose `down` destroys it.
+Never type that on this host.
 
 ### Why Docker here when development uses podman
 
@@ -200,9 +200,32 @@ Container logs, health, and updates:
 cd /opt/btcusd
 make prod-ps
 make prod-logs                      # follow all services
-docker compose --env-file .env -f deploy/docker-compose.yml \
-  -f deploy/docker-compose.prod.yml logs -f collector    # one service
+make prod-config                    # what the containers will actually receive
 ```
+
+> **Every compose command needs `--env-file`, and always the one at the
+> repository root.**
+>
+> Compose looks for `.env` in the directory holding the compose file —
+> `deploy/` — not at the repository root. There is no `deploy/.env`, so a bare
+> `docker compose ...` reads no environment file at all.
+>
+> That used to mean it silently fell back to defaults baked into the compose
+> file, and editing `/opt/btcusd/.env` changed nothing with no indication why.
+> The defaults for anything that decides what is collected or what the numbers
+> mean have since been removed, so a bare command now **fails** naming the
+> variable it could not resolve. That is the intended outcome, not a bug.
+>
+> The `make prod-*` targets and `btcusd.service` both pass the file explicitly.
+> Prefer them. When a raw command is genuinely needed — reaching one service —
+> spell it out in full:
+>
+> ```bash
+> cd /opt/btcusd
+> docker compose --env-file /opt/btcusd/.env \
+>   -f deploy/docker-compose.yml -f deploy/docker-compose.prod.yml \
+>   logs -f collector
+> ```
 
 Deploying a new version:
 
@@ -326,28 +349,28 @@ sudo systemctl stop btcusd
 
 # 2. Bring up only PostgreSQL.
 cd /opt/btcusd
-docker compose --env-file .env -f deploy/docker-compose.yml \
+docker compose --env-file /opt/btcusd/.env -f deploy/docker-compose.yml \
   -f deploy/docker-compose.prod.yml up -d postgres
 
 # 3. Recreate the database.
-docker compose --env-file .env -f deploy/docker-compose.yml \
+docker compose --env-file /opt/btcusd/.env -f deploy/docker-compose.yml \
   -f deploy/docker-compose.prod.yml exec -T postgres \
   psql -U trading -d postgres -c 'DROP DATABASE btcusd;' -c 'CREATE DATABASE btcusd;'
 
 # 4. TimescaleDB needs this around the restore. Without it the catalog and the
 #    chunks disagree, the restore appears to succeed, and the hypertable is
 #    subtly broken.
-docker compose --env-file .env -f deploy/docker-compose.yml \
+docker compose --env-file /opt/btcusd/.env -f deploy/docker-compose.yml \
   -f deploy/docker-compose.prod.yml exec -T postgres \
   psql -U trading -d btcusd -c 'CREATE EXTENSION IF NOT EXISTS timescaledb;' \
                              -c 'SELECT timescaledb_pre_restore();'
 
 gunzip -c /var/backups/btcusd/daily/btcusd-<stamp>.sql.gz | \
-  docker compose --env-file .env -f deploy/docker-compose.yml \
+  docker compose --env-file /opt/btcusd/.env -f deploy/docker-compose.yml \
     -f deploy/docker-compose.prod.yml exec -T postgres \
     psql -v ON_ERROR_STOP=1 -U trading -d btcusd
 
-docker compose --env-file .env -f deploy/docker-compose.yml \
+docker compose --env-file /opt/btcusd/.env -f deploy/docker-compose.yml \
   -f deploy/docker-compose.prod.yml exec -T postgres \
   psql -U trading -d btcusd -c 'SELECT timescaledb_post_restore();'
 
@@ -429,7 +452,7 @@ and keep it.
 
 Checked on: `________________`
 
-- [ ] `docker compose ps` shows `postgres`, `api`, `collector` running
+- [ ] `make prod-ps` shows `postgres`, `api`, `collector` running
 - [ ] Migrations applied automatically, with no manual step
 - [ ] `/health` returns 200 over Tailscale
 - [ ] `/health` is **unreachable** from the public IP
@@ -534,8 +557,12 @@ tailscale status
 ip -4 addr show tailscale0
 ```
 
-**`docker compose` says `TAILSCALE_IP is missing a value`.**
-Working as designed — see §2.3. Set it in `/opt/btcusd/.env`.
+**Compose says a variable `is missing a value`.**
+Working as designed. Either the variable is genuinely unset in
+`/opt/btcusd/.env` — `TAILSCALE_IP` after a fresh install, see §2.3 — or the
+command was run without `--env-file` and read no environment file at all. Check
+which before editing anything: `make prod-config` prints what the containers
+would actually receive.
 
 **The collector is up but `latest_age_seconds` keeps climbing.**
 The WebSocket is connected but not delivering, or the process is wedged behind
@@ -558,7 +585,8 @@ cause; if they are, the overlay is not being applied — check that both `-f`
 flags are present.
 
 **I need to start over on the database but keep everything else.**
-`docker compose down` then `docker volume rm btcusd-trading-platform_pgdata`.
+`sudo systemctl stop btcusd` then
+`docker volume rm btcusd-trading-platform_pgdata`.
 Be certain. Two years of candles do not come back.
 
 ---

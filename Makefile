@@ -37,7 +37,30 @@ endif
 # or set CONTAINER_ENGINE in .env to make the choice stick.
 CONTAINER_ENGINE ?= $(shell command -v podman >/dev/null 2>&1 && echo podman || echo docker)
 
-COMPOSE := $(CONTAINER_ENGINE) compose $(if $(wildcard ./.env),--env-file .env,) -f $(COMPOSE_FILE)
+# The environment file, as an absolute path.
+#
+# # Why this is passed explicitly, always
+#
+# Compose resolves a relative --env-file against the current directory, but
+# when none is given it looks for `.env` in the *project directory* — which is
+# the directory holding the first -f file, so `deploy/`. There is no
+# `deploy/.env` and there never was, so an omitted --env-file silently fell
+# through to the defaults baked into the compose file: MARKET_SYMBOL=BTCUSDT,
+# MARKET_TIMEFRAMES=1m,5m,15m,1h, and so on.
+#
+# Silently is the whole problem. Editing .env, recreating the containers and
+# seeing nothing change gives the reader no thread to pull on — the values are
+# plausible, the stack is healthy, and the file they just edited is simply not
+# being read.
+#
+# It was previously conditional, which meant a missing .env produced exactly
+# that failure. Passing it unconditionally turns the same situation into
+# compose refusing to start, and require-env explains it first. Absolute
+# because $(CURDIR) is where .env lives whatever directory a target is invoked
+# from, which is the same reason the systemd unit on the VPS spells it out.
+ENV_FILE := $(CURDIR)/.env
+
+COMPOSE := $(CONTAINER_ENGINE) compose --env-file $(ENV_FILE) -f $(COMPOSE_FILE)
 
 .PHONY: help
 help: ## Show this help
@@ -63,7 +86,7 @@ test: ## Run unit tests (integration tests skip without TEST_DATABASE_URL)
 	cd $(SERVER) && go test $(GOTAGS) ./...
 
 .PHONY: test-integration
-test-integration: ## Start the database, migrate it and run every test
+test-integration: require-env ## Start the database, migrate it and run every test
 	$(COMPOSE) up -d postgres
 	$(MAKE) migrate-up
 	cd $(SERVER) && TEST_DATABASE_URL="$(DATABASE_URL)" go test $(GOTAGS) -count=1 ./...
@@ -108,6 +131,25 @@ require-db-url:
 		exit 1; \
 	fi
 
+# require-env explains a missing .env before compose does.
+#
+# Compose's own message for an absent --env-file names the path and nothing
+# else, which is a poor place to learn that the file was supposed to exist.
+.PHONY: require-env
+require-env:
+	@if [ ! -f "$(ENV_FILE)" ]; then \
+		echo "$(ENV_FILE) does not exist."; \
+		echo; \
+		echo "Every compose target reads it, and the compose file no longer"; \
+		echo "carries defaults for the values that decide what this system"; \
+		echo "collects and what its numbers mean. Create it with:"; \
+		echo; \
+		echo "    cp .env.example .env"; \
+		echo; \
+		echo "then set POSTGRES_PASSWORD before deploying anywhere real."; \
+		exit 1; \
+	fi
+
 .PHONY: migrate-up
 migrate-up: require-db-url ## Apply all migrations
 	$(GOOSE) -dir $(MIGRATIONS) postgres "$(DATABASE_URL)" up
@@ -141,23 +183,23 @@ engine: ## Show which container engine these targets will use
 	@echo "compose command  = $(COMPOSE)"
 
 .PHONY: up
-up: ## Build and start the stack
+up: require-env ## Build and start the stack
 	$(COMPOSE) up --build -d
 
 .PHONY: down
-down: ## Stop the stack (keeps the pgdata volume)
+down: require-env ## Stop the stack (keeps the pgdata volume)
 	$(COMPOSE) down
 
 .PHONY: logs
-logs: ## Follow the container logs
+logs: require-env ## Follow the container logs
 	$(COMPOSE) logs -f
 
 .PHONY: ps
-ps: ## Show the container status
+ps: require-env ## Show the container status
 	$(COMPOSE) ps
 
 .PHONY: adminer
-adminer: ## Start Adminer to browse the database, then print its URL
+adminer: require-env ## Start Adminer to browse the database, then print its URL
 	$(COMPOSE) --profile tools up -d adminer
 	@echo
 	@echo "Engine:    $(CONTAINER_ENGINE)"
@@ -168,7 +210,7 @@ adminer: ## Start Adminer to browse the database, then print its URL
 	@echo "Database:  $(or $(POSTGRES_DB),btcusd)"
 
 .PHONY: adminer-stop
-adminer-stop: ## Stop and remove Adminer, leaving the rest of the stack up
+adminer-stop: require-env ## Stop and remove Adminer, leaving the rest of the stack up
 	$(COMPOSE) --profile tools rm -sf adminer
 
 # ---------------------------------------------------------------------------
@@ -182,27 +224,27 @@ adminer-stop: ## Stop and remove Adminer, leaving the rest of the stack up
 # The production overlay adds the Tailscale binding and the 4 GB PostgreSQL
 # tuning, and refuses to start when TAILSCALE_IP is unset.
 
-PROD_COMPOSE := $(CONTAINER_ENGINE) compose $(if $(wildcard ./.env),--env-file .env,) \
+PROD_COMPOSE := $(CONTAINER_ENGINE) compose --env-file $(ENV_FILE) \
 	-f $(COMPOSE_FILE) -f deploy/docker-compose.prod.yml
 
 .PHONY: prod-up
-prod-up: ## VPS: build and start the production stack
+prod-up: require-env ## VPS: build and start the production stack
 	$(PROD_COMPOSE) up --build -d --remove-orphans
 
 .PHONY: prod-down
-prod-down: ## VPS: stop the production stack (keeps the pgdata volume)
+prod-down: require-env ## VPS: stop the production stack (keeps the pgdata volume)
 	$(PROD_COMPOSE) down
 
 .PHONY: prod-ps
-prod-ps: ## VPS: show the production container status
+prod-ps: require-env ## VPS: show the production container status
 	$(PROD_COMPOSE) ps
 
 .PHONY: prod-logs
-prod-logs: ## VPS: follow the production container logs
+prod-logs: require-env ## VPS: follow the production container logs
 	$(PROD_COMPOSE) logs -f
 
 .PHONY: prod-config
-prod-config: ## VPS: print the merged production compose configuration
+prod-config: require-env ## VPS: print the merged production compose configuration
 	$(PROD_COMPOSE) config
 
 .PHONY: backup
