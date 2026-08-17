@@ -13,10 +13,18 @@ import (
 	"github.com/spioneracorei8/btcusd-trading-platform/server/services/trend"
 )
 
-// earliestCollected is the oldest candle this deployment has. It is the
-// MARKET_BACKFILL_FROM in .env.example, which is also where the development
-// set begins — so in practice a contributor has no warm-up runway at all
-// unless its series was backfilled earlier on purpose.
+// earliestCollected is the oldest candle this deployment has: the
+// MARKET_BACKFILL_FROM in .env.example.
+//
+// It sits six months before the development set on purpose, and that gap is
+// the entire warm-up budget the check below spends. Bring the two together and
+// every higher-timeframe contributor is cold for the whole evaluation.
+//
+// This is a claim about the deployment, not only about a file. It holds
+// because the collector honours the setting in both directions — it fills
+// history older than the stored series as well as newer. Before that it did
+// not, and a series collected under an earlier setting stayed short however
+// the file was edited.
 var earliestCollected = time.Date(2022, 7, 1, 0, 0, 0, 0, time.UTC)
 
 // TestEachBaseResolvesToItsDocumentedContributors is the table from the fix,

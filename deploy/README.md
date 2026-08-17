@@ -240,6 +240,50 @@ Migrations apply automatically. The `migrate` service runs to completion before
 migration step and there must not be one** — a missing table on a VPS is far
 less obvious than it is locally, which is exactly how it was found in phase 02.
 
+### Collecting more history than you started with
+
+`MARKET_BACKFILL_FROM` is honoured in both directions. Move it earlier, restart,
+and the collector fills the stretch between the new date and wherever each
+series currently begins, before resuming the forward walk.
+
+```bash
+cd /opt/btcusd
+$EDITOR .env                        # MARKET_BACKFILL_FROM=2022-07-01T00:00:00Z
+sudo systemctl restart btcusd
+
+journalctl -u btcusd -f | grep -i history
+```
+
+Expect one `filling history older than the stored series` line per timeframe
+that needs it, then `history fill complete` with where the series now starts.
+Confirm it landed:
+
+```bash
+curl -s $S | jq '.timeframes[] | {timeframe, earliest_open_time}'
+```
+
+Three things worth knowing:
+
+- **It is not fast.** A 1m series back to 2022-07-01 is roughly 300,000 candles
+  at 1,000 per request. Leave it running; it is restartable, and a process
+  killed part-way simply resumes from wherever the series now begins.
+- **Nothing detects a short series on its own.** Gap detection finds holes
+  *between* stored candles with a window function, so a missing prefix has no
+  bar before it to compare against and is invisible to it. Check
+  `earliest_open_time` against `MARKET_BACKFILL_FROM` yourself after changing
+  the date. Until phase 06 the forward walk could not reach that history at
+  all, and an edited date changed nothing and said nothing.
+- **The date is a warm-up budget, not a preference.** A trend contributor says
+  nothing until it has seen 1,000 closes of its own timeframe: about 167 days
+  for 4h, 2.7 years for 1d. Set `MARKET_BACKFILL_FROM` to the start of the
+  evaluation period and every higher-timeframe filter is cold throughout it,
+  reporting zero trades with nothing to explain why. Six months of runway is
+  what `.env.example` ships.
+
+If the exchange has nothing that far back, the log says so once per timeframe
+at warn level and the collector carries on — the live feed is not held up over
+history nobody can supply.
+
 ### Reaching the API
 
 Over the tailnet, from any device on it:

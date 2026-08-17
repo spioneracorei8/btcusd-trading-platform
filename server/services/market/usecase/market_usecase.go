@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
 	"golang.org/x/sync/errgroup"
@@ -40,6 +41,10 @@ type marketUsecase struct {
 	backoff *binance.Backoff
 	state   *stateMachine
 
+	// historyWarned remembers which timeframes have already reported that the
+	// exchange has no candles as far back as MARKET_BACKFILL_FROM.
+	historyWarned *seenSet
+
 	// now is injectable so tests can control the clock.
 	now func() time.Time
 }
@@ -54,17 +59,38 @@ func NewMarketUsecaseImpl(
 	gaps datagap.DataGapUsecase,
 ) market.MarketUsecase {
 	return &marketUsecase{
-		cfg:        cfg,
-		log:        log,
-		marketData: marketData,
-		status:     status,
-		candles:    candles,
-		gaps:       gaps,
-		cache:      NewLatestCandleCache(),
-		backoff:    binance.NewBackoff(),
-		state:      newStateMachine(time.Now().UTC()),
-		now:        func() time.Time { return time.Now().UTC() },
+		cfg:           cfg,
+		log:           log,
+		marketData:    marketData,
+		status:        status,
+		candles:       candles,
+		gaps:          gaps,
+		cache:         NewLatestCandleCache(),
+		backoff:       binance.NewBackoff(),
+		state:         newStateMachine(time.Now().UTC()),
+		historyWarned: &seenSet{seen: make(map[constants.Timeframe]bool)},
+		now:           func() time.Time { return time.Now().UTC() },
 	}
+}
+
+// seenSet records which timeframes something has already been said about.
+//
+// It exists for log-noise control only: the backward fill is re-attempted on
+// every reconnect and decides what to fetch from the stored series, never from
+// this. Guarded because status reads arrive on another goroutine.
+type seenSet struct {
+	mu   sync.Mutex
+	seen map[constants.Timeframe]bool
+}
+
+// mark records a timeframe and reports whether it had been seen before.
+func (s *seenSet) mark(timeframe constants.Timeframe) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	already := s.seen[timeframe]
+	s.seen[timeframe] = true
+	return already
 }
 
 // LatestOpenCandle returns the forming bar held in memory.

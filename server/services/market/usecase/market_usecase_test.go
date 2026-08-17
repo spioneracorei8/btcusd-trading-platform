@@ -36,15 +36,21 @@ type fakeMarketData struct {
 	streamErr error
 	now       time.Time
 
+	// requests records every FetchKlines call, so a test can assert which
+	// window was asked for and not merely what came back.
+	requests []market.FetchKlinesParams
+
 	// delivered marks the scripted stream as consumed. A real connection
 	// stays open after the last message rather than replaying it, so later
 	// calls block until the context ends.
 	delivered bool
 }
 
-func (f *fakeMarketData) FetchKlines(_ context.Context, _ market.FetchKlinesParams) ([]models.Candle, error) {
+func (f *fakeMarketData) FetchKlines(_ context.Context, params market.FetchKlinesParams) ([]models.Candle, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+
+	f.requests = append(f.requests, params)
 
 	if f.calls >= len(f.pages) {
 		return nil, nil
@@ -81,6 +87,13 @@ func (f *fakeMarketData) StreamKlines(ctx context.Context, _ market.StreamParams
 
 func (f *fakeMarketData) ServerTime(context.Context) (time.Time, error) { return f.now, nil }
 
+// fetched returns the windows that were requested.
+func (f *fakeMarketData) fetched() []market.FetchKlinesParams {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]market.FetchKlinesParams(nil), f.requests...)
+}
+
 // recordingCandleUsecase records everything the pipeline tried to store.
 type recordingCandleUsecase struct {
 	mu     sync.Mutex
@@ -88,6 +101,11 @@ type recordingCandleUsecase struct {
 	gaps   []candle.Gap
 	latest models.Candle
 	hasOne bool
+
+	// earliest is the oldest stored bar. It falls back to latest when unset,
+	// which is what a one-candle series looks like.
+	earliest    models.Candle
+	hasEarliest bool
 }
 
 func (r *recordingCandleUsecase) SaveCandle(_ context.Context, c models.Candle) error {
@@ -112,6 +130,20 @@ func (r *recordingCandleUsecase) SaveCandles(_ context.Context, candles []models
 		}
 	}
 	r.stored = append(r.stored, candles...)
+
+	// Mirror what the table does: an upsert of an older bar moves the start of
+	// the series, and one that is not older moves nothing. Without this the
+	// fake reports progress from the row count alone, which is exactly the
+	// distinction the backward fill has to make.
+	for _, c := range candles {
+		if r.hasEarliest && !c.OpenTime.Before(r.earliest.OpenTime) {
+			continue
+		}
+		if !r.hasOne {
+			r.hasOne, r.latest = true, c
+		}
+		r.earliest, r.hasEarliest = c, true
+	}
 	return nil
 }
 
@@ -135,6 +167,9 @@ func (r *recordingCandleUsecase) FetchEarliestCandle(context.Context, string, co
 
 	if !r.hasOne {
 		return models.Candle{}, constants.ErrNotFound
+	}
+	if r.hasEarliest {
+		return r.earliest, nil
 	}
 	return r.latest, nil
 }
@@ -323,6 +358,41 @@ func makeCandle(openTime time.Time, isClosed bool) models.Candle {
 
 func silentLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
+}
+
+// recordingLogger captures what was logged, so a test can assert on what the
+// operator would have been told.
+type recordingLogger struct {
+	mu      sync.Mutex
+	records []slog.Record
+}
+
+func (l *recordingLogger) Enabled(context.Context, slog.Level) bool { return true }
+
+func (l *recordingLogger) Handle(_ context.Context, record slog.Record) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.records = append(l.records, record)
+	return nil
+}
+
+func (l *recordingLogger) WithAttrs([]slog.Attr) slog.Handler { return l }
+func (l *recordingLogger) WithGroup(string) slog.Handler      { return l }
+
+func (l *recordingLogger) logger() *slog.Logger { return slog.New(l) }
+
+// messagesAt returns the messages logged at a level.
+func (l *recordingLogger) messagesAt(level slog.Level) []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	var out []string
+	for _, record := range l.records {
+		if record.Level == level {
+			out = append(out, record.Message)
+		}
+	}
+	return out
 }
 
 // ---------------------------------------------------------------------------
