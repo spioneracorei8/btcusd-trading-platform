@@ -605,3 +605,8 @@ Be certain. Two years of candles do not come back.
 - **Anything that places an order.** Not here, not later. `CLAUDE.md` §1, and
   `server/architecture_test.go` fails the build if an order, account or
   withdrawal endpoint appears anywhere in the source.
+
+48-hour test: PASS
+disconnect 2026-08-17T05:11:01Z (StatusGoingAway, after 48h54m)
+reconnect 2026-08-17T05:11:03Z, 2.4s downtime
+no new gaps
