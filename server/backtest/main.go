@@ -364,6 +364,7 @@ func buildParams(opts options, cfg *config.Config) (backtest.RunParams, error) {
 		}
 		sizing.RiskPct = risk
 	}
+	sizing.MaxLeverage = cfg.Market.MaxLeverage
 
 	return backtest.RunParams{
 		Symbol:        cfg.Market.Symbol,

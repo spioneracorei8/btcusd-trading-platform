@@ -298,8 +298,11 @@ type runner struct {
 	limitOrdersExpired int64
 
 	// entriesBelowMinLot counts entries refused because the size the strategy
-	// asked for fell below the venue's minimum tradeable lot.
-	entriesBelowMinLot int64
+	// asked for fell below the venue's minimum tradeable lot, and
+	// entriesRefusedAfterCap how many of those had already been cut down by
+	// the account's notional limit.
+	entriesBelowMinLot     int64
+	entriesRefusedAfterCap int64
 }
 
 // restingOrder is a limit entry sitting on the book.
@@ -603,6 +606,15 @@ func (r *runner) openAt(
 		// The position the strategy asked for is smaller than the venue can
 		// trade. Refused, not rounded up.
 		r.entriesBelowMinLot++
+
+		// And separately: whether the notional cap is what made it too small.
+		// Without this the two causes are indistinguishable in the report —
+		// "the strategy wanted a tiny position" and "the account could not
+		// hold the position the strategy wanted" look identical, and only the
+		// second one is fixed by changing a setting.
+		if capped {
+			r.entriesRefusedAfterCap++
+		}
 		return
 	}
 	if capped {
@@ -647,10 +659,7 @@ func (r *runner) openAt(
 // a strategy whose sizing is constantly capped will show a drawdown far worse
 // than its risk setting implies and nothing else would explain why.
 func (r *runner) sizeFor(price, stop decimal.Decimal) (size decimal.Decimal, capped bool) {
-	// All-in: commit the whole account, fee included. Dividing by (1 + fee) is
-	// what makes the entry affordable rather than one fee over budget.
-	feeRate := r.params.Costs.FeeTakerPct.Div(hundred)
-	affordable := r.equity.Div(price.Mul(decimal.NewFromInt(1).Add(feeRate)))
+	affordable := r.affordable(price)
 
 	if r.params.Sizing.Mode == backtest.SizingAllIn {
 		return affordable, false
@@ -671,6 +680,34 @@ func (r *runner) sizeFor(price, stop decimal.Decimal) (size decimal.Decimal, cap
 		return affordable, true
 	}
 	return wanted, false
+}
+
+// affordable is the largest position the account may hold at this price.
+//
+// # What "afford" means depends on the account
+//
+// On a cash account it is what the balance can pay for, fee included: dividing
+// by (1 + fee) is what makes the entry affordable rather than one fee over
+// budget. On a margin account it is a multiple of that, because margin is
+// posted rather than the whole notional — and the engine's accounting has
+// always worked that way, moving equity by realised P&L and costs and never
+// deducting the notional.
+//
+// Leverage defaults to 1, so a run that says nothing about it behaves exactly
+// as every earlier evaluation did.
+//
+// Under the spread model the fee is not a share of notional, so there is no
+// percentage to make room for. Reserving one anyway would shrink every
+// position by a fee the run does not charge.
+func (r *runner) affordable(price decimal.Decimal) decimal.Decimal {
+	buyingPower := r.equity.Mul(r.params.Sizing.Leverage())
+
+	if r.params.Costs.CostModel() == constants.CostModelSpread {
+		return buyingPower.Div(price)
+	}
+
+	feeRate := r.params.Costs.FeeTakerPct.Div(hundred)
+	return buyingPower.Div(price.Mul(decimal.NewFromInt(1).Add(feeRate)))
 }
 
 // onLotGrid rounds a size down to the venue's tradeable increments.
@@ -882,6 +919,7 @@ func (r *runner) fill(result *backtest.Result) {
 	result.MakerExits = r.makerExits
 	result.TakerExits = r.takerExits
 	result.EntriesBelowMinLot = r.entriesBelowMinLot
+	result.EntriesRefusedAfterCap = r.entriesRefusedAfterCap
 	result.EntriesRequested = r.entriesRequested
 	result.LimitOrdersExpired = r.limitOrdersExpired
 	result.Trades = r.trades

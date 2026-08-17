@@ -47,6 +47,14 @@ const (
 	DefaultLotStep          = "0.01"
 	DefaultCommissionPerLot = "0"
 
+	// DefaultMaxLeverage is a cash account: a position may be no larger than
+	// the balance can pay for outright.
+	//
+	// One, and not the venue's maximum, because an unstated leverage must
+	// never silently make positions larger than the run before it. A margin
+	// venue is opted into.
+	DefaultMaxLeverage = "1"
+
 	// DefaultLimitOrderTimeoutBars is how long an unfilled limit order rests
 	// before it is cancelled. One bar means the order gets a single bar of
 	// opportunity, which is the same window a market entry would have used.

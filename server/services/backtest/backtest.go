@@ -280,6 +280,35 @@ type Sizing struct {
 	// RiskPct is the share of equity risked per trade under
 	// SizingFixedFractional, in percent: 1 means 1%.
 	RiskPct decimal.Decimal
+
+	// MaxLeverage is how much notional the account may hold per unit of
+	// equity. Zero means 1, which is a cash account.
+	//
+	// # Why this exists, and what went wrong without it
+	//
+	// Position size was capped at equity/price — the most BTC a spot account
+	// could pay for. On a margin venue that is the wrong constraint: a CFD
+	// account posts margin, not notional, and the engine's own accounting
+	// already works that way (equity moves by realised P&L and costs, and
+	// never has the notional deducted).
+	//
+	// With a 100 USD balance at 27,000 the cap was 0.0037 BTC, below the 0.01
+	// lot minimum, so *every* entry was refused — and because the cap bound
+	// before the risk arithmetic could matter, 1% risk and 20% risk produced
+	// byte-identical runs. The sizing rule was reporting a number it never
+	// used.
+	//
+	// One is still the default: an unstated leverage must not silently make
+	// positions larger, and every evaluation before this was a cash account.
+	MaxLeverage decimal.Decimal
+}
+
+// Leverage is MaxLeverage with its zero value read as a cash account.
+func (s Sizing) Leverage() decimal.Decimal {
+	if !s.MaxLeverage.IsPositive() {
+		return decimal.NewFromInt(1)
+	}
+	return s.MaxLeverage
 }
 
 // DefaultSizing risks 1% of equity per trade against the stop distance.
@@ -304,6 +333,9 @@ func (s Sizing) Validate() error {
 		if s.RiskPct.GreaterThan(decimal.NewFromInt(100)) {
 			return fmt.Errorf("backtest: risk %s%% per trade exceeds the whole account", s.RiskPct)
 		}
+	}
+	if s.MaxLeverage.IsNegative() {
+		return fmt.Errorf("backtest: leverage %s is negative", s.MaxLeverage)
 	}
 	return nil
 }
@@ -565,6 +597,14 @@ type Result struct {
 	// On a small balance this can be most of the signals, and it is a fact
 	// about the account rather than about the strategy.
 	EntriesBelowMinLot int64
+
+	// EntriesRefusedAfterCap is how many of those refusals were of a position
+	// the risk rule had *already* shrunk to fit the account's notional limit.
+	//
+	// It separates two findings that look identical in a zero-trade run: a
+	// strategy asking for tiny positions, and an account too small to hold the
+	// positions the strategy asked for. Only the second is fixed by a setting.
+	EntriesRefusedAfterCap int64
 
 	// BarsFilterNotReady counts bars where the filter had no answer yet —
 	// warming up, or recovering from a gap. Reported apart from BarsVetoed

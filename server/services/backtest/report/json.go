@@ -80,6 +80,12 @@ type runDoc struct {
 
 	GapPolicy     string `json:"gap_policy"`
 	InitialEquity string `json:"initial_equity"`
+
+	// Sizing, recorded because the notional limit decides position size just
+	// as surely as the risk setting does.
+	SizingMode  string `json:"sizing_mode"`
+	RiskPct     string `json:"risk_pct"`
+	MaxLeverage string `json:"max_leverage"`
 }
 
 type costsDoc struct {
@@ -164,19 +170,20 @@ type tradeStatsDoc struct {
 	// trades at all. The last one is the number to read first under a limit
 	// entry model: a large share means the statistics above describe a subset
 	// of the strategy's intent rather than the strategy.
-	MakerEntries        int64   `json:"maker_entries"`
-	TakerEntries        int64   `json:"taker_entries"`
-	MakerExits          int64   `json:"maker_exits"`
-	TakerExits          int64   `json:"taker_exits"`
-	EntriesRequested    int64   `json:"entries_requested"`
-	EntriesBelowMinLot  int64   `json:"entries_below_min_lot"`
-	AverageCostPerTrade string  `json:"average_cost_per_trade"`
-	AverageRisk         string  `json:"average_risk"`
-	WorstRisk           string  `json:"worst_risk"`
-	AverageRiskPct      float64 `json:"average_risk_pct_of_balance"`
-	WorstRiskPct        float64 `json:"worst_risk_pct_of_balance"`
-	LimitOrdersExpired  int64   `json:"limit_orders_expired"`
-	CancelledPercent    float64 `json:"limit_orders_cancelled_percent"`
+	MakerEntries           int64   `json:"maker_entries"`
+	TakerEntries           int64   `json:"taker_entries"`
+	MakerExits             int64   `json:"maker_exits"`
+	TakerExits             int64   `json:"taker_exits"`
+	EntriesRequested       int64   `json:"entries_requested"`
+	EntriesBelowMinLot     int64   `json:"entries_below_min_lot"`
+	EntriesRefusedAfterCap int64   `json:"entries_refused_after_notional_cap"`
+	AverageCostPerTrade    string  `json:"average_cost_per_trade"`
+	AverageRisk            string  `json:"average_risk"`
+	WorstRisk              string  `json:"worst_risk"`
+	AverageRiskPct         float64 `json:"average_risk_pct_of_balance"`
+	WorstRiskPct           float64 `json:"worst_risk_pct_of_balance"`
+	LimitOrdersExpired     int64   `json:"limit_orders_expired"`
+	CancelledPercent       float64 `json:"limit_orders_cancelled_percent"`
 }
 
 type tradeDoc struct {
@@ -247,6 +254,9 @@ func BuildDocument(result backtest.Result, stats Statistics) Document {
 			EvaluatedTo:   rfc3339(result.LastBar),
 			GapPolicy:     result.Params.GapPolicy.String(),
 			InitialEquity: stats.InitialEquity.String(),
+			SizingMode:    result.Params.Sizing.Mode.String(),
+			RiskPct:       result.Params.Sizing.RiskPct.String(),
+			MaxLeverage:   result.Params.Sizing.Leverage().String(),
 		},
 		Costs: costsDoc{
 			FeeTakerPct:      result.Params.Costs.FeeTakerPct.String(),
@@ -292,31 +302,32 @@ func BuildDocument(result backtest.Result, stats Statistics) Document {
 			AnnualisationBars:   stats.AnnualisationBars,
 		},
 		TradeStats: tradeStatsDoc{
-			Count:               stats.TradeCount,
-			Wins:                stats.WinCount,
-			Losses:              stats.LossCount,
-			WinRate:             stats.WinRate,
-			ProfitFactor:        finite(stats.ProfitFactor),
-			AverageWin:          stats.AverageWin.String(),
-			AverageLoss:         stats.AverageLoss.String(),
-			LargestWin:          stats.LargestWin.String(),
-			LargestLoss:         stats.LargestLoss.String(),
-			AverageHoldSeconds:  int64(stats.AverageHoldingTime / time.Second),
-			LongestLosingStreak: stats.LongestLosingStreak,
-			TradesPerDay:        stats.TradesPerDay,
-			MakerEntries:        result.MakerEntries,
-			TakerEntries:        result.TakerEntries,
-			MakerExits:          result.MakerExits,
-			TakerExits:          result.TakerExits,
-			EntriesRequested:    result.EntriesRequested,
-			EntriesBelowMinLot:  result.EntriesBelowMinLot,
-			AverageCostPerTrade: stats.AverageCostPerTrade.String(),
-			AverageRisk:         stats.AverageRisk.String(),
-			WorstRisk:           stats.WorstRisk.String(),
-			AverageRiskPct:      stats.AverageRiskPct,
-			WorstRiskPct:        stats.WorstRiskPct,
-			LimitOrdersExpired:  result.LimitOrdersExpired,
-			CancelledPercent:    percent(result.LimitOrdersExpired, result.EntriesRequested),
+			Count:                  stats.TradeCount,
+			Wins:                   stats.WinCount,
+			Losses:                 stats.LossCount,
+			WinRate:                stats.WinRate,
+			ProfitFactor:           finite(stats.ProfitFactor),
+			AverageWin:             stats.AverageWin.String(),
+			AverageLoss:            stats.AverageLoss.String(),
+			LargestWin:             stats.LargestWin.String(),
+			LargestLoss:            stats.LargestLoss.String(),
+			AverageHoldSeconds:     int64(stats.AverageHoldingTime / time.Second),
+			LongestLosingStreak:    stats.LongestLosingStreak,
+			TradesPerDay:           stats.TradesPerDay,
+			MakerEntries:           result.MakerEntries,
+			TakerEntries:           result.TakerEntries,
+			MakerExits:             result.MakerExits,
+			TakerExits:             result.TakerExits,
+			EntriesRequested:       result.EntriesRequested,
+			EntriesBelowMinLot:     result.EntriesBelowMinLot,
+			EntriesRefusedAfterCap: result.EntriesRefusedAfterCap,
+			AverageCostPerTrade:    stats.AverageCostPerTrade.String(),
+			AverageRisk:            stats.AverageRisk.String(),
+			WorstRisk:              stats.WorstRisk.String(),
+			AverageRiskPct:         stats.AverageRiskPct,
+			WorstRiskPct:           stats.WorstRiskPct,
+			LimitOrdersExpired:     result.LimitOrdersExpired,
+			CancelledPercent:       percent(result.LimitOrdersExpired, result.EntriesRequested),
 		},
 		// Never nil: an empty run emits [] rather than null, so a consumer
 		// can iterate without a special case.

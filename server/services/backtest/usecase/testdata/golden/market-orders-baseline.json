@@ -19,7 +19,10 @@
     "evaluated_from": "2026-01-01T00:09:00Z",
     "evaluated_to": "2026-01-01T06:39:00Z",
     "gap_policy": "halt",
-    "initial_equity": "10000"
+    "initial_equity": "10000",
+    "sizing_mode": "all_in",
+    "risk_pct": "0",
+    "max_leverage": "1"
   },
   "costs": {
     "fee_taker_pct": "0.05",
@@ -81,6 +84,7 @@
     "taker_exits": 28,
     "entries_requested": 28,
     "entries_below_min_lot": 0,
+    "entries_refused_after_notional_cap": 0,
     "average_cost_per_trade": "17.1016296282654642",
     "average_risk": "0",
     "worst_risk": "0",

@@ -366,10 +366,16 @@ func ExperimentEntryFor(
 	return entry
 }
 
-// describeSizing renders the sizing mode for the log.
+// describeSizing renders how position size was decided.
+//
+// The notional limit belongs here beside the risk setting because it decides
+// size just as surely, and silently wins when it binds: a run capped at 1x
+// sizes identically at 1% risk and at 20%, and without this line two such runs
+// would be logged as different experiments having measured the same thing.
 func describeSizing(sizing backtest.Sizing) string {
+	leverage := fmt.Sprintf("%sx notional limit", sizing.Leverage().String())
 	if sizing.Mode == backtest.SizingAllIn {
-		return "all-in"
+		return "all-in, " + leverage
 	}
-	return fmt.Sprintf("risk %s%% of equity", sizing.RiskPct.String())
+	return fmt.Sprintf("risk %s%% of equity, %s", sizing.RiskPct.String(), leverage)
 }

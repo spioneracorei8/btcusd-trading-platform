@@ -78,6 +78,12 @@ type Market struct {
 	MinLot           decimal.Decimal
 	LotStep          decimal.Decimal
 	CommissionPerLot decimal.Decimal
+
+	// MaxLeverage is how much notional the account may hold per unit of
+	// equity. One is a cash account, which is what every evaluation before
+	// the CFD venue assumed; a margin venue is opted into.
+	MaxLeverage decimal.Decimal
+
 	// SlippageTicks is the assumed slippage of a fill, in price ticks.
 	SlippageTicks int
 	// TickSize is what one of those ticks is worth in quote currency. Without
@@ -200,6 +206,7 @@ func LoadFrom(lookup helper.LookupFunc, opts ...Option) (*Config, error) {
 			MinLot:           l.positiveDecimal("MIN_LOT", constants.DefaultMinLot),
 			LotStep:          l.positiveDecimal("LOT_STEP", constants.DefaultLotStep),
 			CommissionPerLot: l.nonNegativeDecimal("COMMISSION_PER_LOT", constants.DefaultCommissionPerLot),
+			MaxLeverage:      l.positiveDecimal("MAX_LEVERAGE", constants.DefaultMaxLeverage),
 			SlippageTicks:    l.optionalInt("SLIPPAGE_TICKS", constants.DefaultSlippageTicks, 0, 1000),
 			TickSize:         l.tickSize("MARKET_TICK_SIZE"),
 

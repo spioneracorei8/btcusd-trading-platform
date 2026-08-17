@@ -91,6 +91,19 @@ func WriteSummary(w io.Writer, result backtest.Result, stats Statistics) error {
 		b.WriteString("  (the size the strategy asked for was smaller than the venue can\n")
 		b.WriteString("   trade. Refused rather than rounded up: a larger position is a\n")
 		b.WriteString("   different bet from the one that was tested)\n")
+
+		// Which of the two causes it was. Without this line the report says a
+		// strategy wanted tiny positions, when what happened is that the
+		// account could not hold the positions it asked for — and only the
+		// second is answered by changing a setting.
+		if result.EntriesRefusedAfterCap > 0 {
+			line(&b, "  capped first", fmt.Sprintf(
+				"%d of those had already been cut to fit a %sx notional limit",
+				result.EntriesRefusedAfterCap, result.Params.Sizing.Leverage()))
+			b.WriteString("   (the risk setting never reached the position size: the account's\n")
+			b.WriteString("    buying power decided it. Raising MAX_LEVERAGE to what the venue\n")
+			b.WriteString("    actually offers is what makes --risk-pct take effect)\n")
+		}
 	}
 
 	// The absolute figures. On a small balance a percentage hides the thing
@@ -177,6 +190,7 @@ func writeHeader(b *strings.Builder, result backtest.Result, stats Statistics) {
 		result.BarsSkippedWarmup, result.BarsSkippedGap))
 	writeCostModel(b, result)
 	line(b, "gap policy", result.Params.GapPolicy.String())
+	line(b, "sizing", describeSizing(result.Params.Sizing))
 
 	// The filter is part of what produced the numbers, so it belongs in the
 	// header beside the strategy rather than in a footnote.
