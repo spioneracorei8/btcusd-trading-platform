@@ -5,6 +5,8 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/spioneracorei8/btcusd-trading-platform/server/helper"
+
 	"github.com/spioneracorei8/btcusd-trading-platform/server/services/strategy"
 )
 
@@ -12,18 +14,76 @@ import (
 type Registered struct {
 	Name string
 
-	// Describe renders the configuration for a report header, so a stored
-	// result says what produced it and not only which name did.
-	Describe func() string
+	// Defaults returns a **pointer** to a fresh configuration at its
+	// documented defaults. A pointer, and fresh each call, because callers
+	// write parameter overrides into it and two runs must not share one.
+	Defaults func() any
 
-	// Build constructs the strategy at its documented defaults.
+	// BuildFrom constructs the strategy from a configuration Defaults
+	// produced.
 	//
 	// It returns an error rather than a value because a configuration whose
-	// reward cannot clear the round trip must fail loudly at construction.
+	// reward cannot clear the round trip must fail loudly at construction —
+	// and because that is now the *only* place a parameter is validated. The
+	// --param mechanism parses values and nothing more, so there is one set of
+	// rules rather than two that can disagree.
 	//
 	// longOnly comes from the market type: a spot account cannot short, and a
 	// two-sided rule that tried would end the run on its first bearish signal.
-	Build func(roundTripCostPct float64, longOnly bool) (strategy.Strategy, error)
+	BuildFrom func(config any, roundTripCostPct float64, longOnly bool) (strategy.Strategy, error)
+}
+
+// Build constructs the strategy at its documented defaults.
+func (r Registered) Build(roundTripCostPct float64, longOnly bool) (strategy.Strategy, error) {
+	return r.BuildFrom(r.Defaults(), roundTripCostPct, longOnly)
+}
+
+// BuildWith constructs the strategy with parameter overrides applied.
+//
+// It returns the configuration alongside the strategy so the caller can report
+// what actually differs from the defaults. A run whose parameters are not
+// recorded is not reproducible, and the experiment log's whole value is that it
+// can be trusted months later.
+func (r Registered) BuildWith(
+	overrides map[string]string,
+	roundTripCostPct float64,
+	longOnly bool,
+) (strategy.Strategy, any, error) {
+	config := r.Defaults()
+	if err := helper.ApplyParams(config, overrides); err != nil {
+		return nil, nil, fmt.Errorf("%s: %w", r.Name, err)
+	}
+
+	strat, err := r.BuildFrom(config, roundTripCostPct, longOnly)
+	if err != nil {
+		return nil, nil, err
+	}
+	return strat, config, nil
+}
+
+// Params lists the strategy's settable parameters.
+func (r Registered) Params() ([]helper.ParamSpec, error) {
+	return helper.DescribeParams(r.Defaults())
+}
+
+// Describe renders the configuration for a report header.
+//
+// Derived from the parameter descriptors rather than written out by hand.
+// The hand-written version listed each parameter and its default in a format
+// string, which is a second copy of the same facts and drifts from the first
+// the moment a default changes — the class of mistake this whole mechanism
+// exists to remove.
+func (r Registered) Describe() string {
+	specs, err := helper.DescribeParams(r.Defaults())
+	if err != nil {
+		return "(parameters could not be described: " + err.Error() + ")"
+	}
+
+	parts := make([]string, 0, len(specs))
+	for _, spec := range specs {
+		parts = append(parts, spec.Name+"="+spec.Default)
+	}
+	return strings.Join(parts, " ")
 }
 
 // registry is a slice, not a map.
@@ -34,64 +94,55 @@ type Registered struct {
 // reports.
 var registry = []Registered{
 	{
-		Name: "ema_crossover",
-		Describe: func() string {
-			c := DefaultEMACrossoverConfig()
-			return fmt.Sprintf("fast=%d slow=%d stop=%.2fATR target=%.2fATR",
-				c.FastPeriod, c.SlowPeriod, c.Levels.StopATRMult, c.Levels.TargetATRMult)
-		},
-		Build: func(cost float64, longOnly bool) (strategy.Strategy, error) {
-			config := DefaultEMACrossoverConfig()
-			config.RoundTripCostPct = cost
-			config.LongOnly = longOnly
-			return NewEMACrossoverImpl(config)
-		},
-	},
-	{
-		Name: "rsi_reversion",
-		Describe: func() string {
-			c := DefaultRSIReversionConfig()
-			return fmt.Sprintf("oversold=%.0f overbought=%.0f stop=%.2fATR target=%.2fATR",
-				c.Oversold, c.Overbought, c.Levels.StopATRMult, c.Levels.TargetATRMult)
-		},
-		Build: func(cost float64, longOnly bool) (strategy.Strategy, error) {
-			config := DefaultRSIReversionConfig()
-			config.RoundTripCostPct = cost
-			config.LongOnly = longOnly
-			return NewRSIReversionImpl(config)
-		},
-	},
-	{
-		Name: "trend_pullback",
-		Describe: func() string {
-			c := DefaultTrendPullbackConfig()
-			return fmt.Sprintf("trend=%d pullback=%.2fATR resume=%d stop=%.2fATR target=%.2fATR",
-				c.TrendPeriod, c.PullbackATR, c.ResumeBars, c.Levels.StopATRMult, c.Levels.TargetATRMult)
-		},
-		Build: func(cost float64, longOnly bool) (strategy.Strategy, error) {
-			config := DefaultTrendPullbackConfig()
-			config.RoundTripCostPct = cost
-			config.LongOnly = longOnly
-			return NewTrendPullbackImpl(config)
-		},
-	},
-	{
-		Name: "mtf_alignment",
-		Describe: func() string {
-			c := DefaultMTFAlignmentConfig()
-			names := make([]string, 0, len(c.Intermediate))
-			for _, timeframe := range c.Intermediate {
-				names = append(names, timeframe.String())
+		Name:     "ema_crossover",
+		Defaults: func() any { c := DefaultEMACrossoverConfig(); return &c },
+		BuildFrom: func(config any, cost float64, longOnly bool) (strategy.Strategy, error) {
+			typed, ok := config.(*EMACrossoverConfig)
+			if !ok {
+				return nil, fmt.Errorf("ema_crossover: wrong configuration type: got a %T", config)
 			}
-			return fmt.Sprintf("dominant=%s confirm=%s trigger=%d pullback=%.2fATR resume=%d stop=%.2fATR target=%.2fATR",
-				c.Dominant, strings.Join(names, "+"), c.TriggerPeriod, c.PullbackATR,
-				c.ResumeBars, c.Levels.StopATRMult, c.Levels.TargetATRMult)
+			typed.RoundTripCostPct = cost
+			typed.LongOnly = longOnly
+			return NewEMACrossoverImpl(*typed)
 		},
-		Build: func(cost float64, longOnly bool) (strategy.Strategy, error) {
-			config := DefaultMTFAlignmentConfig()
-			config.RoundTripCostPct = cost
-			config.LongOnly = longOnly
-			return NewMTFAlignmentImpl(config)
+	},
+	{
+		Name:     "rsi_reversion",
+		Defaults: func() any { c := DefaultRSIReversionConfig(); return &c },
+		BuildFrom: func(config any, cost float64, longOnly bool) (strategy.Strategy, error) {
+			typed, ok := config.(*RSIReversionConfig)
+			if !ok {
+				return nil, fmt.Errorf("rsi_reversion: wrong configuration type: got a %T", config)
+			}
+			typed.RoundTripCostPct = cost
+			typed.LongOnly = longOnly
+			return NewRSIReversionImpl(*typed)
+		},
+	},
+	{
+		Name:     "trend_pullback",
+		Defaults: func() any { c := DefaultTrendPullbackConfig(); return &c },
+		BuildFrom: func(config any, cost float64, longOnly bool) (strategy.Strategy, error) {
+			typed, ok := config.(*TrendPullbackConfig)
+			if !ok {
+				return nil, fmt.Errorf("trend_pullback: wrong configuration type: got a %T", config)
+			}
+			typed.RoundTripCostPct = cost
+			typed.LongOnly = longOnly
+			return NewTrendPullbackImpl(*typed)
+		},
+	},
+	{
+		Name:     "mtf_alignment",
+		Defaults: func() any { c := DefaultMTFAlignmentConfig(); return &c },
+		BuildFrom: func(config any, cost float64, longOnly bool) (strategy.Strategy, error) {
+			typed, ok := config.(*MTFAlignmentConfig)
+			if !ok {
+				return nil, fmt.Errorf("mtf_alignment: wrong configuration type: got a %T", config)
+			}
+			typed.RoundTripCostPct = cost
+			typed.LongOnly = longOnly
+			return NewMTFAlignmentImpl(*typed)
 		},
 	},
 }

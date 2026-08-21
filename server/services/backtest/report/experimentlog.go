@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/spioneracorei8/btcusd-trading-platform/server/helper"
 	"github.com/spioneracorei8/btcusd-trading-platform/server/services/backtest"
 )
 
@@ -52,6 +53,14 @@ type ExperimentEntry struct {
 	NotReadyPct   float64
 
 	Sizing string
+
+	// Parameters is what differed from the documented defaults, or "defaults".
+	//
+	// It was the literal word "defaults" until parameters could be varied, and
+	// the day that stopped being true it became a claim the log could not
+	// support. Fifty-seven entries were written under it correctly; the
+	// fifty-eighth would have been a lie.
+	Parameters string
 
 	NetReturn      float64
 	ProfitFactor   float64
@@ -214,7 +223,7 @@ func renderExperiment(entry ExperimentEntry) string {
 		entry.From.Start.UTC().Format("2006-01-02"),
 		entry.From.End.UTC().Format("2006-01-02"),
 		entry.GapPolicy)
-	fmt.Fprintf(&b, "- **Parameters:** defaults, timeframe %s\n", entry.Timeframe)
+	fmt.Fprintf(&b, "- **Parameters:** %s, timeframe %s\n", entry.Parameters, entry.Timeframe)
 
 	if entry.FilterName == "" {
 		b.WriteString("- **Filter:** none (unfiltered)\n")
@@ -337,6 +346,7 @@ func ExperimentEntryFor(
 		FilterVersion:   result.TrendFilterVersion,
 		FilterConfig:    result.TrendFilterConfig,
 		Sizing:          describeSizing(result.Params.Sizing),
+		Parameters:      describeAllChanges(result.Params),
 		NetReturn:       stats.NetReturn,
 		ProfitFactor:    stats.ProfitFactor,
 		MaxDrawdown:     stats.MaxDrawdown.Percent,
@@ -364,6 +374,25 @@ func ExperimentEntryFor(
 		entry.Verdict = criteria.Judge(stats, analysis)
 	}
 	return entry
+}
+
+// describeAllChanges renders every non-default parameter of a run, the
+// strategy's and the filter's together.
+//
+// They share one line because they share one question: what about this run was
+// not the documented default. Splitting them would let a reader check one and
+// believe they had checked both.
+func describeAllChanges(params backtest.RunParams) string {
+	changes := append(append([]helper.ParamChange(nil), params.StrategyParams...), params.FilterParams...)
+	if len(changes) == 0 {
+		return "defaults"
+	}
+
+	parts := make([]string, 0, len(changes))
+	for _, change := range changes {
+		parts = append(parts, change.Name+"="+change.To)
+	}
+	return strings.Join(parts, " ")
 }
 
 // describeSizing renders how position size was decided.

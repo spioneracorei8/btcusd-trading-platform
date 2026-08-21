@@ -15,36 +15,36 @@ import (
 type MTFAlignmentConfig struct {
 	// Dominant is the timeframe that decides which direction is permitted at
 	// all. Nothing trades against it.
-	Dominant constants.Timeframe
+	Dominant constants.Timeframe `param:"dominant"`
 
 	// Intermediate must all agree with the dominant direction. Any one of
 	// them disagreeing is a veto, not a reduced weight: this rule is an AND,
 	// and a score that could be outvoted would be a different strategy with a
 	// tuning knob attached.
-	Intermediate []constants.Timeframe
+	Intermediate []constants.Timeframe `param:"intermediate"`
 
 	// TriggerPeriod is the base-timeframe EMA the pullback is measured
 	// against. It is the only EMA this strategy computes for itself; see
 	// higherDirection for why the higher timeframes use the engine's.
-	TriggerPeriod int
+	TriggerPeriod int `param:"trigger_period,step=10"`
 
 	// PullbackATR is how close to the trigger EMA price must come to count as
 	// a retracement, in ATR. A number in the market's own units rather than a
 	// shape someone recognises, for the reason TrendPullbackConfig gives.
-	PullbackATR float64
+	PullbackATR float64 `param:"pullback_atr,step=0.1"`
 
 	// ResumeBars is how many consecutive base bars must move back in the
 	// established direction before entering. Without it the rule buys every
 	// touch, including the touch that carries straight through — which is what
 	// a trend ending looks like.
-	ResumeBars int
+	ResumeBars int `param:"resume_bars,step=1"`
 
-	Levels strategy.Levels
+	Levels strategy.Levels `param:",inline"`
 
-	RoundTripCostPct float64
+	RoundTripCostPct float64 `param:"-"`
 
 	// LongOnly suppresses short entries; see EMACrossoverConfig.LongOnly.
-	LongOnly bool
+	LongOnly bool `param:"-"`
 }
 
 // DefaultMTFAlignmentConfig is the documented starting point. Nothing here is

@@ -21,6 +21,8 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sort"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -30,6 +32,7 @@ import (
 	"github.com/spioneracorei8/btcusd-trading-platform/server/config"
 	"github.com/spioneracorei8/btcusd-trading-platform/server/constants"
 	"github.com/spioneracorei8/btcusd-trading-platform/server/database"
+	"github.com/spioneracorei8/btcusd-trading-platform/server/helper"
 	"github.com/spioneracorei8/btcusd-trading-platform/server/logger"
 	"github.com/spioneracorei8/btcusd-trading-platform/server/services/backtest"
 	"github.com/spioneracorei8/btcusd-trading-platform/server/services/backtest/report"
@@ -78,6 +81,51 @@ type options struct {
 	listStrategies  bool
 	experimentLog   string
 	noExperimentLog bool
+
+	// params and filterParams are the overrides collected from repeated
+	// --param / --filter-param flags.
+	params       paramFlag
+	filterParams paramFlag
+}
+
+// paramFlag collects repeated key=value flags.
+//
+// A map rather than a slice: setting the same key twice is a mistake worth
+// reporting, not a silent last-one-wins. A run that quietly ignored half of
+// what was typed would be recorded in the experiment log under parameters it
+// did not use.
+type paramFlag map[string]string
+
+func (f paramFlag) String() string {
+	if len(f) == 0 {
+		return ""
+	}
+
+	keys := make([]string, 0, len(f))
+	for key := range f {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
+	parts := make([]string, 0, len(keys))
+	for _, key := range keys {
+		parts = append(parts, key+"="+f[key])
+	}
+	return strings.Join(parts, " ")
+}
+
+func (f paramFlag) Set(raw string) error {
+	key, value, found := strings.Cut(raw, "=")
+	key = strings.TrimSpace(key)
+
+	if !found || key == "" {
+		return fmt.Errorf("%q is not key=value", raw)
+	}
+	if _, dup := f[key]; dup {
+		return fmt.Errorf("%s given twice", key)
+	}
+	f[key] = strings.TrimSpace(value)
+	return nil
 }
 
 func main() {
@@ -280,6 +328,12 @@ func parseFlags(args []string) (options, error) {
 	fs.BoolVar(&opts.listStrategies, "list-strategies", false, "list the strategies this binary can run")
 	fs.StringVar(&opts.experimentLog, "experiment-log", report.ExperimentLogPath,
 		"append every completed run to this log")
+	opts.params = paramFlag{}
+	opts.filterParams = paramFlag{}
+	fs.Var(opts.params, "param",
+		"strategy parameter as key=value; repeatable (see --list-strategies)")
+	fs.Var(opts.filterParams, "filter-param",
+		"trend filter parameter as key=value; repeatable")
 	fs.BoolVar(&opts.noExperimentLog, "no-experiment-log", false,
 		"withhold this run's details from the experiment log; the entry number is still spent")
 
@@ -349,7 +403,8 @@ func buildParams(opts options, cfg *config.Config) (backtest.RunParams, error) {
 	// there. The engine's hard refusal stays as the backstop.
 	longOnly := cfg.Market.Type == constants.MarketTypeSpot
 
-	strat, err := lookupStrategy(opts.strategyName, roundTripCostPct(cfg), longOnly)
+	strat, changedParams, err := lookupStrategy(
+		opts.strategyName, opts.params, roundTripCostPct(cfg), longOnly)
 	if err != nil {
 		return backtest.RunParams{}, err
 	}
@@ -392,9 +447,10 @@ func buildParams(opts options, cfg *config.Config) (backtest.RunParams, error) {
 			ExitOrderType:    cfg.Market.ExitOrderType,
 			LimitTimeoutBars: cfg.Market.LimitOrderTimeoutBars,
 		},
-		GapPolicy: policy,
-		Sizing:    sizing,
-		Strategy:  strat,
+		GapPolicy:      policy,
+		Sizing:         sizing,
+		Strategy:       strat,
+		StrategyParams: changedParams,
 	}, nil
 }
 
@@ -429,17 +485,36 @@ func roundTripCostPct(cfg *config.Config) float64 {
 }
 
 // lookupStrategy resolves the --strategy flag against the registry.
-func lookupStrategy(name string, roundTripCostPct float64, longOnly bool) (strategy.Strategy, error) {
+func lookupStrategy(
+	name string,
+	overrides map[string]string,
+	roundTripCostPct float64,
+	longOnly bool,
+) (strategy.Strategy, []helper.ParamChange, error) {
 	if name == "" {
-		return nil, fmt.Errorf("--strategy is required; this binary ships %s",
+		return nil, nil, fmt.Errorf("--strategy is required; this binary ships %s",
 			strings.Join(_strategy_us.Names(), ", "))
 	}
 
 	entry, err := _strategy_us.Lookup(name)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return entry.Build(roundTripCostPct, longOnly)
+
+	strat, config, err := entry.BuildWith(overrides, roundTripCostPct, longOnly)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// Measured against a fresh default rather than taken from what was typed,
+	// so a parameter passed at its own default is correctly reported as
+	// unchanged. The header answers "what is different about this run", not
+	// "what did somebody type".
+	changed, err := helper.ChangedParams(entry.Defaults(), config)
+	if err != nil {
+		return nil, nil, err
+	}
+	return strat, changed, nil
 }
 
 // printStrategies lists what can be run.
@@ -448,8 +523,27 @@ func printStrategies(w io.Writer) {
 	b.WriteString("registered strategies:\n\n")
 
 	for _, entry := range _strategy_us.All() {
-		fmt.Fprintf(&b, "  %-16s %s\n", entry.Name, entry.Describe())
+		fmt.Fprintf(&b, "  %s\n", entry.Name)
+
+		specs, err := entry.Params()
+		if err != nil {
+			fmt.Fprintf(&b, "      (parameters unavailable: %v)\n\n", err)
+			continue
+		}
+		for _, spec := range specs {
+			step := spec.Step
+			if step == "" {
+				step = "-"
+			}
+			fmt.Fprintf(&b, "      %-18s %-7s default %-10s neighbourhood step %s\n",
+				spec.Name, spec.Kind, spec.Default, step)
+		}
+		b.WriteString("\n")
 	}
+
+	b.WriteString("Set them with --param name=value, repeated. An unknown name is an error\n")
+	b.WriteString("rather than a warning: a typo that ran the default while you believed\n")
+	b.WriteString("otherwise is not visible in any report afterwards.\n")
 
 	b.WriteString("\nThese are experiments, not recommendations. Most rules of this kind\n")
 	b.WriteString("fail at 1m-5m once 0.1% a round trip is charged; they were chosen for\n")
@@ -505,7 +599,11 @@ func writeJSONReport(path string, result backtest.Result, stats report.Statistic
 // the filter has an opinion from the first scored bar rather than spending the
 // range earning one. At the production EMA(200) that is six weeks of hourly
 // history — which is why it is computed rather than guessed.
-func attachTrendFilter(params *backtest.RunParams, candles candle.CandleUsecase) error {
+func attachTrendFilter(
+	params *backtest.RunParams,
+	candles candle.CandleUsecase,
+	overrides map[string]string,
+) error {
 	// The contributor set depends on the base: the right timeframes to watch
 	// from 1m are not the right ones to watch from 1h (ADR 0018).
 	base, err := trend.DefaultConfigFor(params.Timeframe)
@@ -521,6 +619,21 @@ func attachTrendFilter(params *backtest.RunParams, candles candle.CandleUsecase)
 	if err != nil {
 		return err
 	}
+
+	// Overrides land after ForBase, so weight_5m on a 1h run is rejected as the
+	// mistake it is rather than silently written to a contributor that had
+	// already been dropped for closing no less often than the base.
+	defaults := config
+	config, err = config.WithParams(overrides)
+	if err != nil {
+		return err
+	}
+
+	changed, err := helper.ChangedParams(defaults, config)
+	if err != nil {
+		return err
+	}
+	params.FilterParams = changedFilterParams(defaults, config, changed)
 
 	if err := requireCandles(*params, candles, config.Timeframes()); err != nil {
 		return err
@@ -597,6 +710,33 @@ func attachStrategyAligner(params *backtest.RunParams, candles candle.CandleUsec
 
 	params.StrategyAligner = aligner
 	return nil
+}
+
+// changedFilterParams appends the per-timeframe weight changes to whatever the
+// generic comparison found.
+//
+// The weights live in a slice rather than a field per timeframe — a map would
+// randomise iteration and break the byte-identical report — so they have no
+// field for the reflection-based comparison to look at, and are diffed here
+// instead.
+func changedFilterParams(defaults, configured trend.Config, changed []helper.ParamChange) []helper.ParamChange {
+	was := make(map[constants.Timeframe]float64, len(defaults.Weights))
+	for _, weight := range defaults.Weights {
+		was[weight.Timeframe] = weight.Weight
+	}
+
+	for _, weight := range configured.Weights {
+		before, existed := was[weight.Timeframe]
+		if existed && before == weight.Weight {
+			continue
+		}
+		changed = append(changed, helper.ParamChange{
+			Name: "weight_" + weight.Timeframe.String(),
+			From: strconv.FormatFloat(before, 'g', -1, 64),
+			To:   strconv.FormatFloat(weight.Weight, 'g', -1, 64),
+		})
+	}
+	return changed
 }
 
 // requireCandles refuses a filter whose contributors have no stored data.
@@ -849,11 +989,13 @@ func quoteUnit(symbol string) string {
 // two features that exist to compare runs, --compare and --cost-sweep, are
 // exactly the ones that would be quietly wrong.
 func freshStrategy(opts options, cfg *config.Config) (strategy.Strategy, error) {
-	return lookupStrategy(
+	strat, _, err := lookupStrategy(
 		opts.strategyName,
+		opts.params,
 		roundTripCostPct(cfg),
 		cfg.Market.Type == constants.MarketTypeSpot,
 	)
+	return strat, err
 }
 
 // strategyIsMultiTimeframe reports whether the selected strategy reads higher
@@ -905,6 +1047,7 @@ func prepareRun(
 	params.TrendAligner = nil
 	params.StrategyAligner = nil
 	params.TrendConfig = trend.Config{}
+	params.FilterParams = nil
 
 	strat, err := freshStrategy(opts, cfg)
 	if err != nil {
@@ -921,7 +1064,7 @@ func prepareRun(
 	}
 
 	if withFilter {
-		err := attachTrendFilter(&params, candles)
+		err := attachTrendFilter(&params, candles, opts.filterParams)
 		switch {
 		case errors.Is(err, trend.ErrNoUsableContributor):
 			// Run, unfiltered, and say why. Refusing here would leave the cell

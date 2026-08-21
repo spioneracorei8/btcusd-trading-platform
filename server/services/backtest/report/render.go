@@ -10,6 +10,7 @@ import (
 	"github.com/shopspring/decimal"
 
 	"github.com/spioneracorei8/btcusd-trading-platform/server/constants"
+	"github.com/spioneracorei8/btcusd-trading-platform/server/helper"
 	"github.com/spioneracorei8/btcusd-trading-platform/server/services/backtest"
 )
 
@@ -179,6 +180,7 @@ func writeHeader(b *strings.Builder, result backtest.Result, stats Statistics) {
 
 	b.WriteString("BACKTEST\n")
 	line(b, "strategy", fmt.Sprintf("%s %s", result.StrategyName, result.StrategyVersion))
+	line(b, "  parameters", describeChanges(result.Params.StrategyParams))
 	line(b, "instrument", fmt.Sprintf("%s %s %s",
 		result.Params.Symbol, result.Params.MarketType, result.Params.Timeframe))
 	line(b, "requested range", fmt.Sprintf("%s .. %s",
@@ -206,6 +208,7 @@ func writeHeader(b *strings.Builder, result backtest.Result, stats Statistics) {
 	} else {
 		line(b, "trend filter", fmt.Sprintf("%s %s", result.TrendFilterName, result.TrendFilterVersion))
 		line(b, "  configuration", result.TrendFilterConfig)
+		line(b, "  parameters", describeChanges(result.Params.FilterParams))
 		line(b, "  bars vetoed", fmt.Sprintf("%d of %d evaluated (%.2f%%)",
 			result.BarsVetoed, result.BarsEvaluated,
 			percent(result.BarsVetoed, result.BarsEvaluated)))
@@ -227,6 +230,25 @@ func writeHeader(b *strings.Builder, result backtest.Result, stats Statistics) {
 		}
 	}
 	_ = stats
+}
+
+// describeChanges renders the parameters that differ from their defaults.
+//
+// "defaults" is printed when nothing differs, rather than an empty line. Fifty
+// seven evaluations ran before any parameter could be varied, and every one of
+// them was at defaults — so a report that simply omitted the line would read
+// identically whether the run was at defaults or nobody had recorded what it
+// used.
+func describeChanges(changes []helper.ParamChange) string {
+	if len(changes) == 0 {
+		return "defaults"
+	}
+
+	parts := make([]string, 0, len(changes))
+	for _, change := range changes {
+		parts = append(parts, fmt.Sprintf("%s=%s (default %s)", change.Name, change.To, change.From))
+	}
+	return strings.Join(parts, ", ")
 }
 
 // percent renders a count as a share of a total, guarding the empty run.

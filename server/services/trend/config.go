@@ -3,8 +3,12 @@ package trend
 import (
 	"errors"
 	"fmt"
+	"sort"
+	"strconv"
+	"strings"
 
 	"github.com/spioneracorei8/btcusd-trading-platform/server/constants"
+	"github.com/spioneracorei8/btcusd-trading-platform/server/helper"
 )
 
 // Weight is one timeframe's share of the aggregate score.
@@ -20,7 +24,7 @@ type Config struct {
 	// shortest first. A slice rather than a map, for the determinism reason
 	// that applies everywhere in this system: Go randomises map iteration and
 	// a backtest report must be byte-identical across runs.
-	Weights []Weight
+	Weights []Weight `param:"-"`
 
 	// DeadZone is the band around zero reported as Neutral.
 	//
@@ -28,7 +32,7 @@ type Config struct {
 	// wanders across zero every few bars, the bias alternates, and a strategy
 	// gated on it is permitted and forbidden in turn — which is worse than no
 	// filter, because it adds cost without adding information.
-	DeadZone float64
+	DeadZone float64 `param:"deadzone,step=0.05"`
 
 	// Dropped records contributors that were configured but do not close less
 	// often than the run's base timeframe, and were therefore removed by
@@ -39,7 +43,7 @@ type Config struct {
 	// silently discarding part of a configuration is its own defect. A reader
 	// must be able to see that the 5m contributor they configured took no part
 	// in the numbers in front of them.
-	Dropped []constants.Timeframe
+	Dropped []constants.Timeframe `param:"-"`
 }
 
 // DefaultConfig is the documented starting point for the 1m scalping setup.
@@ -276,6 +280,89 @@ func (c Config) Validate() error {
 		return fmt.Errorf("trend: dead zone %v is outside [0, 1)", c.DeadZone)
 	}
 	return nil
+}
+
+// weightPrefix is how a per-timeframe weight is named as a parameter.
+const weightPrefix = "weight_"
+
+// ParamNames lists the settable filter parameters for this configuration.
+//
+// The weight keys depend on which contributors this configuration actually
+// carries, which is why this is a method rather than a package-level list: the
+// contributor set is chosen from the run's base timeframe (ADR 0018), so
+// weight_5m is a valid key on a 1m run and a mistake on a 1h one.
+func (c Config) ParamNames() []string {
+	names := helper.ParamNames(c)
+	for _, weight := range c.Weights {
+		names = append(names, weightPrefix+weight.Timeframe.String())
+	}
+	sort.Strings(names)
+	return names
+}
+
+// WithParams returns the configuration with overrides applied.
+//
+// # Why the weights are not reached by reflection like everything else
+//
+// They are a slice of pairs, not a field per timeframe, and deliberately so —
+// a map would randomise iteration and break the byte-identical report. That
+// shape has no field for a generic mechanism to write to, so the weights get
+// an explicit branch here rather than a more clever mechanism everywhere else.
+//
+// Nothing is validated here beyond the parse. Whether a weight is allowed is
+// Validate's business, so there is one set of rules rather than two.
+func (c Config) WithParams(overrides map[string]string) (Config, error) {
+	if len(overrides) == 0 {
+		return c, nil
+	}
+
+	// The slice is copied before anything is written to it: the caller's
+	// configuration must not change under them, and a shared backing array is
+	// how a second run in the same process inherits the first one's overrides.
+	out := c
+	out.Weights = append([]Weight(nil), c.Weights...)
+
+	generic := map[string]string{}
+
+	keys := make([]string, 0, len(overrides))
+	for key := range overrides {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
+	for _, key := range keys {
+		timeframe, isWeight := strings.CutPrefix(key, weightPrefix)
+		if !isWeight {
+			generic[key] = overrides[key]
+			continue
+		}
+
+		value, err := strconv.ParseFloat(strings.TrimSpace(overrides[key]), 64)
+		if err != nil {
+			return Config{}, fmt.Errorf("%s: %q is not a number", key, overrides[key])
+		}
+
+		found := false
+		for i := range out.Weights {
+			if out.Weights[i].Timeframe.String() != timeframe {
+				continue
+			}
+			out.Weights[i].Weight = value
+			found = true
+			break
+		}
+		if !found {
+			return Config{}, fmt.Errorf(
+				"unknown filter parameter %q; this run's filter takes %s",
+				key, strings.Join(c.ParamNames(), ", "))
+		}
+	}
+
+	if err := helper.ApplyParams(&out, generic); err != nil {
+		return Config{}, fmt.Errorf("%w (this run's filter takes %s)",
+			err, strings.Join(c.ParamNames(), ", "))
+	}
+	return out, nil
 }
 
 // ForBase adapts the configuration to the base timeframe of a run.

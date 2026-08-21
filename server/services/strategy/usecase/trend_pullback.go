@@ -10,13 +10,13 @@ import (
 // TrendPullbackConfig parameterises the trend-continuation strategy.
 type TrendPullbackConfig struct {
 	// TrendPeriod is the EMA defining the trend the pullback is against.
-	TrendPeriod int
+	TrendPeriod int `param:"trend_period,step=10"`
 
 	// PullbackATR is how close to the EMA price must come to count as a
 	// pullback, in ATR. "Pullback" is the word this whole strategy turns on,
 	// and a vague definition is how a rule becomes unfalsifiable — so it is a
 	// number, in the market's own units, not a shape someone recognises.
-	PullbackATR float64
+	PullbackATR float64 `param:"pullback_atr,step=0.1"`
 
 	// ResumeBars is how many consecutive bars must move back in the trend's
 	// direction before entering.
@@ -25,14 +25,14 @@ type TrendPullbackConfig struct {
 	// that carries straight through it, which is what a trend ending looks
 	// like. Waiting is what distinguishes a pullback from a reversal, at the
 	// cost of a worse entry price.
-	ResumeBars int
+	ResumeBars int `param:"resume_bars,step=1"`
 
-	Levels strategy.Levels
+	Levels strategy.Levels `param:",inline"`
 
-	RoundTripCostPct float64
+	RoundTripCostPct float64 `param:"-"`
 
 	// LongOnly suppresses short entries; see EMACrossoverConfig.LongOnly.
-	LongOnly bool
+	LongOnly bool `param:"-"`
 }
 
 // DefaultTrendPullbackConfig is the documented starting point.

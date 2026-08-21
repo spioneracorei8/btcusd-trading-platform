@@ -13,15 +13,15 @@ type RSIReversionConfig struct {
 	// from a band, not being inside one: RSI can sit at 20 for hours while
 	// price keeps falling, and buying the moment it arrives there is how a
 	// counter-trend rule turns a drawdown into a catastrophe.
-	Oversold   float64
-	Overbought float64
+	Oversold   float64 `param:"oversold,step=5"`
+	Overbought float64 `param:"overbought,step=5"`
 
-	Levels strategy.Levels
+	Levels strategy.Levels `param:",inline"`
 
-	RoundTripCostPct float64
+	RoundTripCostPct float64 `param:"-"`
 
 	// LongOnly suppresses short entries; see EMACrossoverConfig.LongOnly.
-	LongOnly bool
+	LongOnly bool `param:"-"`
 }
 
 // DefaultRSIReversionConfig is the documented starting point.

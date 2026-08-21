@@ -19,8 +19,8 @@ import (
 // timeframe the decision is made on.
 type Levels struct {
 	// StopATRMult and TargetATRMult are distances in ATR from the entry.
-	StopATRMult   float64
-	TargetATRMult float64
+	StopATRMult   float64 `param:"stop_atr_mult,step=0.25"`
+	TargetATRMult float64 `param:"target_atr_mult,step=0.25"`
 }
 
 // RewardRisk is the ratio the levels imply.

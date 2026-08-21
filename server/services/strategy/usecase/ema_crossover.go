@@ -27,15 +27,15 @@ import (
 // caught it being a fitted artefact.
 type EMACrossoverConfig struct {
 	// FastPeriod and SlowPeriod are the two EMAs whose crossing is the signal.
-	FastPeriod int
-	SlowPeriod int
+	FastPeriod int `param:"fast,step=1"`
+	SlowPeriod int `param:"slow,step=1"`
 
-	Levels strategy.Levels
+	Levels strategy.Levels `param:",inline"`
 
 	// RoundTripCostPct is what the configuration is validated against, in
 	// percent. It is passed in rather than assumed so a different fee tier
 	// changes what is accepted.
-	RoundTripCostPct float64
+	RoundTripCostPct float64 `param:"-"`
 
 	// LongOnly suppresses short entries.
 	//
@@ -45,7 +45,7 @@ type EMACrossoverConfig struct {
 	// a short on spot outright — this is what stops a two-sided rule from
 	// tripping that refusal on its first bearish cross and taking the run down
 	// with it.
-	LongOnly bool
+	LongOnly bool `param:"-"`
 }
 
 // DefaultEMACrossoverConfig is the documented starting point.

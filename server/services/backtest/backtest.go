@@ -16,6 +16,7 @@ import (
 	"github.com/shopspring/decimal"
 
 	"github.com/spioneracorei8/btcusd-trading-platform/server/constants"
+	"github.com/spioneracorei8/btcusd-trading-platform/server/helper"
 	"github.com/spioneracorei8/btcusd-trading-platform/server/models"
 	"github.com/spioneracorei8/btcusd-trading-platform/server/services/strategy"
 	"github.com/spioneracorei8/btcusd-trading-platform/server/services/trend"
@@ -395,6 +396,16 @@ type RunParams struct {
 	// the strategy decides, the filter's after, because a veto is applied to a
 	// decision that has already been made.
 	StrategyAligner trend.Aligner
+
+	// StrategyParams and FilterParams are the parameters that differ from
+	// their documented defaults.
+	//
+	// Recorded on the run rather than left in the CLI because a run whose
+	// parameters are not in its own report is not reproducible, and every
+	// evaluation before this one used defaults — which made "defaults" a safe
+	// assumption exactly until it stopped being one.
+	StrategyParams []helper.ParamChange
+	FilterParams   []helper.ParamChange
 
 	// TrendUnavailable explains why no filter is attached, when the reason is
 	// that none could be built rather than that the operator declined one.

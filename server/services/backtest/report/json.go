@@ -7,6 +7,7 @@ import (
 	"math"
 	"time"
 
+	"github.com/spioneracorei8/btcusd-trading-platform/server/helper"
 	"github.com/spioneracorei8/btcusd-trading-platform/server/services/backtest"
 )
 
@@ -56,16 +57,38 @@ type Document struct {
 type strategyDoc struct {
 	Name    string `json:"name"`
 	Version string `json:"version"`
+
+	// Parameters is empty when the run used documented defaults. It carries
+	// only what differs, because listing every parameter would bury the one
+	// fact a reader is looking for.
+	Parameters []paramDoc `json:"parameters"`
+}
+
+// paramDoc is one parameter that differed from its default.
+type paramDoc struct {
+	Name    string `json:"name"`
+	Value   string `json:"value"`
+	Default string `json:"default"`
+}
+
+// paramDocs converts the changes for the document.
+func paramDocs(changes []helper.ParamChange) []paramDoc {
+	out := make([]paramDoc, 0, len(changes))
+	for _, change := range changes {
+		out = append(out, paramDoc{Name: change.Name, Value: change.To, Default: change.From})
+	}
+	return out
 }
 
 // trendFilterDoc records what vetoed the run. Enabled is explicit rather than
 // implied by an empty name: "no filter" and "a filter that reported nothing"
 // are different findings and must not read the same.
 type trendFilterDoc struct {
-	Enabled       bool   `json:"enabled"`
-	Name          string `json:"name"`
-	Version       string `json:"version"`
-	Configuration string `json:"configuration"`
+	Enabled       bool       `json:"enabled"`
+	Name          string     `json:"name"`
+	Version       string     `json:"version"`
+	Configuration string     `json:"configuration"`
+	Parameters    []paramDoc `json:"parameters"`
 }
 
 type runDoc struct {
@@ -235,14 +258,16 @@ func BuildDocument(result backtest.Result, stats Statistics) Document {
 	doc := Document{
 		DataIncomplete: result.DataIncomplete,
 		Strategy: strategyDoc{
-			Name:    result.StrategyName,
-			Version: result.StrategyVersion,
+			Name:       result.StrategyName,
+			Version:    result.StrategyVersion,
+			Parameters: paramDocs(result.Params.StrategyParams),
 		},
 		TrendFilter: trendFilterDoc{
 			Enabled:       result.TrendFilterName != "",
 			Name:          result.TrendFilterName,
 			Version:       result.TrendFilterVersion,
 			Configuration: result.TrendFilterConfig,
+			Parameters:    paramDocs(result.Params.FilterParams),
 		},
 		Run: runDoc{
 			Symbol:        result.Params.Symbol,

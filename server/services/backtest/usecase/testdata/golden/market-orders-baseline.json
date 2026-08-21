@@ -2,13 +2,15 @@
   "data_incomplete": false,
   "strategy": {
     "name": "alternating",
-    "version": "v1"
+    "version": "v1",
+    "parameters": []
   },
   "trend_filter": {
     "enabled": false,
     "name": "",
     "version": "",
-    "configuration": ""
+    "configuration": "",
+    "parameters": []
   },
   "run": {
     "symbol": "BTCUSDT",
