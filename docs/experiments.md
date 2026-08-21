@@ -898,3 +898,18 @@ of the arithmetic, not a market observation. Ignore that section in runs 1–7.
 - **Cost sweep:** 1.0x +4.78% (PF 1.13) | 1.5x -0.46% (PF 0.99) | 2.0x -0.67% (PF 0.98)
 - **Verdict:** fail — Profit factor (1.13, needs > 1.30), Trades in the development period (69, needs >= 200)
 - **Note:** _(to fill in — what you learned, not what you hoped)_
+
+### 58. 2026-08-21 — ema_crossover v1 (4h)
+
+- **Dataset:** dev (2023-01-01 .. 2024-12-31), `--allow-gaps=skip`
+- **Parameters:** defaults, timeframe 4h
+- **Filter:** none (unfiltered)
+- **Sizing:** risk 1% of equity, 20x notional limit
+- **Net return after costs:** +4.7849%
+- **Profit factor / max drawdown / trades:** 1.13 / -10.38% / 69
+- **Costs as share of gross profit:** 34% (costs 49 vs gross profit 144)
+- **Concentration (best 5):** 23.27%
+- **Filter comparison:** unfiltered +4.78% (69 trades) | filtered +4.78% (69 trades)
+- **Cost sweep:** 1.0x +4.78% (PF 1.13) | 1.5x -0.46% (PF 0.99) | 2.0x -0.67% (PF 0.98)
+- **Verdict:** fail — Profit factor (1.13, needs > 1.30), Trades in the development period (69, needs >= 200)
+- **Note:** _(to fill in — what you learned, not what you hoped)_
