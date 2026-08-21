@@ -82,6 +82,17 @@ type Statistics struct {
 	AverageHoldingTime  time.Duration
 	LongestLosingStreak int
 
+	// ByExitReason is how each kind of exit performed.
+	//
+	// # Why the breakdown and not only the totals
+	//
+	// It is the only way to tell whether a mechanism is doing anything or just
+	// adding a code path. A trailing stop that produces exits no larger on
+	// average than the target it replaced has not earned its complexity, and
+	// the aggregate win figure cannot show that — it averages the two together
+	// and reports the blend.
+	ByExitReason []ExitBreakdown
+
 	// TradesPerDay is how often the strategy actually traded, over the range
 	// it was evaluated on.
 	//
@@ -137,6 +148,67 @@ type Statistics struct {
 	CostPerTripBps float64
 }
 
+// ExitBreakdown is how one kind of exit performed.
+type ExitBreakdown struct {
+	Reason backtest.ExitReason
+
+	Count int
+	Wins  int
+
+	// AverageNet is the mean net P&L of these exits, and AverageWin the mean
+	// of the winning ones alone.
+	//
+	// Both, because they answer different questions. A timeout that is on
+	// average profitable says the targets are set too far; one that is heavily
+	// negative says the clock is cutting trades that would have recovered.
+	// Either reading is useful, and the aggregate hides both.
+	AverageNet decimal.Decimal
+	AverageWin decimal.Decimal
+	TotalNet   decimal.Decimal
+}
+
+// exitBreakdown groups the trades by why they ended.
+//
+// The order is the order the reasons first appear in the trade list, which is
+// deterministic over a deterministic run and avoids the map iteration that
+// would otherwise reorder a report between runs (ADR 0012).
+func exitBreakdown(trades []backtest.Trade) []ExitBreakdown {
+	var order []backtest.ExitReason
+	byReason := map[backtest.ExitReason]*ExitBreakdown{}
+
+	for _, trade := range trades {
+		group, seen := byReason[trade.ExitReason]
+		if !seen {
+			group = &ExitBreakdown{
+				Reason: trade.ExitReason, AverageNet: decimal.Zero,
+				AverageWin: decimal.Zero, TotalNet: decimal.Zero,
+			}
+			byReason[trade.ExitReason] = group
+			order = append(order, trade.ExitReason)
+		}
+
+		group.Count++
+		group.TotalNet = group.TotalNet.Add(trade.NetPnL)
+		if trade.NetPnL.IsPositive() {
+			group.Wins++
+			group.AverageWin = group.AverageWin.Add(trade.NetPnL)
+		}
+	}
+
+	out := make([]ExitBreakdown, 0, len(order))
+	for _, reason := range order {
+		group := byReason[reason]
+		if group.Count > 0 {
+			group.AverageNet = group.TotalNet.Div(decimal.NewFromInt(int64(group.Count)))
+		}
+		if group.Wins > 0 {
+			group.AverageWin = group.AverageWin.Div(decimal.NewFromInt(int64(group.Wins)))
+		}
+		out = append(out, *group)
+	}
+	return out
+}
+
 // Compute derives the statistics of a finished run.
 func Compute(result backtest.Result) Statistics {
 	stats := Statistics{
@@ -169,6 +241,7 @@ func Compute(result backtest.Result) Statistics {
 	stats.Sharpe = sharpe(result.Equity, stats.AnnualisationBars)
 	stats.CostPerTripBps = costPerTripBps(result.Trades)
 	stats.TradesPerDay = tradesPerDay(len(result.Trades), result.FirstBar, result.LastBar)
+	stats.ByExitReason = exitBreakdown(result.Trades)
 	summariseRisk(&stats, result.Trades)
 
 	return stats

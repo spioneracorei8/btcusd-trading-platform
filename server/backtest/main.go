@@ -411,11 +411,22 @@ func buildParams(opts options, cfg *config.Config) (backtest.RunParams, error) {
 	// there. The engine's hard refusal stays as the backstop.
 	longOnly := cfg.Market.Type == constants.MarketTypeSpot
 
-	strat, changedParams, err := lookupStrategy(
-		opts.strategyName, opts.params, roundTripCostPct(cfg), longOnly)
+	strategyOverrides, exitOverrides, err := splitOverrides(opts.params)
 	if err != nil {
 		return backtest.RunParams{}, err
 	}
+
+	strat, changedParams, err := lookupStrategy(
+		opts.strategyName, strategyOverrides, roundTripCostPct(cfg), longOnly)
+	if err != nil {
+		return backtest.RunParams{}, err
+	}
+
+	exits, changedExits, err := buildExits(exitOverrides)
+	if err != nil {
+		return backtest.RunParams{}, err
+	}
+	changedParams = append(changedParams, changedExits...)
 
 	sizing := backtest.DefaultSizing()
 	if opts.allIn {
@@ -457,6 +468,7 @@ func buildParams(opts options, cfg *config.Config) (backtest.RunParams, error) {
 		},
 		GapPolicy:      policy,
 		Sizing:         sizing,
+		Exits:          exits,
 		Strategy:       strat,
 		StrategyParams: changedParams,
 	}, nil
@@ -548,6 +560,24 @@ func printStrategies(w io.Writer) {
 		}
 		b.WriteString("\n")
 	}
+
+	// The engine's own exit mechanisms are set through the same flag and
+	// stepped by the same --neighbourhood, so they are listed in the same
+	// place. Remembering which flag a name lives behind is a way of producing
+	// runs configured differently from how they were meant to be.
+	b.WriteString("  every strategy, through the engine\n")
+	if exits, err := helper.DescribeParams(&backtest.Exits{}); err == nil {
+		for _, spec := range exits {
+			step := spec.Step
+			if step == "" {
+				step = "-"
+			}
+			fmt.Fprintf(&b, "      %-22s %-7s default %-10s neighbourhood step %s\n",
+				spec.Name, spec.Kind, spec.Default, step)
+		}
+	}
+	b.WriteString("      (zero disables each of these, which is what every evaluation\n")
+	b.WriteString("       before phase 06 ran with)\n\n")
 
 	b.WriteString("Set them with --param name=value, repeated. An unknown name is an error\n")
 	b.WriteString("rather than a warning: a typo that ran the default while you believed\n")
@@ -1098,11 +1128,26 @@ func steppedOverrides(
 	name string,
 	direction int,
 ) (map[string]string, error) {
-	config := entry.Defaults()
-	if err := helper.ApplyParams(config, chosen); err != nil {
+	forStrategy, forExits, err := splitOverrides(chosen)
+	if err != nil {
 		return nil, err
 	}
-	if err := helper.StepParam(config, name, direction); err != nil {
+
+	// Whichever configuration owns the parameter is the one that gets stepped.
+	config := entry.Defaults()
+	if err := helper.ApplyParams(config, forStrategy); err != nil {
+		return nil, err
+	}
+	exits := &backtest.Exits{}
+	if err := helper.ApplyParams(exits, forExits); err != nil {
+		return nil, err
+	}
+
+	owner := any(config)
+	if _, isExit := forExits[name]; isExit {
+		owner = exits
+	}
+	if err := helper.StepParam(owner, name, direction); err != nil {
 		return nil, err
 	}
 
@@ -1117,6 +1162,13 @@ func steppedOverrides(
 	current, err := helper.ParamValues(config)
 	if err != nil {
 		return nil, err
+	}
+	exitValues, err := helper.ParamValues(exits)
+	if err != nil {
+		return nil, err
+	}
+	for key, value := range exitValues {
+		current[key] = value
 	}
 
 	// Only the parameters the run actually varied. The rest stay unmentioned
@@ -1224,13 +1276,70 @@ func quoteUnit(symbol string) string {
 // two features that exist to compare runs, --compare and --cost-sweep, are
 // exactly the ones that would be quietly wrong.
 func freshStrategy(opts options, cfg *config.Config) (strategy.Strategy, error) {
+	strategyOverrides, _, err := splitOverrides(opts.params)
+	if err != nil {
+		return nil, err
+	}
+
 	strat, _, err := lookupStrategy(
 		opts.strategyName,
-		opts.params,
+		strategyOverrides,
 		roundTripCostPct(cfg),
 		cfg.Market.Type == constants.MarketTypeSpot,
 	)
 	return strat, err
+}
+
+// splitOverrides routes each --param to whichever configuration owns it.
+//
+// # Why one flag rather than two
+//
+// A trailing stop is a parameter of the run in exactly the way an EMA period
+// is, and asking somebody to remember which flag a given name lives behind is
+// a way of producing runs configured differently from how they were meant to
+// be. It also lets --neighbourhood step them on the same terms: if
+// trailing_atr_mult=2.0 works and 1.75 and 2.25 collapse, that is an artefact
+// on exactly the same terms as a fitted EMA period.
+//
+// Ownership is decided by the engine's own descriptors, not by a list kept
+// here, so a field added to Exits is routed correctly without this function
+// being touched.
+func splitOverrides(all map[string]string) (forStrategy, forExits map[string]string, err error) {
+	exitNames, err := helper.ParamValues(&backtest.Exits{})
+	if err != nil {
+		return nil, nil, err
+	}
+
+	forStrategy = map[string]string{}
+	forExits = map[string]string{}
+
+	for key, value := range all {
+		if _, isExit := exitNames[key]; isExit {
+			forExits[key] = value
+			continue
+		}
+		// Everything else goes to the strategy, which rejects what it does not
+		// recognise and names its own valid keys.
+		forStrategy[key] = value
+	}
+	return forStrategy, forExits, nil
+}
+
+// buildExits applies the exit overrides to a fresh configuration.
+func buildExits(overrides map[string]string) (backtest.Exits, []helper.ParamChange, error) {
+	exits := backtest.Exits{}
+	if err := helper.ApplyParams(&exits, overrides); err != nil {
+		return backtest.Exits{}, nil, err
+	}
+	if err := exits.Validate(); err != nil {
+		return backtest.Exits{}, nil, err
+	}
+
+	changed, err := helper.ChangedParams(&backtest.Exits{}, &exits)
+	if err != nil {
+		return backtest.Exits{}, nil, err
+	}
+	return exits, changed, nil
 }
 
 // strategyIsMultiTimeframe reports whether the selected strategy reads higher

@@ -189,6 +189,9 @@ func validateParams(params backtest.RunParams) error {
 	if err := params.Sizing.Validate(); err != nil {
 		return err
 	}
+	if err := params.Exits.Validate(); err != nil {
+		return err
+	}
 	if err := validateStrategyTimeframes(params); err != nil {
 		return err
 	}
@@ -296,6 +299,10 @@ type runner struct {
 	// strategy's intent that never became a trade.
 	entriesRequested   int64
 	limitOrdersExpired int64
+
+	// trailAmbiguousBars counts bars where the trail would have both extended
+	// and triggered, and the trigger was assumed.
+	trailAmbiguousBars int64
 
 	// entriesBelowMinLot counts entries refused because the size the strategy
 	// asked for fell below the venue's minimum tradeable lot, and
@@ -751,6 +758,10 @@ func (r *runner) checkLevels(bar models.Candle) {
 		return
 	}
 
+	// The trail is resolved *before* the levels are tested, and it deliberately
+	// does not use this bar's extreme to do it. See advanceTrail.
+	r.advanceTrail(bar)
+
 	reason, level, ambiguous, hit := r.position.levelHitBy(bar)
 	if !hit {
 		return
@@ -762,6 +773,66 @@ func (r *runner) checkLevels(bar models.Candle) {
 	// The level is the reference; slippage is applied to it exactly as to any
 	// other fill, because a stop is a market order once it triggers.
 	r.closeAt(bar.OpenTime, level, reason, string(reason), ambiguous)
+}
+
+// advanceTrail moves the trailing stop, and refuses to do so on a bar that
+// could have triggered it first.
+//
+// # The pessimistic reading, and why it is the only honest one
+//
+// A bar records four prices and says nothing about the path between them. When
+// a bar's range would both extend the trail and reach the trail as it already
+// stands, the two orderings give opposite answers: extend-then-test keeps the
+// position open, test-then-extend closes it. The second assumes price went
+// against the position before it went in favour, and the first assumes the
+// reverse.
+//
+// Neither is knowable, and only one of them flatters the result — so the stop
+// triggers first, at its pre-extension level. This is the same rule and the
+// same reasoning as stop-before-target, and the bars it applies to are counted
+// for the same reason: a result resting largely on this assumption rests on an
+// assumption rather than on the data.
+func (r *runner) advanceTrail(bar models.Candle) {
+	exits := r.params.Exits
+	if !exits.Trailing() {
+		return
+	}
+
+	position := r.position
+	extreme := position.barExtreme(bar)
+
+	// The extreme so far, not including this bar. A trail computed from this
+	// bar's own high is a stop placed with knowledge of where the bar ended
+	// up.
+	previous := position.extreme
+	if !previous.IsPositive() {
+		previous = position.entryPrice
+	}
+
+	candidate := position.trailStop(previous, exits)
+	if position.armed(previous, exits) && position.favourable(candidate) {
+		position.stop = candidate
+		position.trailing = true
+	}
+
+	// Would this bar also have triggered the stop it is about to extend? If
+	// so the extension does not happen on this bar, and the count records that
+	// the outcome rested on the assumption.
+	extending := position.favourable(position.trailStop(extreme, exits))
+	if extending && position.stopReachedBy(bar) {
+		r.trailAmbiguousBars++
+		return
+	}
+
+	if position.direction == constants.DirectionLong {
+		if extreme.GreaterThan(previous) {
+			position.extreme = extreme
+		}
+		return
+	}
+	if extreme.LessThan(previous) {
+		position.extreme = extreme
+	}
 }
 
 // exitIsMaker decides whether an exit rested on the book.
@@ -783,6 +854,8 @@ func (r *runner) exitIsMaker(reason backtest.ExitReason) bool {
 	if r.params.Execution.Exit() != constants.OrderTypeLimit {
 		return false
 	}
+	// A trailing stop and a timeout are market orders for the same reason a
+	// fixed stop is: nothing was resting at that price.
 	return reason == backtest.ExitTarget
 }
 
@@ -918,6 +991,7 @@ func (r *runner) fill(result *backtest.Result) {
 	result.TakerEntries = r.takerEntries
 	result.MakerExits = r.makerExits
 	result.TakerExits = r.takerExits
+	result.TrailAmbiguousBars = r.trailAmbiguousBars
 	result.EntriesBelowMinLot = r.entriesBelowMinLot
 	result.EntriesRefusedAfterCap = r.entriesRefusedAfterCap
 	result.EntriesRequested = r.entriesRequested

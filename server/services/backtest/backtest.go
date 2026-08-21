@@ -171,6 +171,55 @@ func (c Costs) MakerFeePct() decimal.Decimal {
 	return c.FeeMakerPct
 }
 
+// Exits are the exit mechanisms the engine enforces, independently of what a
+// strategy asks for.
+//
+// # Why these live on the engine rather than in each strategy
+//
+// A trailing stop and a holding-time limit are not rules about *when to enter*
+// — they are what happens to a position after it exists, which is the engine's
+// business. Four copies in four strategy configurations would drift, and would
+// make "the same strategy with and without a trail" impossible to express
+// without editing the strategy.
+//
+// Every field is zero by default, and zero disables it. Every evaluation
+// before this had only a fixed stop and a fixed target, so a run that mentions
+// none of this behaves exactly as it always did.
+type Exits struct {
+	// TrailingATRMult is how far the trailing stop sits from the running
+	// extreme, in ATR. Zero disables trailing entirely.
+	TrailingATRMult float64 `param:"trailing_atr_mult,step=0.25"`
+
+	// TrailingActivateATR is how much profit is required, in ATR, before the
+	// trail arms. Until then the fixed stop applies unchanged.
+	//
+	// Arming immediately would convert every entry into a trailing exit at
+	// roughly the noise level, which is a different strategy rather than a
+	// modification of this one.
+	TrailingActivateATR float64 `param:"trailing_activate_atr,step=0.25"`
+}
+
+// Trailing reports whether a trailing stop is configured.
+func (e Exits) Trailing() bool { return e.TrailingATRMult > 0 }
+
+// Validate rejects an exit configuration that cannot mean anything.
+func (e Exits) Validate() error {
+	if e.TrailingATRMult < 0 {
+		return fmt.Errorf("backtest: trailing distance %v ATR is negative", e.TrailingATRMult)
+	}
+	if e.TrailingActivateATR < 0 {
+		return fmt.Errorf("backtest: trailing activation %v ATR is negative", e.TrailingActivateATR)
+	}
+	// A distance that only matters once trailing is on. Stating one without
+	// the other is a configuration that reads as though it does something.
+	if e.TrailingActivateATR > 0 && !e.Trailing() {
+		return fmt.Errorf(
+			"backtest: trailing_activate_atr is %v but trailing_atr_mult is zero, so nothing trails",
+			e.TrailingActivateATR)
+	}
+	return nil
+}
+
 // Execution is how orders reach the book.
 //
 // # Why this is not part of Costs
@@ -367,6 +416,10 @@ type RunParams struct {
 	// sides, which is what every completed evaluation used.
 	Execution Execution
 
+	// Exits are the engine-enforced exit mechanisms. Their zero value is the
+	// fixed stop and fixed target every earlier evaluation used.
+	Exits Exits
+
 	// Strategy is the code under measurement.
 	Strategy strategy.Strategy
 
@@ -436,6 +489,14 @@ const (
 
 	// ExitStrategy is the strategy asking to close.
 	ExitStrategy ExitReason = "strategy_exit"
+
+	// ExitTrailingStop is a stop that had been moved in the position's favour
+	// before it triggered.
+	//
+	// Distinct from ExitStop so the two can be counted apart: whether the
+	// trail is doing anything, or merely adding a code path, is answerable
+	// only if its exits are separable from the fixed stop's.
+	ExitTrailingStop ExitReason = "trailing_stop"
 
 	// ExitGapForced is the engine closing a position because the data ends,
 	// a gap begins, or the market became untradeable.
@@ -600,6 +661,14 @@ type Result struct {
 	// other than the strategy as written.
 	EntriesRequested   int64
 	LimitOrdersExpired int64
+
+	// TrailAmbiguousBars counts bars where the trailing stop would have both
+	// extended and triggered, and the trigger was assumed.
+	//
+	// Reported beside the stop-before-target count because it is the same
+	// class of thing: a simplification the result rests on, which the reader
+	// has to be able to weigh.
+	TrailAmbiguousBars int64
 
 	// EntriesBelowMinLot counts entries the venue could not have taken: the
 	// size the strategy asked for was under the minimum lot, so the trade did

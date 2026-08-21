@@ -120,6 +120,8 @@ func WriteSummary(w io.Writer, result backtest.Result, stats Statistics) error {
 	line(&b, "  as a share of balance", fmt.Sprintf("%.2f%% average, %.2f%% worst (measured at each entry)",
 		stats.AverageRiskPct*100, stats.WorstRiskPct*100))
 
+	writeExitBreakdown(&b, result, stats)
+
 	// The line to watch under a limit entry model, so it is printed where it
 	// cannot be skipped rather than left to be derived.
 	if result.EntriesRequested > 0 && result.LimitOrdersExpired > 0 {
@@ -136,6 +138,14 @@ func WriteSummary(w io.Writer, result backtest.Result, stats Statistics) error {
 	b.WriteString("  (bars where the stop and the target were both reachable and\n")
 	b.WriteString("   the stop was assumed to fill first; a large count means the\n")
 	b.WriteString("   result rests on that assumption rather than on the data)\n")
+
+	if result.Params.Exits.Trailing() {
+		line(&b, "trail-before-extension bars", fmt.Sprintf("%d", result.TrailAmbiguousBars))
+		b.WriteString("  (bars where the trail would have both extended and triggered.\n")
+		b.WriteString("   The trigger was assumed, at the level the stop already held:\n")
+		b.WriteString("   the other ordering assumes price went in the position's favour\n")
+		b.WriteString("   before it went against, which OHLC cannot say)\n")
+	}
 
 	// Stated beside the stop-before-target assumption because they are the
 	// same class of thing: a simplification the result rests on, which the
@@ -230,6 +240,44 @@ func writeHeader(b *strings.Builder, result backtest.Result, stats Statistics) {
 		}
 	}
 	_ = stats
+}
+
+// writeExitBreakdown reports how each kind of exit performed.
+//
+// It is how you tell whether an exit mechanism is doing anything or merely
+// adding a code path: a trailing stop whose exits are no larger on average
+// than the target exits it replaced has not earned its complexity, and the
+// headline average win cannot show that because it averages the two together.
+func writeExitBreakdown(b *strings.Builder, result backtest.Result, stats Statistics) {
+	if len(stats.ByExitReason) == 0 {
+		return
+	}
+
+	unit := quoteUnit(result)
+	b.WriteString("\n  exits by reason\n")
+	for _, group := range stats.ByExitReason {
+		fmt.Fprintf(b, "    %-16s %5d (%5.1f%%)  average %s %s, average win %s %s\n",
+			group.Reason, group.Count, percent(int64(group.Count), int64(stats.TradeCount)),
+			group.AverageNet.StringFixed(2), unit, group.AverageWin.StringFixed(2), unit)
+	}
+
+	if trailing := breakdownFor(stats, backtest.ExitTrailingStop); trailing != nil {
+		target := breakdownFor(stats, backtest.ExitTarget)
+		if target != nil && !trailing.AverageWin.GreaterThan(target.AverageWin) {
+			b.WriteString("  (trailing exits are not larger on average than target exits, so on\n")
+			b.WriteString("   this run the trail is not earning the mechanism it added)\n")
+		}
+	}
+}
+
+// breakdownFor finds one exit reason's row.
+func breakdownFor(stats Statistics, reason backtest.ExitReason) *ExitBreakdown {
+	for i := range stats.ByExitReason {
+		if stats.ByExitReason[i].Reason == reason {
+			return &stats.ByExitReason[i]
+		}
+	}
+	return nil
 }
 
 // describeChanges renders the parameters that differ from their defaults.

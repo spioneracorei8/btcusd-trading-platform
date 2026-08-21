@@ -103,6 +103,14 @@ type openPosition struct {
 	stop   decimal.Decimal
 	target decimal.Decimal
 
+	// trailing records that the stop has been moved by the trail, so the exit
+	// can be reported apart from a fixed stop.
+	trailing bool
+
+	// extreme is the best price the position has seen since entry, which is
+	// what the trail is measured back from.
+	extreme decimal.Decimal
+
 	barsHeld int
 
 	// entryMaker records how this position was opened, because the exit
@@ -218,6 +226,68 @@ func (p *openPosition) targetReachedBy(bar models.Candle) bool {
 	return bar.Low.LessThanOrEqual(p.target)
 }
 
+// trailStop is where the trail would sit given a running extreme.
+//
+// The distance uses the ATR at entry rather than the current bar's, so it is
+// fixed when the position opens and cannot drift with volatility mid-trade. A
+// trail that widened in a volatile hour would loosen a stop that was already
+// placed, which is the one thing a stop may never do.
+func (p *openPosition) trailStop(extreme decimal.Decimal, exits backtest.Exits) decimal.Decimal {
+	if !exits.Trailing() || p.entryATR <= 0 {
+		return decimal.Zero
+	}
+
+	distance := decimal.NewFromFloat(p.entryATR).Mul(decimal.NewFromFloat(exits.TrailingATRMult))
+	if p.direction == constants.DirectionLong {
+		return extreme.Sub(distance)
+	}
+	return extreme.Add(distance)
+}
+
+// armed reports whether the position has moved far enough in its favour for
+// the trail to take over from the fixed stop.
+func (p *openPosition) armed(extreme decimal.Decimal, exits backtest.Exits) bool {
+	if exits.TrailingActivateATR <= 0 {
+		return true
+	}
+	if p.entryATR <= 0 {
+		return false
+	}
+
+	required := decimal.NewFromFloat(p.entryATR).Mul(decimal.NewFromFloat(exits.TrailingActivateATR))
+	if p.direction == constants.DirectionLong {
+		return extreme.Sub(p.entryPrice).GreaterThanOrEqual(required)
+	}
+	return p.entryPrice.Sub(extreme).GreaterThanOrEqual(required)
+}
+
+// favourable reports whether a candidate stop is an improvement.
+//
+// Only in the position's own direction, always. A stop that can loosen is not
+// a stop, and the arithmetic that would loosen it — a new extreme that is
+// worse than the last, a widened ATR — is exactly the arithmetic that shows up
+// when a trade is going wrong.
+func (p *openPosition) favourable(candidate decimal.Decimal) bool {
+	if !candidate.IsPositive() {
+		return false
+	}
+	if p.stop.IsZero() {
+		return true
+	}
+	if p.direction == constants.DirectionLong {
+		return candidate.GreaterThan(p.stop)
+	}
+	return candidate.LessThan(p.stop)
+}
+
+// barExtreme is the best price this bar reached for the position.
+func (p *openPosition) barExtreme(bar models.Candle) decimal.Decimal {
+	if p.direction == constants.DirectionLong {
+		return bar.High
+	}
+	return bar.Low
+}
+
 // levelHitBy reports which attached level the bar reached.
 //
 // # The stop wins when both are reachable
@@ -234,11 +304,16 @@ func (p *openPosition) levelHitBy(bar models.Candle) (reason backtest.ExitReason
 	stopHit := p.stopReachedBy(bar)
 	targetHit := p.targetReachedBy(bar)
 
+	stopReason := backtest.ExitStop
+	if p.trailing {
+		stopReason = backtest.ExitTrailingStop
+	}
+
 	switch {
 	case stopHit && targetHit:
-		return backtest.ExitStop, p.stop, true, true
+		return stopReason, p.stop, true, true
 	case stopHit:
-		return backtest.ExitStop, p.stop, false, true
+		return stopReason, p.stop, false, true
 	case targetHit:
 		return backtest.ExitTarget, p.target, false, true
 	default:

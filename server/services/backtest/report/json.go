@@ -109,6 +109,11 @@ type runDoc struct {
 	SizingMode  string `json:"sizing_mode"`
 	RiskPct     string `json:"risk_pct"`
 	MaxLeverage string `json:"max_leverage"`
+
+	// The engine-enforced exits. Zero is the fixed stop and fixed target every
+	// evaluation before phase 06 ran with.
+	TrailingATRMult     float64 `json:"trailing_atr_mult"`
+	TrailingActivateATR float64 `json:"trailing_activate_atr"`
 }
 
 type costsDoc struct {
@@ -147,6 +152,36 @@ type barsDoc struct {
 	// purpose" and "could not say" are different findings.
 	Vetoed         int64 `json:"vetoed"`
 	FilterNotReady int64 `json:"filter_not_ready"`
+
+	// TrailAmbiguous counts bars where the trailing stop would have both
+	// extended and triggered, and the trigger was assumed.
+	TrailAmbiguous int64 `json:"trail_ambiguous"`
+}
+
+// exitReasonDoc is how one kind of exit performed.
+type exitReasonDoc struct {
+	Reason     string `json:"reason"`
+	Count      int    `json:"count"`
+	Wins       int    `json:"wins"`
+	AverageNet string `json:"average_net"`
+	AverageWin string `json:"average_win"`
+	TotalNet   string `json:"total_net"`
+}
+
+// exitReasonDocs converts the breakdown for the document.
+func exitReasonDocs(groups []ExitBreakdown) []exitReasonDoc {
+	out := make([]exitReasonDoc, 0, len(groups))
+	for _, group := range groups {
+		out = append(out, exitReasonDoc{
+			Reason:     string(group.Reason),
+			Count:      group.Count,
+			Wins:       group.Wins,
+			AverageNet: group.AverageNet.String(),
+			AverageWin: group.AverageWin.String(),
+			TotalNet:   group.TotalNet.String(),
+		})
+	}
+	return out
 }
 
 type performanceDoc struct {
@@ -207,6 +242,11 @@ type tradeStatsDoc struct {
 	WorstRiskPct           float64 `json:"worst_risk_pct_of_balance"`
 	LimitOrdersExpired     int64   `json:"limit_orders_expired"`
 	CancelledPercent       float64 `json:"limit_orders_cancelled_percent"`
+
+	// ByExitReason is how each kind of exit performed. It is the only way to
+	// tell whether an exit mechanism is doing anything or merely adding a code
+	// path.
+	ByExitReason []exitReasonDoc `json:"by_exit_reason"`
 }
 
 type tradeDoc struct {
@@ -282,6 +322,9 @@ func BuildDocument(result backtest.Result, stats Statistics) Document {
 			SizingMode:    result.Params.Sizing.Mode.String(),
 			RiskPct:       result.Params.Sizing.RiskPct.String(),
 			MaxLeverage:   result.Params.Sizing.Leverage().String(),
+
+			TrailingATRMult:     result.Params.Exits.TrailingATRMult,
+			TrailingActivateATR: result.Params.Exits.TrailingActivateATR,
 		},
 		Costs: costsDoc{
 			FeeTakerPct:      result.Params.Costs.FeeTakerPct.String(),
@@ -305,6 +348,7 @@ func BuildDocument(result backtest.Result, stats Statistics) Document {
 			StopAndTargetBothReachable: result.AmbiguousBars,
 			Vetoed:                     result.BarsVetoed,
 			FilterNotReady:             result.BarsFilterNotReady,
+			TrailAmbiguous:             result.TrailAmbiguousBars,
 		},
 		Performance: performanceDoc{
 			NetReturn:   stats.NetReturn,
@@ -353,6 +397,7 @@ func BuildDocument(result backtest.Result, stats Statistics) Document {
 			WorstRiskPct:           stats.WorstRiskPct,
 			LimitOrdersExpired:     result.LimitOrdersExpired,
 			CancelledPercent:       percent(result.LimitOrdersExpired, result.EntriesRequested),
+			ByExitReason:           exitReasonDocs(stats.ByExitReason),
 		},
 		// Never nil: an empty run emits [] rather than null, so a consumer
 		// can iterate without a special case.

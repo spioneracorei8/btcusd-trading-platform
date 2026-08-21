@@ -24,7 +24,9 @@
     "initial_equity": "10000",
     "sizing_mode": "all_in",
     "risk_pct": "0",
-    "max_leverage": "1"
+    "max_leverage": "1",
+    "trailing_atr_mult": 0,
+    "trailing_activate_atr": 0
   },
   "costs": {
     "fee_taker_pct": "0.05",
@@ -47,7 +49,8 @@
     "skipped_gap": 0,
     "stop_and_target_both_reachable": 0,
     "vetoed": 0,
-    "filter_not_ready": 0
+    "filter_not_ready": 0,
+    "trail_ambiguous": 0
   },
   "performance": {
     "net_return": 1.0460975475968022,
@@ -93,7 +96,25 @@
     "average_risk_pct_of_balance": 0,
     "worst_risk_pct_of_balance": 0,
     "limit_orders_expired": 0,
-    "limit_orders_cancelled_percent": 0
+    "limit_orders_cancelled_percent": 0,
+    "by_exit_reason": [
+      {
+        "reason": "strategy_exit",
+        "count": 27,
+        "wins": 27,
+        "average_net": "380.6310582836098243",
+        "average_win": "380.6310582836098243",
+        "total_net": "10277.038573657465255422"
+      },
+      {
+        "reason": "end_of_run",
+        "count": 1,
+        "wins": 1,
+        "average_net": "183.9369023105565201",
+        "average_win": "183.9369023105565201",
+        "total_net": "183.936902310556520058"
+      }
+    ]
   },
   "trades": [
     {

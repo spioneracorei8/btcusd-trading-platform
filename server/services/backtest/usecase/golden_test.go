@@ -35,7 +35,7 @@ var updateGolden = flag.Bool("update", false, "rewrite the golden report")
 // changed and they have stopped being comparable with anything produced
 // afterwards.
 //
-// It has been regenerated five times, each because a change added fields to
+// It has been regenerated six times, each because a change added fields to
 // the JSON document without touching what the engine computes:
 //
 //  1. maker fees and limit fills — 68 keys added
@@ -43,8 +43,9 @@ var updateGolden = flag.Bool("update", false, "rewrite the golden report")
 //  3. the trades-per-day frequency line — one more
 //  4. the sizing block, when the notional cap became visible — four more
 //  5. the parameter blocks, when --param arrived — two empty arrays
+//  6. the trailing stop's settings and the exit breakdown — fifteen more
 //
-// All were checked field by field against the file as first committed. All 142
+// All were checked field by field against the file as first committed. All 157
 // keys are additions: **zero existing values changed, and none removed**. The
 // trades, the equity curve and every statistic are identical to the original
 // in each. Any future regeneration deserves the same check, and the same
