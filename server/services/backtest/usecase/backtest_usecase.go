@@ -422,7 +422,11 @@ func (r *runner) onCandle(bar models.Candle) error {
 	//     before anything else happens on the bar: it was on the book first.
 	r.resolveResting(bar)
 
-	// 2b. Fill what the previous bar asked for, at this bar's open.
+	// 2b. A position that has run out of time leaves at this bar's open,
+	//     before anything else is decided on the bar.
+	r.closeTimedOut(bar)
+
+	// 2c. Fill what the previous bar asked for, at this bar's open.
 	if err := r.applyPending(bar); err != nil {
 		return err
 	}
@@ -773,6 +777,50 @@ func (r *runner) checkLevels(bar models.Candle) {
 	// The level is the reference; slippage is applied to it exactly as to any
 	// other fill, because a stop is a market order once it triggers.
 	r.closeAt(bar.OpenTime, level, reason, string(reason), ambiguous)
+}
+
+// closeTimedOut forces out a position that has been held too long.
+//
+// # Why at the open, and why before the bar's range is looked at
+//
+// The decision is "this position has been held N bars", which is knowable the
+// moment the Nth bar opens — no part of it depends on what the bar goes on to
+// do. So it is made at the open and filled at the open, which is what a market
+// order placed on that decision would get.
+//
+// Resolving it after the bar's range instead would mean choosing a fill price
+// from prices the decision could not have seen. The cost is that a bar which
+// would also have hit the stop exits at the open rather than the stop, and
+// that is the honest order: the exit was decided first.
+//
+// # Why a position that is running is left alone
+//
+// The point of the limit is to release capital from a position the market has
+// not confirmed. One that has moved has been confirmed, and closing it on a
+// clock would cut exactly the trades the strategy exists to find.
+func (r *runner) closeTimedOut(bar models.Candle) {
+	exits := r.params.Exits
+	if !exits.TimeLimited() || !r.position.isOpen() {
+		return
+	}
+	if r.position.barsHeld < exits.MaxHoldingBars {
+		return
+	}
+
+	if exits.TimeoutExitATR > 0 {
+		if r.position.entryATR <= 0 {
+			// No ATR means no distance to measure, and forcing the exit anyway
+			// would apply a condition the configuration asked to qualify.
+			return
+		}
+		allowed := decimal.NewFromFloat(r.position.entryATR).
+			Mul(decimal.NewFromFloat(exits.TimeoutExitATR))
+		if bar.Open.Sub(r.position.entryPrice).Abs().GreaterThan(allowed) {
+			return
+		}
+	}
+
+	r.closeAt(bar.OpenTime, bar.Open, backtest.ExitTimeout, string(backtest.ExitTimeout), false)
 }
 
 // advanceTrail moves the trailing stop, and refuses to do so on a bar that

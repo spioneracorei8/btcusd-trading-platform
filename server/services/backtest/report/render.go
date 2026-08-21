@@ -268,6 +268,18 @@ func writeExitBreakdown(b *strings.Builder, result backtest.Result, stats Statis
 			b.WriteString("   this run the trail is not earning the mechanism it added)\n")
 		}
 	}
+
+	// The timeout's own reading, which the aggregate hides in both directions.
+	if timeout := breakdownFor(stats, backtest.ExitTimeout); timeout != nil {
+		switch {
+		case timeout.AverageNet.IsPositive():
+			b.WriteString("  (timeout exits are profitable on average, which says the targets\n")
+			b.WriteString("   are set further away than these trades actually travel)\n")
+		case timeout.AverageNet.IsNegative():
+			b.WriteString("  (timeout exits lose on average — the clock may be cutting trades\n")
+			b.WriteString("   that would have recovered. Compare against a run without it)\n")
+		}
+	}
 }
 
 // breakdownFor finds one exit reason's row.

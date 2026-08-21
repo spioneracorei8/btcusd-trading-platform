@@ -197,10 +197,29 @@ type Exits struct {
 	// roughly the noise level, which is a different strategy rather than a
 	// modification of this one.
 	TrailingActivateATR float64 `param:"trailing_activate_atr,step=0.25"`
+
+	// MaxHoldingBars forces an exit after this many bars. Zero disables it.
+	//
+	// A position that has gone nowhere for many bars is paying the spread to
+	// hold an opinion the market has not confirmed. On 1m the average holding
+	// time was under eight minutes and the strategy still bled to costs; on 4h
+	// it is 32 hours, which is a long time to be wrong in one direction.
+	MaxHoldingBars int `param:"max_holding_bars,step=5"`
+
+	// TimeoutExitATR limits the forced exit to positions still within this
+	// distance of their entry, in ATR. Zero means the clock alone decides.
+	//
+	// A trade that is running should not be closed by a clock: the whole point
+	// of the limit is to release capital from a position the market has not
+	// confirmed, and one that has moved has been confirmed.
+	TimeoutExitATR float64 `param:"timeout_exit_atr,step=0.25"`
 }
 
 // Trailing reports whether a trailing stop is configured.
 func (e Exits) Trailing() bool { return e.TrailingATRMult > 0 }
+
+// TimeLimited reports whether a holding-time limit is configured.
+func (e Exits) TimeLimited() bool { return e.MaxHoldingBars > 0 }
 
 // Validate rejects an exit configuration that cannot mean anything.
 func (e Exits) Validate() error {
@@ -210,12 +229,25 @@ func (e Exits) Validate() error {
 	if e.TrailingActivateATR < 0 {
 		return fmt.Errorf("backtest: trailing activation %v ATR is negative", e.TrailingActivateATR)
 	}
-	// A distance that only matters once trailing is on. Stating one without
-	// the other is a configuration that reads as though it does something.
+	if e.MaxHoldingBars < 0 {
+		return fmt.Errorf("backtest: holding limit %d bars is negative", e.MaxHoldingBars)
+	}
+	if e.TimeoutExitATR < 0 {
+		return fmt.Errorf("backtest: timeout distance %v ATR is negative", e.TimeoutExitATR)
+	}
+
+	// A distance that only matters once the mechanism is on. Stating one
+	// without the other is a configuration that reads as though it does
+	// something.
 	if e.TrailingActivateATR > 0 && !e.Trailing() {
 		return fmt.Errorf(
 			"backtest: trailing_activate_atr is %v but trailing_atr_mult is zero, so nothing trails",
 			e.TrailingActivateATR)
+	}
+	if e.TimeoutExitATR > 0 && !e.TimeLimited() {
+		return fmt.Errorf(
+			"backtest: timeout_exit_atr is %v but max_holding_bars is zero, so nothing times out",
+			e.TimeoutExitATR)
 	}
 	return nil
 }
@@ -489,6 +521,15 @@ const (
 
 	// ExitStrategy is the strategy asking to close.
 	ExitStrategy ExitReason = "strategy_exit"
+
+	// ExitTimeout is the holding-time limit forcing a position out.
+	//
+	// Counted apart from every other exit so its average P&L can be read on
+	// its own: a timeout that is on average profitable says the targets are
+	// set too far, and one that is heavily negative says the clock is cutting
+	// trades that would have recovered. Either reading is useful and the
+	// aggregate hides both.
+	ExitTimeout ExitReason = "timeout"
 
 	// ExitTrailingStop is a stop that had been moved in the position's favour
 	// before it triggered.

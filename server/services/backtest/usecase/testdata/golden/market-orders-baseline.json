@@ -26,7 +26,9 @@
     "risk_pct": "0",
     "max_leverage": "1",
     "trailing_atr_mult": 0,
-    "trailing_activate_atr": 0
+    "trailing_activate_atr": 0,
+    "max_holding_bars": 0,
+    "timeout_exit_atr": 0
   },
   "costs": {
     "fee_taker_pct": "0.05",

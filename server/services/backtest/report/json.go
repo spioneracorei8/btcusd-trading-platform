@@ -114,6 +114,8 @@ type runDoc struct {
 	// evaluation before phase 06 ran with.
 	TrailingATRMult     float64 `json:"trailing_atr_mult"`
 	TrailingActivateATR float64 `json:"trailing_activate_atr"`
+	MaxHoldingBars      int     `json:"max_holding_bars"`
+	TimeoutExitATR      float64 `json:"timeout_exit_atr"`
 }
 
 type costsDoc struct {
@@ -325,6 +327,8 @@ func BuildDocument(result backtest.Result, stats Statistics) Document {
 
 			TrailingATRMult:     result.Params.Exits.TrailingATRMult,
 			TrailingActivateATR: result.Params.Exits.TrailingActivateATR,
+			MaxHoldingBars:      result.Params.Exits.MaxHoldingBars,
+			TimeoutExitATR:      result.Params.Exits.TimeoutExitATR,
 		},
 		Costs: costsDoc{
 			FeeTakerPct:      result.Params.Costs.FeeTakerPct.String(),
