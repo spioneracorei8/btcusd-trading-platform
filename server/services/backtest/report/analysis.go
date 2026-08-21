@@ -366,10 +366,19 @@ func WriteCostSensitivity(w io.Writer, runs []CostSensitivity, heading string) e
 
 // NeighbourResult is one run at a neighbouring parameter value.
 type NeighbourResult struct {
-	Label      string
-	NetReturn  float64
-	TradeCount int
-	Failed     string
+	// Label names the row: "base", or the parameter and the direction it was
+	// moved in.
+	Label string
+
+	// Values is what every varied parameter held for this row, in the same
+	// order as the table's columns. A row that only named the parameter it
+	// changed would leave a reader deriving the rest.
+	Values []string
+
+	NetReturn    float64
+	ProfitFactor float64
+	TradeCount   int
+	Failed       string
 }
 
 // WriteNeighbourhood renders the parameter-stability report.
@@ -384,32 +393,53 @@ type NeighbourResult struct {
 // artefact, and the only useful response is to stop believing 21.
 //
 // A tool that picked the winner would industrialise the exact mistake.
-func WriteNeighbourhood(w io.Writer, parameter string, chosen NeighbourResult, neighbours []NeighbourResult) error {
+//
+// # Why the reading is printed every time
+//
+// It used to appear only when the chosen value stood alone, which is the one
+// case a reader would probably have noticed unaided. The reading that gets
+// forgotten is the other one: a base row that looks good, neighbours that look
+// broadly similar, and nobody stopping to ask which of the two shapes they are
+// looking at. So the rule is printed beside every table, good or bad.
+func WriteNeighbourhood(w io.Writer, columns []string, rows []NeighbourResult) error {
 	var b strings.Builder
 
-	fmt.Fprintf(&b, "\nPARAMETER NEIGHBOURHOOD — %s\n", parameter)
-	fmt.Fprintf(&b, "    %-24s %16s %10s\n", "value", "net return", "trades")
+	b.WriteString("\nPARAMETER NEIGHBOURHOOD\n")
 
-	render := func(entry NeighbourResult, marker string) {
-		if entry.Failed != "" {
-			fmt.Fprintf(&b, "    %-24s %16s %10s  %s\n",
-				entry.Label+marker, "-", "-", entry.Failed)
-			return
+	fmt.Fprintf(&b, "    %-14s", "")
+	for _, column := range columns {
+		fmt.Fprintf(&b, " %10s", column)
+	}
+	fmt.Fprintf(&b, " %14s %10s %8s\n", "net return", "trades", "PF")
+
+	for _, row := range rows {
+		fmt.Fprintf(&b, "    %-14s", row.Label)
+		for i := range columns {
+			value := "-"
+			if i < len(row.Values) {
+				value = row.Values[i]
+			}
+			fmt.Fprintf(&b, " %10s", value)
 		}
-		fmt.Fprintf(&b, "    %-24s %16s %10d\n",
-			entry.Label+marker, formatPercent(entry.NetReturn), entry.TradeCount)
+
+		if row.Failed != "" {
+			fmt.Fprintf(&b, " %14s %10s %8s  %s\n", "-", "-", "-", row.Failed)
+			continue
+		}
+		fmt.Fprintf(&b, " %14s %10d %8s\n",
+			formatPercent(row.NetReturn), row.TradeCount, formatFloat(row.ProfitFactor))
 	}
 
-	render(chosen, "  <- chosen")
-	for _, neighbour := range neighbours {
-		render(neighbour, "")
-	}
+	b.WriteString("\n  How to read this: a value whose neighbours behave broadly like it sits\n")
+	b.WriteString("  on a plateau, and may be measuring something real. One that collapses a\n")
+	b.WriteString("  single step away is a spike — the shape of a value fitted to the noise\n")
+	b.WriteString("  in this particular history — and should be discarded however good the\n")
+	b.WriteString("  base row looks.\n")
 
-	if isolated(chosen, neighbours) {
-		b.WriteString("  (the chosen value is profitable and its neighbours are not. That is a\n" +
-			"   spike, not a plateau — the shape of a fitted artefact rather than a\n" +
-			"   discovery. Nothing here selects a replacement; the finding is that this\n" +
-			"   value should not be believed.)\n")
+	if base, neighbours, ok := splitBase(rows); ok && isolated(base, neighbours) {
+		b.WriteString("\n  *** This is a spike. The chosen values are profitable and not one\n")
+		b.WriteString("      neighbour is. Nothing here selects a replacement; the finding is\n")
+		b.WriteString("      that these values should not be believed. ***\n")
 	}
 
 	if _, err := io.WriteString(w, b.String()); err != nil {
@@ -417,6 +447,19 @@ func WriteNeighbourhood(w io.Writer, parameter string, chosen NeighbourResult, n
 	}
 	return nil
 }
+
+// splitBase separates the base row from its neighbours.
+func splitBase(rows []NeighbourResult) (NeighbourResult, []NeighbourResult, bool) {
+	for i, row := range rows {
+		if row.Label == NeighbourhoodBaseLabel {
+			return row, append(append([]NeighbourResult(nil), rows[:i]...), rows[i+1:]...), true
+		}
+	}
+	return NeighbourResult{}, nil, false
+}
+
+// NeighbourhoodBaseLabel names the row holding the chosen configuration.
+const NeighbourhoodBaseLabel = "base"
 
 // isolated reports whether the chosen value stands alone.
 func isolated(chosen NeighbourResult, neighbours []NeighbourResult) bool {

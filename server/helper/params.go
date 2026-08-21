@@ -110,6 +110,29 @@ func ParamNames(config any) []string {
 	return names
 }
 
+// ParamValues reads every settable parameter's current value.
+//
+// # Why this is not ChangedParams
+//
+// ChangedParams answers "what differs from the defaults", which is the right
+// question for a report and the wrong one for building a run. A stepped value
+// that happens to land *on* its default differs from nothing, and a caller
+// deriving the run's parameters from the changes would silently drop it and
+// fall back to whatever it started from — which is a neighbour row labelled +1
+// that is a copy of the base.
+func ParamValues(config any) (map[string]string, error) {
+	specs, err := DescribeParams(config)
+	if err != nil {
+		return nil, err
+	}
+
+	values := make(map[string]string, len(specs))
+	for _, spec := range specs {
+		values[spec.Name] = spec.Default
+	}
+	return values, nil
+}
+
 // ApplyParams writes overrides onto config, which must be a pointer.
 //
 // An unknown key is an error naming every valid key. A silently ignored typo

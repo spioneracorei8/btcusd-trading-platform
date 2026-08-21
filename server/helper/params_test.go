@@ -253,3 +253,63 @@ func TestOverridesDoNotLeakBetweenConfigurations(t *testing.T) {
 		t.Errorf("a fresh configuration starts at fast=%d, want the default 9", second.Fast)
 	}
 }
+
+// TestAValueThatLandsOnItsDefaultIsStillReported.
+//
+// This is the bug ParamValues exists for. resume_bars=1 stepped up is 2, which
+// is the documented default — so it differs from nothing, and a caller that
+// derived the run's parameters from ChangedParams would drop it and fall back
+// to the value it started from. The neighbourhood table then showed a row
+// labelled +1 holding the base's value and, of course, the base's numbers:
+// a neighbour reported as behaving identically because it was never run.
+func TestAValueThatLandsOnItsDefaultIsStillReported(t *testing.T) {
+	config := newSample()
+	if err := helper.ApplyParams(config, map[string]string{"fast": "8"}); err != nil {
+		t.Fatalf("ApplyParams() returned error: %v", err)
+	}
+	if err := helper.StepParam(config, "fast", +1); err != nil {
+		t.Fatalf("StepParam() returned error: %v", err)
+	}
+
+	// Back at the default, so nothing differs...
+	changed, err := helper.ChangedParams(newSample(), config)
+	if err != nil {
+		t.Fatalf("ChangedParams() returned error: %v", err)
+	}
+	for _, change := range changed {
+		if change.Name == "fast" {
+			t.Fatalf("precondition: fast is back at its default and should differ from nothing, got %+v", change)
+		}
+	}
+
+	// ...and the value is still readable.
+	values, err := helper.ParamValues(config)
+	if err != nil {
+		t.Fatalf("ParamValues() returned error: %v", err)
+	}
+	if values["fast"] != "9" {
+		t.Errorf("fast reads as %q after stepping 8 up by one, want \"9\"", values["fast"])
+	}
+}
+
+// TestParamValuesCoversEveryParameter, so a caller can rebuild a whole
+// configuration from it rather than only the interesting part.
+func TestParamValuesCoversEveryParameter(t *testing.T) {
+	values, err := helper.ParamValues(newSample())
+	if err != nil {
+		t.Fatalf("ParamValues() returned error: %v", err)
+	}
+
+	specs, err := helper.DescribeParams(newSample())
+	if err != nil {
+		t.Fatalf("DescribeParams() returned error: %v", err)
+	}
+	if len(values) != len(specs) {
+		t.Fatalf("read %d values for %d parameters", len(values), len(specs))
+	}
+	for _, spec := range specs {
+		if values[spec.Name] != spec.Default {
+			t.Errorf("%s reads as %q, want %q", spec.Name, values[spec.Name], spec.Default)
+		}
+	}
+}

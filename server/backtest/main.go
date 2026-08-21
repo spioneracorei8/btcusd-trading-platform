@@ -82,6 +82,8 @@ type options struct {
 	experimentLog   string
 	noExperimentLog bool
 
+	neighbourhood bool
+
 	// params and filterParams are the overrides collected from repeated
 	// --param / --filter-param flags.
 	params       paramFlag
@@ -220,6 +222,10 @@ func run() int {
 		return runComparison(ctx, log, engine, candles, params, opts, cfg)
 	}
 
+	if opts.neighbourhood {
+		return runNeighbourhood(ctx, log, engine, candles, params, opts, cfg)
+	}
+
 	params, err = prepareRun(params, opts, cfg, candles, opts.trendFilter != "")
 	if err != nil {
 		log.Error("could not prepare the run", "error", err)
@@ -326,6 +332,8 @@ func parseFlags(args []string) (options, error) {
 	fs.BoolVar(&opts.compare, "compare", false,
 		"run twice, filtered and unfiltered, and print both side by side")
 	fs.BoolVar(&opts.listStrategies, "list-strategies", false, "list the strategies this binary can run")
+	fs.BoolVar(&opts.neighbourhood, "neighbourhood", false,
+		"also run one step either side of every --param, and print them together")
 	fs.StringVar(&opts.experimentLog, "experiment-log", report.ExperimentLogPath,
 		"append every completed run to this log")
 	opts.params = paramFlag{}
@@ -942,6 +950,233 @@ func runCostSweep(
 	return runs, report.WriteCostSensitivity(os.Stdout, runs, report.CostSensitivityHeading(params))
 }
 
+// runNeighbourhood runs the chosen configuration and one step either side of
+// every parameter that was varied.
+//
+// # Why only the parameters that were varied
+//
+// Stepping everything would be a grid search with extra steps, and phase 06
+// puts automated optimisation out of scope for a reason: every additional
+// combination is another chance for a result to look good by accident, and
+// fifty-seven runs already sit in the log. Varying a parameter is a decision
+// somebody made; this checks that decision and nothing else.
+//
+// # One log entry, not five
+//
+// It is one experiment — "is this value on a plateau" — and recording each row
+// separately would inflate the denominator the log exists to protect, then
+// invite the best row to be quoted on its own.
+func runNeighbourhood(
+	ctx context.Context,
+	log *slog.Logger,
+	engine backtest.BacktestUsecase,
+	candles candle.CandleUsecase,
+	params backtest.RunParams,
+	opts options,
+	cfg *config.Config,
+) int {
+	varied := make([]string, 0, len(opts.params))
+	for name := range opts.params {
+		varied = append(varied, name)
+	}
+	sort.Strings(varied)
+
+	if len(varied) == 0 {
+		must(io.WriteString(os.Stderr,
+			"\n--neighbourhood checks whether the values you chose sit on a plateau,\n"+
+				"so it needs values to have been chosen: pass at least one --param.\n"+
+				"With none, the only row would be the defaults compared against nothing.\n\n"))
+		return exitUsage
+	}
+
+	entry, err := _strategy_us.Lookup(opts.strategyName)
+	if err != nil {
+		must(fmt.Fprintln(os.Stderr, err))
+		return exitUsage
+	}
+
+	// The base row first, then each parameter moved down and up. Deterministic
+	// order, because this table is read by eye and compared against earlier
+	// ones.
+	type plan struct {
+		label     string
+		overrides map[string]string
+	}
+	plans := []plan{{label: report.NeighbourhoodBaseLabel, overrides: opts.params}}
+
+	for _, name := range varied {
+		for _, direction := range []int{-1, +1} {
+			stepped, err := steppedOverrides(entry, opts.params, name, direction)
+			if err != nil {
+				must(fmt.Fprintf(os.Stderr, "\n--neighbourhood: %v\n\n", err))
+				return exitUsage
+			}
+			plans = append(plans, plan{
+				label:     fmt.Sprintf("%s%+d", name, direction),
+				overrides: stepped,
+			})
+		}
+	}
+
+	var (
+		rows      []report.NeighbourResult
+		baseRun   backtest.Result
+		baseStats report.Statistics
+		haveBase  bool
+	)
+
+	for _, p := range plans {
+		row := report.NeighbourResult{Label: p.label}
+		for _, name := range varied {
+			row.Values = append(row.Values, p.overrides[name])
+		}
+
+		runOpts := opts
+		runOpts.params = p.overrides
+
+		result, stats, err := runOnce(ctx, engine, candles, params, runOpts, cfg)
+		if err != nil {
+			// A neighbour that cannot run is a finding, not a reason to stop:
+			// a value one step away being *invalid* is itself information
+			// about how narrow the chosen one is.
+			row.Failed = shortReason(err)
+			log.Debug("neighbour did not run", "label", p.label, "error", err)
+			rows = append(rows, row)
+			continue
+		}
+
+		row.NetReturn = stats.NetReturn
+		row.ProfitFactor = stats.ProfitFactor
+		row.TradeCount = stats.TradeCount
+		rows = append(rows, row)
+
+		if p.label == report.NeighbourhoodBaseLabel {
+			baseRun, baseStats, haveBase = result, stats, true
+		}
+	}
+
+	if !haveBase {
+		must(io.WriteString(os.Stderr,
+			"\nthe chosen configuration itself did not run, so there is nothing to\n"+
+				"compare its neighbours against.\n\n"))
+		return exitFailure
+	}
+
+	if err := report.WriteSummary(os.Stdout, baseRun, baseStats); err != nil {
+		log.Error("could not write the summary", "error", err)
+		return exitFailure
+	}
+	if err := report.WriteNeighbourhood(os.Stdout, varied, rows); err != nil {
+		log.Error("could not write the neighbourhood", "error", err)
+		return exitFailure
+	}
+
+	analysis := report.Analyse(baseRun, baseStats)
+	if err := recordExperiment(log, opts, baseRun, baseStats, analysis, nil, nil,
+		withNeighbourhood(varied, rows)); err != nil {
+		log.Error("could not record the experiment", "error", err)
+		return exitFailure
+	}
+	return exitOK
+}
+
+// entryOption adjusts a log entry before it is appended.
+type entryOption func(*report.ExperimentEntry)
+
+// withNeighbourhood attaches the stability table to the entry.
+func withNeighbourhood(columns []string, rows []report.NeighbourResult) entryOption {
+	return func(entry *report.ExperimentEntry) {
+		entry.NeighbourhoodColumns = columns
+		entry.Neighbourhood = rows
+	}
+}
+
+// steppedOverrides copies the chosen parameters with one moved a single step.
+func steppedOverrides(
+	entry _strategy_us.Registered,
+	chosen map[string]string,
+	name string,
+	direction int,
+) (map[string]string, error) {
+	config := entry.Defaults()
+	if err := helper.ApplyParams(config, chosen); err != nil {
+		return nil, err
+	}
+	if err := helper.StepParam(config, name, direction); err != nil {
+		return nil, err
+	}
+
+	// Read back from the stepped configuration rather than from what differs
+	// against the defaults.
+	//
+	// A stepped value can land exactly on its own default — resume_bars=1
+	// stepped up is 2, which is the default — and it then differs from
+	// nothing. Deriving the row from the changes would drop it and fall back
+	// to the chosen value, producing a row labelled +1 that is a copy of the
+	// base and quietly reports the neighbour as behaving identically.
+	current, err := helper.ParamValues(config)
+	if err != nil {
+		return nil, err
+	}
+
+	// Only the parameters the run actually varied. The rest stay unmentioned
+	// so they keep their defaults, and the row differs from the base in
+	// exactly one place.
+	stepped := make(map[string]string, len(chosen))
+	for key := range chosen {
+		value, ok := current[key]
+		if !ok {
+			return nil, fmt.Errorf("unknown parameter %q", key)
+		}
+		stepped[key] = value
+	}
+	return stepped, nil
+}
+
+// runOnce builds and runs one configuration, leaving nothing shared with the
+// next.
+func runOnce(
+	ctx context.Context,
+	engine backtest.BacktestUsecase,
+	candles candle.CandleUsecase,
+	base backtest.RunParams,
+	opts options,
+	cfg *config.Config,
+) (backtest.Result, report.Statistics, error) {
+	built, err := buildParams(opts, cfg)
+	if err != nil {
+		return backtest.Result{}, report.Statistics{}, err
+	}
+
+	// Everything from the caller's params that is not derived from the
+	// parameters themselves, so the rows differ only by what was stepped.
+	built.From, built.To = base.From, base.To
+
+	prepared, err := prepareRun(built, opts, cfg, candles, opts.trendFilter != "")
+	if err != nil {
+		return backtest.Result{}, report.Statistics{}, err
+	}
+
+	result, err := engine.Run(ctx, prepared)
+	if err != nil {
+		return backtest.Result{}, report.Statistics{}, err
+	}
+	return result, report.Compute(result), nil
+}
+
+// shortReason trims an error to something a table cell can hold.
+func shortReason(err error) string {
+	reason := err.Error()
+	if line, _, found := strings.Cut(reason, "\n"); found {
+		reason = line
+	}
+	const most = 48
+	if len(reason) > most {
+		reason = reason[:most-1] + "…"
+	}
+	return reason
+}
+
 // scaleCosts raises every assumed cost by the same multiplier.
 //
 // # Why all of them, and not just the headline rate
@@ -1100,6 +1335,7 @@ func recordExperiment(
 	analysis report.Analysis,
 	sweep []report.CostSensitivity,
 	comparison *report.ComparisonLine,
+	options ...entryOption,
 ) error {
 	if opts.experimentLog == "" {
 		return nil
@@ -1119,6 +1355,9 @@ func recordExperiment(
 		criteria, criteriaErr, opts.dataset, time.Now().UTC(), sweep)
 	entry.Comparison = comparison
 	entry.Suppressed = opts.noExperimentLog
+	for _, option := range options {
+		option(&entry)
+	}
 
 	number, err := report.AppendExperiment(path, entry)
 	if err != nil {

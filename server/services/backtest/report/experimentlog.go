@@ -54,6 +54,16 @@ type ExperimentEntry struct {
 
 	Sizing string
 
+	// NeighbourhoodColumns and Neighbourhood carry the parameter-stability
+	// table, when the run produced one.
+	//
+	// The rows live in the entry rather than in five entries of their own
+	// because they are one experiment — "is this value on a plateau" — and
+	// splitting them would inflate the denominator the log exists to protect,
+	// then invite the best row to be quoted on its own.
+	NeighbourhoodColumns []string
+	Neighbourhood        []NeighbourResult
+
 	// Parameters is what differed from the documented defaults, or "defaults".
 	//
 	// It was the literal word "defaults" until parameters could be varied, and
@@ -234,6 +244,7 @@ func renderExperiment(entry ExperimentEntry) string {
 	}
 
 	fmt.Fprintf(&b, "- **Sizing:** %s\n", entry.Sizing)
+	writeNeighbourhoodRows(&b, entry)
 	fmt.Fprintf(&b, "- **Net return after costs:** %+.4f%%\n", entry.NetReturn*100)
 	fmt.Fprintf(&b, "- **Profit factor / max drawdown / trades:** %s / %.2f%% / %s\n",
 		formatProfitFactor(entry.ProfitFactor), entry.MaxDrawdown*100,
@@ -374,6 +385,34 @@ func ExperimentEntryFor(
 		entry.Verdict = criteria.Judge(stats, analysis)
 	}
 	return entry
+}
+
+// writeNeighbourhoodRows records the parameter-stability table in the entry.
+//
+// The whole table, not the base row: an entry saying only what the chosen
+// values scored is the entry somebody would write if they were quoting the
+// good row, and the reason for running a neighbourhood at all is that the good
+// row alone is not evidence.
+func writeNeighbourhoodRows(b *strings.Builder, entry ExperimentEntry) {
+	if len(entry.Neighbourhood) == 0 {
+		return
+	}
+
+	b.WriteString("- **Neighbourhood:**\n")
+	fmt.Fprintf(b, "  | %s | net return | trades | PF |\n",
+		strings.Join(append([]string{""}, entry.NeighbourhoodColumns...), " | "))
+	fmt.Fprintf(b, "  |---%s|---|---|---|\n",
+		strings.Repeat("|---", len(entry.NeighbourhoodColumns)))
+
+	for _, row := range entry.Neighbourhood {
+		values := strings.Join(row.Values, " | ")
+		if row.Failed != "" {
+			fmt.Fprintf(b, "  | %s | %s | did not run: %s | | |\n", row.Label, values, row.Failed)
+			continue
+		}
+		fmt.Fprintf(b, "  | %s | %s | %+.2f%% | %d | %s |\n",
+			row.Label, values, row.NetReturn*100, row.TradeCount, formatFloat(row.ProfitFactor))
+	}
 }
 
 // describeAllChanges renders every non-default parameter of a run, the
