@@ -173,6 +173,49 @@ func ParseDirection(s string) (Direction, error) {
 	return d, nil
 }
 
+// SignalMode decides whether a recorded signal is also delivered.
+//
+// There are exactly two, and there will not be a third. The system can send or
+// not send; a name like "uat" or "test" would imply a behaviour that does not
+// exist. Whether the owner acts on an alert with demo money or real money is
+// not something this system knows or should model.
+type SignalMode string
+
+// Supported signal modes.
+const (
+	// SignalModeSilent evaluates and records, and delivers nothing.
+	SignalModeSilent SignalMode = "silent"
+
+	// SignalModeNotify also queues each recorded signal for delivery.
+	SignalModeNotify SignalMode = "notify"
+)
+
+// Valid reports whether m is a known signal mode.
+func (m SignalMode) Valid() bool {
+	switch m {
+	case SignalModeSilent, SignalModeNotify:
+		return true
+	default:
+		return false
+	}
+}
+
+// Delivers reports whether this mode sends anything to the owner.
+func (m SignalMode) Delivers() bool { return m == SignalModeNotify }
+
+// String returns the wire/database representation of the mode.
+func (m SignalMode) String() string { return string(m) }
+
+// ParseSignalMode converts s into a SignalMode, rejecting unknown values.
+func ParseSignalMode(s string) (SignalMode, error) {
+	m := SignalMode(s)
+	if !m.Valid() {
+		return "", fmt.Errorf("unknown signal mode %q, want %s or %s",
+			s, SignalModeSilent, SignalModeNotify)
+	}
+	return m, nil
+}
+
 // NotificationChannel is a delivery target for a signal.
 type NotificationChannel string
 

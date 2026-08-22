@@ -123,9 +123,15 @@ services:
       MARKET_BACKFILL_FROM: ${MARKET_BACKFILL_FROM:?set MARKET_BACKFILL_FROM in .env; it decides how much history exists to evaluate on}
       MARKET_GAPCHECK_INTERVAL: ${MARKET_GAPCHECK_INTERVAL:-15m}
       COLLECTOR_HEARTBEAT_INTERVAL: ${COLLECTOR_HEARTBEAT_INTERVAL:-5s}
-      NOTIFY_ENABLED: ${NOTIFY_ENABLED:-false}
+      # Delivery. SIGNAL_MODE replaced NOTIFY_ENABLED and the loader rejects
+      # the old name, so both services must carry the same value or one starts
+      # and the other does not.
+      SIGNAL_MODE: ${SIGNAL_MODE:-silent}
       FCM_PROJECT_ID: ${FCM_PROJECT_ID:-}
+      # A path inside the container. The delivery worker that reads it — and
+      # the mount that puts the service account file there — arrives with it.
       FCM_CREDENTIALS_FILE: ${FCM_CREDENTIALS_FILE:-}
+      FCM_DEVICE_TOKEN: ${FCM_DEVICE_TOKEN:-}
     depends_on:
       postgres:
         condition: service_healthy
@@ -160,6 +166,21 @@ services:
       MARKET_BACKFILL_FROM: ${MARKET_BACKFILL_FROM:?set MARKET_BACKFILL_FROM in .env; it decides how much history exists to evaluate on}
       MARKET_GAPCHECK_INTERVAL: ${MARKET_GAPCHECK_INTERVAL:-15m}
       COLLECTOR_HEARTBEAT_INTERVAL: ${COLLECTOR_HEARTBEAT_INTERVAL:-5s}
+      # Live evaluation. Only the collector runs a strategy; an empty
+      # STRATEGY_NAME leaves it collecting candles and nothing else.
+      STRATEGY_NAME: ${STRATEGY_NAME:-}
+      STRATEGY_TIMEFRAME: ${STRATEGY_TIMEFRAME:-4h}
+      STRATEGY_PARAMS: ${STRATEGY_PARAMS:-}
+      STRATEGY_TREND_FILTER: ${STRATEGY_TREND_FILTER:-}
+      # Delivery. SIGNAL_MODE replaced NOTIFY_ENABLED and the loader rejects
+      # the old name, so both services must carry the same value or one starts
+      # and the other does not.
+      SIGNAL_MODE: ${SIGNAL_MODE:-silent}
+      FCM_PROJECT_ID: ${FCM_PROJECT_ID:-}
+      # A path inside the container. The delivery worker that reads it — and
+      # the mount that puts the service account file there — arrives with it.
+      FCM_CREDENTIALS_FILE: ${FCM_CREDENTIALS_FILE:-}
+      FCM_DEVICE_TOKEN: ${FCM_DEVICE_TOKEN:-}
     depends_on:
       postgres:
         condition: service_healthy

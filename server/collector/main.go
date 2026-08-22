@@ -36,6 +36,9 @@ import (
 	_market_repo "github.com/spioneracorei8/btcusd-trading-platform/server/services/market/repository"
 	"github.com/spioneracorei8/btcusd-trading-platform/server/services/market/repository/binance"
 	_market_us "github.com/spioneracorei8/btcusd-trading-platform/server/services/market/usecase"
+	"github.com/spioneracorei8/btcusd-trading-platform/server/services/notify"
+	_notify_repo "github.com/spioneracorei8/btcusd-trading-platform/server/services/notify/repository"
+	_notify_us "github.com/spioneracorei8/btcusd-trading-platform/server/services/notify/usecase"
 	_signal "github.com/spioneracorei8/btcusd-trading-platform/server/services/signal"
 	_signal_repo "github.com/spioneracorei8/btcusd-trading-platform/server/services/signal/repository"
 	_signal_us "github.com/spioneracorei8/btcusd-trading-platform/server/services/signal/usecase"
@@ -105,6 +108,15 @@ func run(cfg *config.Config, log *slog.Logger) error {
 		return err
 	}
 
+	notifyUs, err := _notify_us.NewNotifyUsecaseImpl(
+		_notify_repo.NewNotifyRepoImpl(pool), cfg.Notify.SignalMode)
+	if err != nil {
+		return err
+	}
+	log.Info("signal delivery",
+		"mode", cfg.Notify.SignalMode.String(),
+		"delivers", notifyUs.Delivers())
+
 	marketUs := _market_us.NewMarketUsecaseImpl(
 		_market_us.Config{
 			Symbol:            cfg.Market.Symbol,
@@ -113,7 +125,7 @@ func run(cfg *config.Config, log *slog.Logger) error {
 			BackfillFrom:      cfg.Market.BackfillFrom,
 			GapcheckInterval:  cfg.Market.GapcheckInterval,
 			HeartbeatInterval: cfg.Market.HeartbeatInterval,
-			OnClosedCandle:    closedCandleObserver(log, evaluator),
+			OnClosedCandle:    closedCandleObserver(log, evaluator, notifyUs),
 		},
 		log, marketDataRepo, collectorStatusRepo, candleUs, dataGapUs,
 	)
@@ -233,7 +245,9 @@ func roundTripCostPct(cfg *config.Config) float64 {
 // be replayed — while a candle that was not written because a signal failed is
 // a hole in the series that only the next gap scan will find. The priority is
 // not close.
-func closedCandleObserver(log *slog.Logger, evaluator _signal.SignalEvaluator) func(context.Context, models.Candle) {
+func closedCandleObserver(
+	log *slog.Logger, evaluator _signal.SignalEvaluator, notifyUs notify.NotifyUsecase,
+) func(context.Context, models.Candle) {
 	if evaluator == nil {
 		return nil
 	}
@@ -258,6 +272,32 @@ func closedCandleObserver(log *slog.Logger, evaluator _signal.SignalEvaluator) f
 			"signal_price", recorded.SignalPrice.Decimal.String(),
 			"strategy", recorded.StrategyName,
 		)
+
+		// Only after the signal is committed. A queue row is worth having only
+		// because the signal behind it exists, and this ordering is what makes
+		// "delivery failure must never cost a signal" true rather than
+		// intended.
+		queueForDelivery(ctx, log, notifyUs, recorded)
+	}
+}
+
+// queueForDelivery offers a recorded signal to the delivery queue.
+//
+// A failure here is logged and dropped. The signal is already stored, and
+// taking the collector down — or worse, unwinding a committed signal —
+// because a second row could not be written would trade the artefact for the
+// convenience.
+func queueForDelivery(
+	ctx context.Context, log *slog.Logger, notifyUs notify.NotifyUsecase, signal models.Signal,
+) {
+	queued, ok, err := notifyUs.QueueSignal(ctx, signal)
+	switch {
+	case err != nil:
+		log.ErrorContext(ctx, "could not queue a signal for delivery; the signal is stored",
+			"error", err, "signal_id", signal.Id.String())
+	case ok:
+		log.InfoContext(ctx, "signal queued for delivery",
+			"notification_id", queued.Id, "signal_id", signal.Id.String())
 	}
 }
 

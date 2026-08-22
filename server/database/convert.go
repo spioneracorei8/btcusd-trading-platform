@@ -101,6 +101,16 @@ func UUIDFromPgtype(id pgtype.UUID) (uuid.UUID, error) {
 	return uuid.UUID(id.Bytes), nil
 }
 
+// PgtypeFromUUID converts a google/uuid value into the pgtype value pgx
+// writes. uuid.Nil is written as NULL rather than as a row of zero bytes,
+// which no foreign key would match and which reads as a real id at a glance.
+func PgtypeFromUUID(id uuid.UUID) pgtype.UUID {
+	if id == uuid.Nil {
+		return pgtype.UUID{}
+	}
+	return pgtype.UUID{Bytes: id, Valid: true}
+}
+
 // IntervalFromDuration converts a Go duration into the pgtype value pgx
 // writes for an interval column.
 //

@@ -142,13 +142,28 @@ func (s Strategy) Enabled() bool { return s.Name != "" }
 // Notify holds push notification settings. Phase 01 only carries the values;
 // no notification client is wired up yet.
 type Notify struct {
-	// Enabled turns push delivery on. When false the other fields are unused.
-	Enabled bool
+	// SignalMode decides whether a recorded signal is also delivered.
+	//
+	// # Why this replaced NOTIFY_ENABLED
+	//
+	// Two switches for one behaviour is a trap: somebody sets SIGNAL_MODE to
+	// notify, gets nothing because the other one is false, and looks for the
+	// fault in Firebase. The system can do exactly two things, so it has
+	// exactly one switch, and NOTIFY_ENABLED is rejected at start-up rather
+	// than quietly ignored.
+	SignalMode constants.SignalMode
+
 	// FCMProjectId is the Firebase project that owns the device token.
 	FCMProjectId string
 	// FCMCredentialsFile is the path to the service account JSON file.
 	FCMCredentialsFile string
+	// FCMDeviceToken is the owner's phone. One device: this is a
+	// single-owner system.
+	FCMDeviceToken string
 }
+
+// Delivers reports whether signals are pushed to the owner.
+func (n Notify) Delivers() bool { return n.SignalMode.Delivers() }
 
 // Config is the fully validated configuration of a process.
 type Config struct {
@@ -253,18 +268,24 @@ func LoadFrom(lookup helper.LookupFunc, opts ...Option) (*Config, error) {
 		},
 
 		Notify: Notify{
-			Enabled:            l.optionalBool("NOTIFY_ENABLED", false),
+			SignalMode:         l.signalMode("SIGNAL_MODE"),
 			FCMProjectId:       l.optionalString("FCM_PROJECT_ID", ""),
 			FCMCredentialsFile: l.optionalString("FCM_CREDENTIALS_FILE", ""),
+			FCMDeviceToken:     l.optionalString("FCM_DEVICE_TOKEN", ""),
 		},
 	}
 
-	if cfg.Notify.Enabled {
+	// A mode that claims to deliver and cannot is worse than one that says it
+	// will not: the first looks like it is working.
+	if cfg.Notify.Delivers() {
 		if cfg.Notify.FCMProjectId == "" {
 			l.missing = append(l.missing, "FCM_PROJECT_ID")
 		}
 		if cfg.Notify.FCMCredentialsFile == "" {
 			l.missing = append(l.missing, "FCM_CREDENTIALS_FILE")
+		}
+		if cfg.Notify.FCMDeviceToken == "" {
+			l.missing = append(l.missing, "FCM_DEVICE_TOKEN")
 		}
 	}
 
@@ -279,6 +300,10 @@ func (c *Config) IsProd() bool { return c.App.Env == constants.EnvProd }
 
 // HTTPAddr returns the listen address of the API server.
 func (c *Config) HTTPAddr() string { return fmt.Sprintf(":%d", c.App.HTTPPort) }
+
+// retiredNotifyEnabled is the switch SIGNAL_MODE replaced. It is named here so
+// a stale .env fails loudly instead of misleading whoever reads it next.
+const retiredNotifyEnabled = "NOTIFY_ENABLED"
 
 // loader reads values and accumulates every problem instead of stopping at
 // the first one, so an operator sees the whole list in a single run.
@@ -371,17 +396,28 @@ func (l *loader) optionalInt(key string, def, min, max int) int {
 	return n
 }
 
-func (l *loader) optionalBool(key string, def bool) bool {
-	v, ok := l.get(key)
-	if !ok {
-		return def
+// signalMode reads SIGNAL_MODE, and refuses the switch it replaced.
+//
+// # Why a leftover NOTIFY_ENABLED is an error
+//
+// It used to be the thing that decided whether the owner got alerts. Leaving
+// it in a file where it no longer does anything means somebody eventually
+// reads it, believes it, and concludes delivery is off when it is on — or
+// spends an evening looking for the fault in Firebase when the answer is one
+// line in .env. Failing at start-up costs one edit and says which one.
+func (l *loader) signalMode(key string) constants.SignalMode {
+	if _, ok := l.get(retiredNotifyEnabled); ok {
+		l.invalidf(retiredNotifyEnabled,
+			"this has been replaced by %s (%s or %s); remove it",
+			key, constants.SignalModeSilent, constants.SignalModeNotify)
 	}
-	b, err := strconv.ParseBool(v)
+
+	mode, err := constants.ParseSignalMode(l.optionalString(key, constants.DefaultSignalMode))
 	if err != nil {
-		l.invalidf(key, "%q is not a boolean", v)
-		return def
+		l.invalidf(key, "%v", err)
+		return ""
 	}
-	return b
+	return mode
 }
 
 // logLevel is required by the spec, so an unset value is reported as missing

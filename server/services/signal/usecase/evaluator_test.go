@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
 
 	"github.com/spioneracorei8/btcusd-trading-platform/server/constants"
@@ -76,10 +77,14 @@ func (s *storedCandles) CountCandles(context.Context, string, constants.MarketTy
 func (s *storedCandles) OpenCursor(candle.FetchCandlesParams) candle.CandleCursor { return nil }
 
 // recordingSignals captures what the evaluator asked to store.
+//
+// It enforces the same unique key the signals table does, so a test can hand
+// one store to two evaluators and see what a restart would really do.
 type recordingSignals struct {
 	mu        sync.Mutex
 	created   []models.Signal
 	bars      []models.Candle
+	seen      map[string]bool
 	err       error
 	duplicate bool
 }
@@ -100,6 +105,21 @@ func (r *recordingSignals) CreateSignal(
 		return models.Signal{}, constants.ErrUnclosedCandle
 	}
 
+	// signals_unique_per_bar, in a map.
+	key := strings.Join([]string{
+		s.StrategyName, s.StrategyVersion, s.Symbol,
+		s.MarketType.String(), s.Timeframe.String(),
+		s.SignalTime.UTC().Format(time.RFC3339Nano),
+	}, "|")
+	if r.seen[key] {
+		return models.Signal{}, constants.ErrDuplicateSignal
+	}
+	if r.seen == nil {
+		r.seen = map[string]bool{}
+	}
+	r.seen[key] = true
+
+	s.Id = uuid.New()
 	r.created = append(r.created, s)
 	r.bars = append(r.bars, bar)
 	return s, nil
@@ -170,8 +190,17 @@ func buildEvaluator(
 	t *testing.T, history []models.Candle, strat strategy.Strategy, params map[string]string,
 ) (signal.SignalEvaluator, *recordingSignals) {
 	t.Helper()
+	return buildEvaluatorOn(t, &recordingSignals{}, history, strat, params)
+}
 
-	signals := &recordingSignals{}
+// buildEvaluatorOn wires one up over a signal store the caller owns, so two
+// evaluators can share it the way two runs of the collector share a table.
+func buildEvaluatorOn(
+	t *testing.T, signals *recordingSignals, history []models.Candle,
+	strat strategy.Strategy, params map[string]string,
+) (signal.SignalEvaluator, *recordingSignals) {
+	t.Helper()
+
 	evaluator, err := _signal_us.NewSignalEvaluatorImpl(
 		_signal_us.EvaluatorConfig{
 			Symbol:     "BTCUSDT",
@@ -627,3 +656,94 @@ func (p *positionWatcher) OnBar(bar strategy.BarContext) []strategy.Intent {
 func (p *positionWatcher) WarmupPeriod() int { return 0 }
 func (p *positionWatcher) Name() string      { return "position_watcher" }
 func (p *positionWatcher) Version() string   { return "v1" }
+
+// TestARestartDoesNotAlertTwiceForOneBar.
+//
+// The collector goes down and comes back. Warm-up replays what is stored —
+// which includes the bar it was killed on, because the candle is written
+// before the signal — and the stream then redelivers that bar.
+//
+// This asserts the outcome the owner cares about, one alert, and deliberately
+// not which of the two defences produced it: the evaluator refuses a bar it
+// has already seen, and the unique key refuses a second row if it does not.
+// Each is pinned on its own elsewhere — TestABarTheStrategyHasSeenIsNotFedTwice
+// and TestTheConstraintStopsASecondSignalWhenTheGuardCannot. What belongs here
+// is that the whole restart produces one alert with both in place.
+func TestARestartDoesNotAlertTwiceForOneBar(t *testing.T) {
+	history := series(warmBars())
+	live := evalBar(len(history), 28000)
+
+	// The tables survive the restart; nothing else does.
+	signals := &recordingSignals{}
+
+	before, _ := buildEvaluatorOn(t, signals, history, &alwaysLong{}, nil)
+	if err := before.Warmup(context.Background()); err != nil {
+		t.Fatalf("Warmup() returned error: %v", err)
+	}
+	if _, ok, err := before.OnClosedCandle(context.Background(), live); err != nil || !ok {
+		t.Fatalf("the first run recorded nothing: %v, %v", ok, err)
+	}
+
+	// A new process: fresh indicators, fresh strategy, the same stored candles
+	// — now including the bar it died on.
+	after, _ := buildEvaluatorOn(t, signals, append(history, live), &alwaysLong{}, nil)
+	if err := after.Warmup(context.Background()); err != nil {
+		t.Fatalf("Warmup() after the restart returned error: %v", err)
+	}
+
+	recorded, ok, err := after.OnClosedCandle(context.Background(), live)
+	if err != nil {
+		t.Fatalf("the redelivered bar was reported as an error: %v", err)
+	}
+	if ok {
+		t.Errorf("the restart recorded a second signal for one bar: %+v", recorded)
+	}
+	if got := signals.stored(); len(got) != 1 {
+		t.Errorf("one bar produced %d signals across a restart, want 1", len(got))
+	}
+}
+
+// TestTheConstraintStopsASecondSignalWhenTheGuardCannot.
+//
+// The evaluator's own last-bar check is the first line of defence, and it
+// covers the ordinary restart. It cannot cover everything: two collectors
+// running at once, or a warm-up whose read of the series lagged the bar the
+// stream then delivered, both put a bar in front of an evaluator that has
+// never seen it and whose strategy — being deterministic — decides exactly
+// what the other one decided.
+//
+// This is that case with the guard deliberately given nothing to work with:
+// the second evaluator warms up on history that stops short of the bar. Only
+// the unique key is left, and one alert is what the owner must get.
+func TestTheConstraintStopsASecondSignalWhenTheGuardCannot(t *testing.T) {
+	history := series(warmBars())
+	live := evalBar(len(history), 28000)
+
+	signals := &recordingSignals{}
+
+	first, _ := buildEvaluatorOn(t, signals, history, &alwaysLong{}, nil)
+	if err := first.Warmup(context.Background()); err != nil {
+		t.Fatalf("Warmup() returned error: %v", err)
+	}
+	if _, ok, err := first.OnClosedCandle(context.Background(), live); err != nil || !ok {
+		t.Fatalf("the first evaluator recorded nothing: %v, %v", ok, err)
+	}
+
+	// Warmed on the same history, so the bar is new to it and its guard has
+	// nothing to say.
+	second, _ := buildEvaluatorOn(t, signals, history, &alwaysLong{}, nil)
+	if err := second.Warmup(context.Background()); err != nil {
+		t.Fatalf("the second Warmup() returned error: %v", err)
+	}
+
+	recorded, ok, err := second.OnClosedCandle(context.Background(), live)
+	if err != nil {
+		t.Fatalf("the duplicate was reported as an error: %v", err)
+	}
+	if ok {
+		t.Errorf("a second signal was recorded for one bar: %+v", recorded)
+	}
+	if got := signals.stored(); len(got) != 1 {
+		t.Errorf("one bar produced %d signals, want 1", len(got))
+	}
+}

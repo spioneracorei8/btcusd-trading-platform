@@ -78,8 +78,11 @@ func TestLoadFromDefaults(t *testing.T) {
 	if cfg.Market.SlippageTicks != constants.DefaultSlippageTicks {
 		t.Errorf("Market.SlippageTicks = %d, want %d", cfg.Market.SlippageTicks, constants.DefaultSlippageTicks)
 	}
-	if cfg.Notify.Enabled {
-		t.Error("Notify.Enabled = true, want false by default")
+	if cfg.Notify.SignalMode != constants.SignalModeSilent {
+		t.Errorf("Notify.SignalMode = %q, want silent by default", cfg.Notify.SignalMode)
+	}
+	if cfg.Notify.Delivers() {
+		t.Error("a bare environment delivers push notifications")
 	}
 
 	if cfg.Market.RESTBaseURL != constants.DefaultBinanceRESTBaseURL {
@@ -113,9 +116,10 @@ func TestLoadFromOverrides(t *testing.T) {
 	e["MARKET_TIMEFRAMES"] = "1m, 5m ,4h"
 	e["FEE_TAKER_PCT"] = "0.04"
 	e["SLIPPAGE_TICKS"] = "3"
-	e["NOTIFY_ENABLED"] = "true"
+	e["SIGNAL_MODE"] = "notify"
 	e["FCM_PROJECT_ID"] = "btc-signals"
 	e["FCM_CREDENTIALS_FILE"] = "/run/secrets/fcm.json"
+	e["FCM_DEVICE_TOKEN"] = "device-token"
 	e["MARKET_GAPCHECK_INTERVAL"] = "30m"
 	e["BINANCE_REST_BASE_URL"] = "https://testnet.binance.vision/"
 
@@ -142,8 +146,8 @@ func TestLoadFromOverrides(t *testing.T) {
 	if cfg.Market.SlippageTicks != 3 {
 		t.Errorf("Market.SlippageTicks = %d, want 3", cfg.Market.SlippageTicks)
 	}
-	if !cfg.Notify.Enabled || cfg.Notify.FCMProjectId != "btc-signals" {
-		t.Errorf("Notify = %+v, want enabled with project id", cfg.Notify)
+	if !cfg.Notify.Delivers() || cfg.Notify.FCMProjectId != "btc-signals" {
+		t.Errorf("Notify = %+v, want delivering with a project id", cfg.Notify)
 	}
 	if cfg.Market.GapcheckInterval != 30*time.Minute {
 		t.Errorf("Market.GapcheckInterval = %s, want 30m", cfg.Market.GapcheckInterval)
@@ -231,6 +235,7 @@ func TestLoadFromInvalidValues(t *testing.T) {
 		{name: "strategy params not a pair", key: "STRATEGY_PARAMS", value: "fast", wantKey: "STRATEGY_PARAMS"},
 		{name: "strategy params unnamed", key: "STRATEGY_PARAMS", value: "=9", wantKey: "STRATEGY_PARAMS"},
 		{name: "strategy params repeated", key: "STRATEGY_PARAMS", value: "fast=9,fast=21", wantKey: "STRATEGY_PARAMS"},
+		{name: "signal mode unknown", key: "SIGNAL_MODE", value: "uat", wantKey: "SIGNAL_MODE"},
 	}
 
 	for _, tt := range tests {
@@ -252,21 +257,68 @@ func TestLoadFromInvalidValues(t *testing.T) {
 	}
 }
 
-func TestLoadFromNotifyEnabledRequiresCredentials(t *testing.T) {
+// TestNotifyModeRequiresSomewhereToSend.
+//
+// A mode that claims to deliver and has nowhere to send is worse than one
+// that says it will not: the first looks like it is working, and the missing
+// alert is only noticed when it matters.
+func TestNotifyModeRequiresSomewhereToSend(t *testing.T) {
 	e := validEnv()
-	e["NOTIFY_ENABLED"] = "true"
+	e["SIGNAL_MODE"] = "notify"
 
 	_, err := config.LoadFrom(env(e))
 	if err == nil {
-		t.Fatal("LoadFrom() with notifications enabled but no credentials returned no error")
+		t.Fatal("LoadFrom() in notify mode with no credentials returned no error")
 	}
 	if !errors.Is(err, constants.ErrMissingEnv) {
 		t.Errorf("error %v does not wrap ErrMissingEnv", err)
 	}
-	for _, key := range []string{"FCM_PROJECT_ID", "FCM_CREDENTIALS_FILE"} {
+	for _, key := range []string{"FCM_PROJECT_ID", "FCM_CREDENTIALS_FILE", "FCM_DEVICE_TOKEN"} {
 		if !strings.Contains(err.Error(), key) {
 			t.Errorf("error %q does not name %s", err, key)
 		}
+	}
+}
+
+// TestSilentModeNeedsNoCredentials, because the common case is a system that
+// records and says nothing, and demanding Firebase details to do that would
+// make silence the harder configuration to reach.
+func TestSilentModeNeedsNoCredentials(t *testing.T) {
+	e := validEnv()
+	e["SIGNAL_MODE"] = "silent"
+
+	cfg, err := config.LoadFrom(env(e))
+	if err != nil {
+		t.Fatalf("LoadFrom() in silent mode returned error: %v", err)
+	}
+	if cfg.Notify.Delivers() {
+		t.Error("silent mode delivers")
+	}
+}
+
+// TestTheRetiredSwitchIsRefusedRatherThanIgnored.
+//
+// NOTIFY_ENABLED used to decide whether the owner got alerts. Left in a file
+// where it no longer does anything, somebody reads it, believes it, and
+// concludes delivery is off when it is on. Failing at start-up costs one edit
+// and says which one.
+func TestTheRetiredSwitchIsRefusedRatherThanIgnored(t *testing.T) {
+	for _, value := range []string{"true", "false"} {
+		t.Run(value, func(t *testing.T) {
+			e := validEnv()
+			e["NOTIFY_ENABLED"] = value
+
+			_, err := config.LoadFrom(env(e))
+			if err == nil {
+				t.Fatalf("LoadFrom() with NOTIFY_ENABLED=%s returned no error", value)
+			}
+			if !strings.Contains(err.Error(), "NOTIFY_ENABLED") {
+				t.Errorf("error %q does not name the variable to remove", err)
+			}
+			if !strings.Contains(err.Error(), "SIGNAL_MODE") {
+				t.Errorf("error %q does not name what replaced it", err)
+			}
+		})
 	}
 }
 

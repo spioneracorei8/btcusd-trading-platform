@@ -68,12 +68,18 @@ first instance of a general rule.
 
 `POSTGRES_USER`, `POSTGRES_DB`, `LOG_LEVEL`, `DATABASE_MAX_CONNS`, the host
 port mappings, `MARKET_GAPCHECK_INTERVAL`, `COLLECTOR_HEARTBEAT_INTERVAL`,
-`NOTIFY_ENABLED`, `FCM_*`, and the Binance base URLs.
+`SIGNAL_MODE`, `FCM_*`, `STRATEGY_*`, and the Binance base URLs.
 
 Not because they matter less in principle, but because getting them wrong
 announces itself. A wrong port fails to bind or fails to connect. A wrong
-database name fails at the first query. `NOTIFY_ENABLED=false` fails closed.
+database name fails at the first query. `SIGNAL_MODE=silent` and an empty
+`STRATEGY_NAME` both fail closed — nothing is evaluated and nothing is sent.
 None of them can quietly change what a number means.
+
+Phase 07 replaced `NOTIFY_ENABLED` with `SIGNAL_MODE` and made the old name an
+error rather than an ignored line. That follows the same rule from the other
+direction: a variable that no longer does anything cannot fail closed, because
+whoever reads it next will believe it.
 
 The test for whether a default is acceptable is not "is this value sensible"
 but "if this were wrong, how long before anyone noticed".

@@ -23,6 +23,9 @@ type Querier interface {
 	// their retries: the status endpoint reports what is missing, not what is
 	// still being chased.
 	CountUnfilledGaps(ctx context.Context, arg CountUnfilledGapsParams) (int64, error)
+	// The delivery queue, oldest first, so a backlog drains in the order the
+	// signals happened rather than newest-first.
+	FetchPendingNotifications(ctx context.Context, rowLimit int32) ([]Notification, error)
 	// Holes in the expected sequence, found with a window function.
 	//
 	// The diff is computed in the database on purpose: pulling three years of 1m
@@ -63,6 +66,13 @@ type Querier interface {
 	// existing row is returned untouched, preserving detected_at and the attempt
 	// count.
 	InsertGap(ctx context.Context, arg InsertGapParams) (DataGap, error)
+	// Queue one signal for delivery.
+	//
+	// ON CONFLICT DO NOTHING makes queuing idempotent: the same signal offered
+	// twice — by a retry, or by a restart that re-walked a bar — leaves the one
+	// row that is already there. No row comes back in that case, which the
+	// repository reads as "already queued" rather than as a failure.
+	InsertNotification(ctx context.Context, arg InsertNotificationParams) (Notification, error)
 	// Records one strategy decision. The unique constraint on
 	// (strategy_name, strategy_version, symbol, timeframe, signal_time) makes a
 	// duplicate insert fail loudly rather than notify the owner twice.

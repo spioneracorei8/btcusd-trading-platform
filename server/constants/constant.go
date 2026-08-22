@@ -53,6 +53,13 @@ const (
 	// decides on when none is configured.
 	DefaultStrategyTimeframe = "4h"
 
+	// DefaultSignalMode records signals and delivers nothing.
+	//
+	// Silent is the default deliberately. Beginning to send alerts should be a
+	// decision somebody made, not something that happened because a deploy
+	// went out.
+	DefaultSignalMode = "silent"
+
 	DefaultCostModel        = "percentage"
 	DefaultSpreadPoints     = 2500
 	DefaultPointValue       = "0.01"
