@@ -7,6 +7,8 @@ package signal
 import (
 	"context"
 
+	"github.com/google/uuid"
+
 	"github.com/spioneracorei8/btcusd-trading-platform/server/models"
 )
 
@@ -16,4 +18,8 @@ type SignalRepository interface {
 	// returns constants.ErrDuplicateSignal when the same strategy version
 	// already emitted a signal for that candle.
 	InsertSignal(ctx context.Context, signal models.Signal) (models.Signal, error)
+
+	// FetchSignalById returns one signal, or constants.ErrNotFound when no
+	// row has that id.
+	FetchSignalById(ctx context.Context, id uuid.UUID) (models.Signal, error)
 }

@@ -173,6 +173,23 @@ func BuildReason(
 // NaN and infinity are rejected rather than coerced: encoding/json refuses
 // them, and silently substituting zero would store a plausible-looking value
 // that never existed. A signal whose indicators could not be represented is a
+
+// DecodeReason reads back what Encode wrote.
+//
+// A reason that cannot be parsed is an error rather than a zero value: it
+// means the row was written by something that did not agree about the shape,
+// and silently showing a signal with no trigger would hide that.
+func DecodeReason(raw json.RawMessage) (Reason, error) {
+	var r Reason
+	if len(raw) == 0 {
+		return Reason{}, fmt.Errorf("decode reason: empty")
+	}
+	if err := json.Unmarshal(raw, &r); err != nil {
+		return Reason{}, fmt.Errorf("decode reason: %w", err)
+	}
+	return r, nil
+}
+
 // signal that should not have been emitted.
 func (r Reason) Encode() (json.RawMessage, error) {
 	for name, value := range map[string]float64{

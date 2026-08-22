@@ -14,3 +14,7 @@ INSERT INTO signals (
     sqlc.arg(strategy_name), sqlc.arg(strategy_version), sqlc.arg(reason)
 )
 RETURNING *;
+
+-- name: FetchSignalById :one
+-- One signal, for a delivery worker holding a queue row that points at it.
+SELECT * FROM signals WHERE id = sqlc.arg(id);

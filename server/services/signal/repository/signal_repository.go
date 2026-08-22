@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -65,6 +67,20 @@ func (r *signalRepository) InsertSignal(ctx context.Context, s models.Signal) (m
 		return models.Signal{}, fmt.Errorf("insert signal: %w", err)
 	}
 	return out, nil
+}
+
+// FetchSignalById returns one signal.
+func (r *signalRepository) FetchSignalById(
+	ctx context.Context, id uuid.UUID,
+) (models.Signal, error) {
+	row, err := r.queries.FetchSignalById(ctx, database.PgtypeFromUUID(id))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return models.Signal{}, constants.ErrNotFound
+	}
+	if err != nil {
+		return models.Signal{}, fmt.Errorf("fetch signal %s: %w", id, err)
+	}
+	return toSignalModel(row)
 }
 
 // toSignalModel maps a generated row onto the model.

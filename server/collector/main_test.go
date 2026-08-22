@@ -13,6 +13,7 @@ import (
 
 	"github.com/spioneracorei8/btcusd-trading-platform/server/constants"
 	"github.com/spioneracorei8/btcusd-trading-platform/server/models"
+	"github.com/spioneracorei8/btcusd-trading-platform/server/services/notify"
 )
 
 // stubEvaluator records every bar it is shown and answers with a fixed result.
@@ -39,7 +40,11 @@ type stubQueue struct {
 	delivers bool
 }
 
-func (q *stubQueue) Delivers() bool { return q.delivers }
+func (q *stubQueue) Delivers() bool            { return q.delivers }
+func (q *stubQueue) Run(context.Context) error { return nil }
+func (q *stubQueue) DeliverDue(context.Context) (notify.DeliveryReport, error) {
+	return notify.DeliveryReport{}, nil
+}
 func (q *stubQueue) QueueSignal(
 	_ context.Context, signal models.Signal,
 ) (models.Notification, bool, error) {

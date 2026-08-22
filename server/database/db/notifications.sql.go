@@ -11,17 +11,60 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-const fetchPendingNotifications = `-- name: FetchPendingNotifications :many
-SELECT id, signal_id, channel, status, attempts, last_error, sent_at, created_at FROM notifications
-WHERE status = 'pending'
-ORDER BY created_at, id
-LIMIT $1
+const failNotification = `-- name: FailNotification :one
+UPDATE notifications
+SET status = 'failed',
+    attempts = attempts + 1,
+    last_error = $1
+WHERE id = $2
+RETURNING id, signal_id, channel, status, attempts, last_error, sent_at, created_at, next_attempt_at
 `
+
+type FailNotificationParams struct {
+	LastError string
+	ID        int64
+}
+
+// Given up on. last_error is the reason, and it is the last thing written
+// about this row: nothing retries a failed notification.
+func (q *Queries) FailNotification(ctx context.Context, arg FailNotificationParams) (Notification, error) {
+	row := q.db.QueryRow(ctx, failNotification, arg.LastError, arg.ID)
+	var i Notification
+	err := row.Scan(
+		&i.ID,
+		&i.SignalID,
+		&i.Channel,
+		&i.Status,
+		&i.Attempts,
+		&i.LastError,
+		&i.SentAt,
+		&i.CreatedAt,
+		&i.NextAttemptAt,
+	)
+	return i, err
+}
+
+const fetchDueNotifications = `-- name: FetchDueNotifications :many
+SELECT id, signal_id, channel, status, attempts, last_error, sent_at, created_at, next_attempt_at FROM notifications
+WHERE status = 'pending'
+  AND next_attempt_at <= $1
+ORDER BY created_at, id
+LIMIT $2
+`
+
+type FetchDueNotificationsParams struct {
+	AsOf     pgtype.Timestamptz
+	RowLimit int32
+}
 
 // The delivery queue, oldest first, so a backlog drains in the order the
 // signals happened rather than newest-first.
-func (q *Queries) FetchPendingNotifications(ctx context.Context, rowLimit int32) ([]Notification, error) {
-	rows, err := q.db.Query(ctx, fetchPendingNotifications, rowLimit)
+//
+// A row is due when nothing has scheduled it into the future. A newly queued
+// one defaults to now() and is therefore due at once; a failed one carries its
+// backoff in the column, so the wait survives the process that decided it.
+func (q *Queries) FetchDueNotifications(ctx context.Context, arg FetchDueNotificationsParams) ([]Notification, error) {
+	rows, err := q.db.Query(ctx, fetchDueNotifications, arg.AsOf, arg.RowLimit)
 	if err != nil {
 		return nil, err
 	}
@@ -38,6 +81,7 @@ func (q *Queries) FetchPendingNotifications(ctx context.Context, rowLimit int32)
 			&i.LastError,
 			&i.SentAt,
 			&i.CreatedAt,
+			&i.NextAttemptAt,
 		); err != nil {
 			return nil, err
 		}
@@ -53,7 +97,7 @@ const insertNotification = `-- name: InsertNotification :one
 INSERT INTO notifications (signal_id, channel)
 VALUES ($1, $2)
 ON CONFLICT (signal_id, channel) DO NOTHING
-RETURNING id, signal_id, channel, status, attempts, last_error, sent_at, created_at
+RETURNING id, signal_id, channel, status, attempts, last_error, sent_at, created_at, next_attempt_at
 `
 
 type InsertNotificationParams struct {
@@ -79,6 +123,75 @@ func (q *Queries) InsertNotification(ctx context.Context, arg InsertNotification
 		&i.LastError,
 		&i.SentAt,
 		&i.CreatedAt,
+		&i.NextAttemptAt,
+	)
+	return i, err
+}
+
+const markNotificationSent = `-- name: MarkNotificationSent :one
+UPDATE notifications
+SET status = 'sent',
+    attempts = attempts + 1,
+    last_error = '',
+    sent_at = $1
+WHERE id = $2
+RETURNING id, signal_id, channel, status, attempts, last_error, sent_at, created_at, next_attempt_at
+`
+
+type MarkNotificationSentParams struct {
+	SentAt pgtype.Timestamptz
+	ID     int64
+}
+
+// Delivered. attempts counts the one that worked, so a row that took four
+// tries says four rather than three.
+func (q *Queries) MarkNotificationSent(ctx context.Context, arg MarkNotificationSentParams) (Notification, error) {
+	row := q.db.QueryRow(ctx, markNotificationSent, arg.SentAt, arg.ID)
+	var i Notification
+	err := row.Scan(
+		&i.ID,
+		&i.SignalID,
+		&i.Channel,
+		&i.Status,
+		&i.Attempts,
+		&i.LastError,
+		&i.SentAt,
+		&i.CreatedAt,
+		&i.NextAttemptAt,
+	)
+	return i, err
+}
+
+const rescheduleNotification = `-- name: RescheduleNotification :one
+UPDATE notifications
+SET attempts = attempts + 1,
+    last_error = $1,
+    next_attempt_at = $2
+WHERE id = $3
+RETURNING id, signal_id, channel, status, attempts, last_error, sent_at, created_at, next_attempt_at
+`
+
+type RescheduleNotificationParams struct {
+	LastError     string
+	NextAttemptAt pgtype.Timestamptz
+	ID            int64
+}
+
+// Failed, and worth trying again. The row stays pending and carries both what
+// went wrong and when it may be retried.
+func (q *Queries) RescheduleNotification(ctx context.Context, arg RescheduleNotificationParams) (Notification, error) {
+	row := q.db.QueryRow(ctx, rescheduleNotification, arg.LastError, arg.NextAttemptAt, arg.ID)
+	var i Notification
+	err := row.Scan(
+		&i.ID,
+		&i.SignalID,
+		&i.Channel,
+		&i.Status,
+		&i.Attempts,
+		&i.LastError,
+		&i.SentAt,
+		&i.CreatedAt,
+		&i.NextAttemptAt,
 	)
 	return i, err
 }

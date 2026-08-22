@@ -3,6 +3,8 @@ package signal
 import (
 	"context"
 
+	"github.com/google/uuid"
+
 	"github.com/spioneracorei8/btcusd-trading-platform/server/models"
 )
 
@@ -17,4 +19,9 @@ type SignalUsecase interface {
 	// about what the system may act on, and a rule enforced only where
 	// somebody remembered to enforce it is not enforced.
 	CreateSignal(ctx context.Context, signal models.Signal, bar models.Candle) (models.Signal, error)
+
+	// FetchSignalById returns one signal, or constants.ErrNotFound when no
+	// row has that id. The delivery queue holds ids, not signals, so
+	// something has to turn one back into the other.
+	FetchSignalById(ctx context.Context, id uuid.UUID) (models.Signal, error)
 }

@@ -11,6 +11,34 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const fetchSignalById = `-- name: FetchSignalById :one
+SELECT id, symbol, market_type, timeframe, signal_time, direction, strength, entry_price, stop_loss, take_profit, strategy_name, strategy_version, reason, created_at, signal_price FROM signals WHERE id = $1
+`
+
+// One signal, for a delivery worker holding a queue row that points at it.
+func (q *Queries) FetchSignalById(ctx context.Context, id pgtype.UUID) (Signal, error) {
+	row := q.db.QueryRow(ctx, fetchSignalById, id)
+	var i Signal
+	err := row.Scan(
+		&i.ID,
+		&i.Symbol,
+		&i.MarketType,
+		&i.Timeframe,
+		&i.SignalTime,
+		&i.Direction,
+		&i.Strength,
+		&i.EntryPrice,
+		&i.StopLoss,
+		&i.TakeProfit,
+		&i.StrategyName,
+		&i.StrategyVersion,
+		&i.Reason,
+		&i.CreatedAt,
+		&i.SignalPrice,
+	)
+	return i, err
+}
+
 const insertSignal = `-- name: InsertSignal :one
 INSERT INTO signals (
     symbol, market_type, timeframe, signal_time, direction, strength,

@@ -128,9 +128,9 @@ services:
       # and the other does not.
       SIGNAL_MODE: ${SIGNAL_MODE:-silent}
       FCM_PROJECT_ID: ${FCM_PROJECT_ID:-}
-      # A path inside the container. The delivery worker that reads it — and
-      # the mount that puts the service account file there — arrives with it.
-      FCM_CREDENTIALS_FILE: ${FCM_CREDENTIALS_FILE:-}
+      # A path INSIDE the container, which is why it is not the host path. The
+      # collector mounts FCM_CREDENTIALS_HOST_FILE here read-only; see below.
+      FCM_CREDENTIALS_FILE: ${FCM_CREDENTIALS_FILE:-/run/secrets/fcm-service-account.json}
       FCM_DEVICE_TOKEN: ${FCM_DEVICE_TOKEN:-}
     depends_on:
       postgres:
@@ -177,10 +177,16 @@ services:
       # and the other does not.
       SIGNAL_MODE: ${SIGNAL_MODE:-silent}
       FCM_PROJECT_ID: ${FCM_PROJECT_ID:-}
-      # A path inside the container. The delivery worker that reads it — and
-      # the mount that puts the service account file there — arrives with it.
-      FCM_CREDENTIALS_FILE: ${FCM_CREDENTIALS_FILE:-}
+      # A path INSIDE the container, which is why it is not the host path. The
+      # collector mounts FCM_CREDENTIALS_HOST_FILE here read-only; see below.
+      FCM_CREDENTIALS_FILE: ${FCM_CREDENTIALS_FILE:-/run/secrets/fcm-service-account.json}
       FCM_DEVICE_TOKEN: ${FCM_DEVICE_TOKEN:-}
+    # No credentials are mounted here. SIGNAL_MODE=silent is the default and
+    # never reads the key, and a bind mount whose source does not exist makes
+    # Docker create a directory in its place — which would then fail the read
+    # as "is a directory" for everyone who never asked to deliver anything.
+    #
+    # A notify deployment adds docker-compose.notify.yml, which mounts it.
     depends_on:
       postgres:
         condition: service_healthy

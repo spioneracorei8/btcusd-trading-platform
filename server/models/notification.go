@@ -18,4 +18,9 @@ type Notification struct {
 	LastError string
 	SentAt    *time.Time
 	CreatedAt time.Time
+
+	// NextAttemptAt is when a failed delivery may be tried again. It is
+	// stored rather than held by the worker so the backoff outlives the
+	// process that decided it — a restart that forgot would retry at once.
+	NextAttemptAt time.Time
 }

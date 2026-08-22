@@ -53,6 +53,35 @@ const (
 	// decides on when none is configured.
 	DefaultStrategyTimeframe = "4h"
 
+	// NotificationMaxAttempts is how many times one notification is tried
+	// before it is given up on.
+	//
+	// A push notification about a scalping signal has a short useful life. A
+	// row still retrying an hour later is not going to help anybody, and the
+	// budget exists so a permanently broken destination cannot hold the queue
+	// behind it forever.
+	NotificationMaxAttempts = 5
+
+	// NotifyRetryBase is the first retry delay; each further attempt doubles
+	// it. Five attempts therefore span about eight minutes, which outlasts a
+	// brief outage without outlasting the signal's usefulness.
+	NotifyRetryBase = 30 * time.Second
+
+	// NotifySendTimeout bounds one delivery. A send that hangs would hold the
+	// worker and everything queued behind it.
+	NotifySendTimeout = 10 * time.Second
+
+	// NotifyBatchSize is how many due notifications one pass takes.
+	NotifyBatchSize = 20
+
+	// NotifyErrorBodyLimit bounds how much of a rejection is kept.
+	// last_error is shown to a person; an unbounded response would put an
+	// arbitrary amount of somebody else's text into it.
+	NotifyErrorBodyLimit = 2048
+
+	// DefaultNotifyInterval is how often the delivery queue is swept.
+	DefaultNotifyInterval = 10 * time.Second
+
 	// DefaultSignalMode records signals and delivers nothing.
 	//
 	// Silent is the default deliberately. Beginning to send alerts should be a

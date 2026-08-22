@@ -7,6 +7,7 @@ package notify
 
 import (
 	"context"
+	"time"
 
 	"github.com/spioneracorei8/btcusd-trading-platform/server/models"
 )
@@ -22,7 +23,21 @@ type NotifyRepository interface {
 	// rather than the caller being wrong.
 	InsertNotification(ctx context.Context, n models.Notification) (models.Notification, bool, error)
 
-	// FetchPendingNotifications returns queued deliveries, oldest first, so a
-	// backlog drains in the order the signals happened.
-	FetchPendingNotifications(ctx context.Context, limit int32) ([]models.Notification, error)
+	// FetchDueNotifications returns queued deliveries that may be attempted
+	// now, oldest first, so a backlog drains in the order the signals
+	// happened. A row scheduled into the future by a failed attempt is not
+	// due and is not returned.
+	FetchDueNotifications(ctx context.Context, asOf time.Time, limit int32) ([]models.Notification, error)
+
+	// MarkNotificationSent records a delivery that worked.
+	MarkNotificationSent(ctx context.Context, id int64, sentAt time.Time) (models.Notification, error)
+
+	// RescheduleNotification records a failed attempt that is worth repeating,
+	// leaving the row pending and not due until nextAttemptAt.
+	RescheduleNotification(ctx context.Context, id int64, lastError string, nextAttemptAt time.Time) (models.Notification, error)
+
+	// FailNotification gives up on a delivery. Nothing retries a failed row,
+	// so lastError is the last thing said about it and has to be enough to
+	// explain the silence weeks later.
+	FailNotification(ctx context.Context, id int64, lastError string) (models.Notification, error)
 }

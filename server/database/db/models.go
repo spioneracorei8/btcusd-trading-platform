@@ -61,6 +61,8 @@ type Notification struct {
 	LastError string
 	SentAt    pgtype.Timestamptz
 	CreatedAt pgtype.Timestamptz
+	// Not before this instant. Set into the future by a failed attempt so the backoff outlives the process that decided it.
+	NextAttemptAt pgtype.Timestamptz
 }
 
 type Signal struct {

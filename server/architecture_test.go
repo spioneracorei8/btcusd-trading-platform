@@ -358,6 +358,43 @@ func TestNothingReachesATradingEndpoint(t *testing.T) {
 	}
 }
 
+// TestTheOnlyGoogleScopeIsSendingMessages.
+//
+// Phase 07 gave this system its first credential that is not read-only: a
+// service account key, on a host whose other job is reading public market
+// data. The scope it asks for is the whole of what that key can do, so it is
+// pinned here rather than left to whoever next edits the client.
+//
+// firebase.messaging cannot reach an order, an account or a withdrawal — no
+// such endpoint exists in Firebase. A broader scope would be a credential able
+// to do more than the thing it was issued for, which is the shape of the
+// mistake CLAUDE.md §1 exists to prevent.
+func TestTheOnlyGoogleScopeIsSendingMessages(t *testing.T) {
+	const permitted = "https://www.googleapis.com/auth/firebase.messaging"
+
+	// Any googleapis.com/auth/... scope string, quoted in Go source.
+	scope := regexp.MustCompile(`https://www\.googleapis\.com/auth/[A-Za-z0-9._-]+`)
+
+	for _, path := range allGoFiles(t) {
+		if filepath.Base(path) == "architecture_test.go" {
+			continue
+		}
+		content, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read %s: %v", path, err)
+		}
+
+		for _, found := range scope.FindAllString(string(content), -1) {
+			if found != permitted {
+				t.Errorf("%s asks Google for %q. The only scope this system may hold is %q: "+
+					"it is a credential on a host that otherwise only reads public market "+
+					"data, and a wider one could do more than the thing it was issued for.",
+					path, found, permitted)
+			}
+		}
+	}
+}
+
 // TestNoCodePathBranchesOnBeingABacktest is CLAUDE.md §3.2 made checkable.
 //
 // The rule is that live and backtest differ only in where the bars come from.

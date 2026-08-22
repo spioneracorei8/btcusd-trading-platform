@@ -125,6 +125,22 @@ func (r *recordingSignals) CreateSignal(
 	return s, nil
 }
 
+// FetchSignalById is not what these tests exercise; the delivery worker is
+// the only caller and it has its own.
+func (r *recordingSignals) FetchSignalById(
+	_ context.Context, id uuid.UUID,
+) (models.Signal, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	for _, s := range r.created {
+		if s.Id == id {
+			return s, nil
+		}
+	}
+	return models.Signal{}, constants.ErrNotFound
+}
+
 func (r *recordingSignals) stored() []models.Signal {
 	r.mu.Lock()
 	defer r.mu.Unlock()

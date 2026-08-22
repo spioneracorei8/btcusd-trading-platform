@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/google/uuid"
+
 	"github.com/spioneracorei8/btcusd-trading-platform/server/models"
 	"github.com/spioneracorei8/btcusd-trading-platform/server/services/signal"
 )
@@ -40,4 +42,16 @@ func (u *signalUsecase) CreateSignal(ctx context.Context, s models.Signal, bar m
 				"be reconstructed later, so a signal without them cannot be audited")
 	}
 	return u.signalRepository.InsertSignal(ctx, s)
+}
+
+// FetchSignalById returns one signal.
+//
+// There is no rule to apply here — it is a read of a row by its primary key —
+// so the usecase passes it straight through. It exists at this layer because
+// the delivery queue holds signal ids and must not reach into the signal
+// service's repository to turn one back into a signal.
+func (u *signalUsecase) FetchSignalById(
+	ctx context.Context, id uuid.UUID,
+) (models.Signal, error) {
+	return u.signalRepository.FetchSignalById(ctx, id)
 }

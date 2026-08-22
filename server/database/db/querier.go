@@ -6,6 +6,8 @@ package db
 
 import (
 	"context"
+
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 type Querier interface {
@@ -23,9 +25,18 @@ type Querier interface {
 	// their retries: the status endpoint reports what is missing, not what is
 	// still being chased.
 	CountUnfilledGaps(ctx context.Context, arg CountUnfilledGapsParams) (int64, error)
+	// Given up on. last_error is the reason, and it is the last thing written
+	// about this row: nothing retries a failed notification.
+	FailNotification(ctx context.Context, arg FailNotificationParams) (Notification, error)
 	// The delivery queue, oldest first, so a backlog drains in the order the
 	// signals happened rather than newest-first.
-	FetchPendingNotifications(ctx context.Context, rowLimit int32) ([]Notification, error)
+	//
+	// A row is due when nothing has scheduled it into the future. A newly queued
+	// one defaults to now() and is therefore due at once; a failed one carries its
+	// backoff in the column, so the wait survives the process that decided it.
+	FetchDueNotifications(ctx context.Context, arg FetchDueNotificationsParams) ([]Notification, error)
+	// One signal, for a delivery worker holding a queue row that points at it.
+	FetchSignalById(ctx context.Context, id pgtype.UUID) (Signal, error)
 	// Holes in the expected sequence, found with a window function.
 	//
 	// The diff is computed in the database on purpose: pulling three years of 1m
@@ -98,6 +109,9 @@ type Querier interface {
 	MarkCollectorDisconnected(ctx context.Context, arg MarkCollectorDisconnectedParams) error
 	// Called once a range has been backfilled successfully.
 	MarkGapFilled(ctx context.Context, id int64) error
+	// Delivered. attempts counts the one that worked, so a row that took four
+	// tries says four rather than three.
+	MarkNotificationSent(ctx context.Context, arg MarkNotificationSentParams) (Notification, error)
 	// Counts one failed attempt and records why. Returns the updated row so the
 	// caller can see whether the retry budget is spent.
 	RecordGapFillAttempt(ctx context.Context, arg RecordGapFillAttemptParams) (DataGap, error)
@@ -108,6 +122,9 @@ type Querier interface {
 	// moves started_at forward every time, while one that has been up for days
 	// leaves it alone.
 	RegisterCollectorStart(ctx context.Context, arg RegisterCollectorStartParams) (CollectorStatus, error)
+	// Failed, and worth trying again. The row stays pending and carries both what
+	// went wrong and when it may be retried.
+	RescheduleNotification(ctx context.Context, arg RescheduleNotificationParams) (Notification, error)
 	// Records a lifecycle transition. state_changed_at only moves when the state
 	// actually changes, so the time spent in a state is measurable.
 	SetCollectorState(ctx context.Context, arg SetCollectorStateParams) error

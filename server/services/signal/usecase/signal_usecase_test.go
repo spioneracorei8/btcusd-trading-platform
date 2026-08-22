@@ -10,6 +10,8 @@ import (
 
 	"github.com/shopspring/decimal"
 
+	"github.com/google/uuid"
+
 	"github.com/spioneracorei8/btcusd-trading-platform/server/constants"
 	"github.com/spioneracorei8/btcusd-trading-platform/server/models"
 	"github.com/spioneracorei8/btcusd-trading-platform/server/services/signal"
@@ -30,6 +32,20 @@ func (s *spyRepo) InsertSignal(_ context.Context, sig models.Signal) (models.Sig
 	}
 	s.inserted = append(s.inserted, sig)
 	return sig, nil
+}
+
+func (s *spyRepo) FetchSignalById(
+	_ context.Context, id uuid.UUID,
+) (models.Signal, error) {
+	if s.err != nil {
+		return models.Signal{}, s.err
+	}
+	for _, sig := range s.inserted {
+		if sig.Id == id {
+			return sig, nil
+		}
+	}
+	return models.Signal{}, constants.ErrNotFound
 }
 
 func closedBar() models.Candle {

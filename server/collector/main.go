@@ -11,6 +11,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -19,6 +20,9 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/jackc/pgx/v5/pgxpool"
+	"golang.org/x/sync/errgroup"
 
 	"github.com/spioneracorei8/btcusd-trading-platform/server/config"
 	"github.com/spioneracorei8/btcusd-trading-platform/server/constants"
@@ -38,6 +42,7 @@ import (
 	_market_us "github.com/spioneracorei8/btcusd-trading-platform/server/services/market/usecase"
 	"github.com/spioneracorei8/btcusd-trading-platform/server/services/notify"
 	_notify_repo "github.com/spioneracorei8/btcusd-trading-platform/server/services/notify/repository"
+	"github.com/spioneracorei8/btcusd-trading-platform/server/services/notify/repository/fcm"
 	_notify_us "github.com/spioneracorei8/btcusd-trading-platform/server/services/notify/usecase"
 	_signal "github.com/spioneracorei8/btcusd-trading-platform/server/services/signal"
 	_signal_repo "github.com/spioneracorei8/btcusd-trading-platform/server/services/signal/repository"
@@ -108,14 +113,10 @@ func run(cfg *config.Config, log *slog.Logger) error {
 		return err
 	}
 
-	notifyUs, err := _notify_us.NewNotifyUsecaseImpl(
-		_notify_repo.NewNotifyRepoImpl(pool), cfg.Notify.SignalMode)
+	notifyUs, err := buildNotify(ctx, cfg, log, pool, signalUs)
 	if err != nil {
 		return err
 	}
-	log.Info("signal delivery",
-		"mode", cfg.Notify.SignalMode.String(),
-		"delivers", notifyUs.Delivers())
 
 	marketUs := _market_us.NewMarketUsecaseImpl(
 		_market_us.Config{
@@ -150,10 +151,73 @@ func run(cfg *config.Config, log *slog.Logger) error {
 		"shutdown_timeout", constants.ShutdownTimeout.String(),
 	)
 
-	if err := marketUs.Run(ctx); err != nil {
-		return fmt.Errorf("run ingestion: %w", err)
+	// Ingestion and delivery run together. Delivery is a separate loop from
+	// the candle stream on purpose: a Firebase outage must never park the
+	// goroutine that stores candles, and a queue that built up while the
+	// process was down must drain without waiting for the next bar.
+	group, groupCtx := errgroup.WithContext(ctx)
+	group.Go(func() error {
+		if err := marketUs.Run(groupCtx); err != nil {
+			return fmt.Errorf("run ingestion: %w", err)
+		}
+		return nil
+	})
+	group.Go(func() error {
+		if err := notifyUs.Run(groupCtx); err != nil {
+			return fmt.Errorf("run delivery: %w", err)
+		}
+		return nil
+	})
+
+	if err := group.Wait(); err != nil && !errors.Is(err, context.Canceled) {
+		return err
 	}
 	return nil
+}
+
+// buildNotify constructs the delivery path for the configured mode.
+//
+// In silent mode nothing is built beyond the queue: no credentials are read,
+// no token source is created, and there is no client that could send. Silence
+// is the absence of a sender rather than a check performed by one.
+func buildNotify(
+	ctx context.Context,
+	cfg *config.Config,
+	log *slog.Logger,
+	pool *pgxpool.Pool,
+	signalUs _signal.SignalUsecase,
+) (notify.NotifyUsecase, error) {
+	notifyCfg := _notify_us.Config{
+		Mode:        cfg.Notify.SignalMode,
+		Signals:     signalUs,
+		DeviceToken: cfg.Notify.FCMDeviceToken,
+	}
+
+	if cfg.Notify.Delivers() {
+		// At start-up, so a missing or malformed service account key refuses
+		// to start rather than surfacing on the first signal — which could be
+		// days later and would look like the strategy being quiet.
+		sender, err := fcm.NewSenderImpl(ctx, fcm.Config{
+			ProjectId:       cfg.Notify.FCMProjectId,
+			CredentialsFile: cfg.Notify.FCMCredentialsFile,
+			Log:             log,
+		})
+		if err != nil {
+			return nil, err
+		}
+		notifyCfg.Sender = sender
+	}
+
+	notifyUs, err := _notify_us.NewNotifyUsecaseImpl(
+		_notify_repo.NewNotifyRepoImpl(pool), log, notifyCfg)
+	if err != nil {
+		return nil, err
+	}
+
+	log.Info("signal delivery",
+		"mode", cfg.Notify.SignalMode.String(),
+		"delivers", notifyUs.Delivers())
+	return notifyUs, nil
 }
 
 // buildEvaluator constructs the live signal path, or nothing when no strategy
