@@ -415,6 +415,40 @@ func (l Levels) HitBy(bar models.Candle) (reason ExitReason, level decimal.Decim
 	}
 }
 
+// EntryBeyond reports that a fill landed at or past one of the levels meant to
+// bound it, and which one.
+//
+// # Why a position can open past its own stop
+//
+// A decision is taken on one bar's close and fills at the next bar's open.
+// The stop was computed from the close; the fill happens at the open; and
+// nothing constrains the distance between them. When the market moves far
+// enough in between, the position opens already beyond the level that was
+// supposed to limit it.
+//
+// The engine takes the position and then closes it at the level, because the
+// level is what it prices a triggered stop from. On such a bar that price was
+// never traded — so the loss is understated, and a long that gapped down can
+// be recorded as a stop that made money.
+//
+// This reports the case rather than changing it. See ADR 0023: correcting the
+// fill is a change to every historical number, and the first thing needed is
+// to know how many trades it touches.
+func (l Levels) EntryBeyond(entry decimal.Decimal) ExitReason {
+	if !entry.IsPositive() {
+		return ""
+	}
+	// At or past the stop: for a long, a fill no higher than the stop under it.
+	if l.Stop.IsPositive() && !l.Favours(entry, l.Stop) {
+		return ExitStop
+	}
+	// At or past the target.
+	if l.Target.IsPositive() && !l.Favours(l.Target, entry) {
+		return ExitTarget
+	}
+	return ""
+}
+
 // Favours reports whether a price moved in the position's direction relative
 // to a reference. It is what separates a maximum favourable excursion from an
 // adverse one.
@@ -806,6 +840,17 @@ type Result struct {
 	// other than the strategy as written.
 	EntriesRequested   int64
 	LimitOrdersExpired int64
+
+	// EntriesBeyondStop and EntriesBeyondTarget count positions that opened
+	// already past the level meant to bound them, because the market moved
+	// between the close the decision was taken on and the open it filled at.
+	//
+	// Their exits are priced at the level, which the market did not trade at
+	// on that bar, so those trades are recorded as better than they were. A
+	// non-zero count here means some of the result rests on that. See ADR
+	// 0023.
+	EntriesBeyondStop   int64
+	EntriesBeyondTarget int64
 
 	// TrailAmbiguousBars counts bars where the trailing stop would have both
 	// extended and triggered, and the trigger was assumed.

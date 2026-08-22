@@ -150,32 +150,23 @@ func (w *walked) observe(levels backtest.Levels, bar models.Candle) {
 // openedPast reports that the entry filled beyond a level it was meant to be
 // protected by, and which one.
 //
-// # Why this is recorded rather than corrected
+// The rule itself is backtest.Levels.EntryBeyond, because the engine counts
+// exactly the same case. Two readings of "did this fill land past its own
+// stop" would drift, and the drift would show up as a divergence between
+// prediction and outcome — which is what this whole comparison exists to
+// detect.
 //
-// A signal decided on one bar's close fills at the next bar's open, and the
-// market can gap between the two — past the stop, or past the target. The
-// engine takes the position anyway and then closes it at the level, because
-// the level is what it prices a triggered stop from. That fill is optimistic:
-// on such a bar the market never traded at the level, and a long that gapped
-// down is recorded as a stop that made money.
+// # Why it is recorded rather than corrected
 //
-// The follower does exactly the same thing, on purpose. Matching the engine
-// is what makes the live-against-backtest comparison mean anything, and
-// quietly correcting it here would make the two disagree for a reason that
-// has nothing to do with the strategy. What can be done without breaking that
-// is to mark the row, so a reconciliation can see the assumption instead of
-// averaging a fictional profit into the stop bucket.
+// The engine takes such a position anyway and closes it at the level, which
+// on that bar the market never traded at. The follower reproduces that on
+// purpose: quietly correcting it here would make the two sides disagree for a
+// reason that has nothing to do with the strategy. What can be done without
+// breaking the comparison is to mark the row, so a reconciliation sees the
+// assumption instead of averaging a fictional profit into the stop bucket.
+// See ADR 0023.
 func openedPast(levels backtest.Levels, entry decimal.Decimal) backtest.ExitReason {
-	// Already at or beyond the stop: for a long, an entry no higher than the
-	// stop it sits under.
-	if levels.Stop.IsPositive() && !levels.Favours(entry, levels.Stop) {
-		return backtest.ExitStop
-	}
-	// Already at or beyond the target.
-	if levels.Target.IsPositive() && !levels.Favours(levels.Target, entry) {
-		return backtest.ExitTarget
-	}
-	return ""
+	return levels.EntryBeyond(entry)
 }
 
 // statusFor maps the engine's exit reason onto an outcome status.

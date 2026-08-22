@@ -139,6 +139,17 @@ func WriteSummary(w io.Writer, result backtest.Result, stats Statistics) error {
 	b.WriteString("   the stop was assumed to fill first; a large count means the\n")
 	b.WriteString("   result rests on that assumption rather than on the data)\n")
 
+	if gapped := result.EntriesBeyondStop + result.EntriesBeyondTarget; gapped > 0 {
+		line(&b, "entries past their own level", fmt.Sprintf("%d of %d (%.1f%%)",
+			gapped, len(result.Trades), percent(gapped, int64(len(result.Trades)))))
+		b.WriteString("  (positions that opened already beyond the stop or target\n")
+		b.WriteString("   meant to bound them, because price moved between the close\n")
+		b.WriteString("   the decision was taken on and the open it filled at. Their\n")
+		b.WriteString("   exits are priced AT the level, which was never traded on\n")
+		b.WriteString("   that bar, so those trades are recorded as better than they\n")
+		b.WriteString("   were. See ADR 0023.)\n")
+	}
+
 	if result.Params.Exits.Trailing() {
 		line(&b, "trail-before-extension bars", fmt.Sprintf("%d", result.TrailAmbiguousBars))
 		b.WriteString("  (bars where the trail would have both extended and triggered.\n")

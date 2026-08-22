@@ -149,15 +149,55 @@ At the 4h strategy's rate of 0.1 trades a day, 100 signals is nearly three years
 
 ## Definition of Done
 
-- [ ] `go build ./... && go vet ./... && go test ./...` passes
-- [ ] `SIGNAL_MODE=silent` is the default and writes signals without sending
-- [ ] `SIGNAL_MODE=notify` delivers to a real device
-- [ ] Signals record the full resolved parameter set
-- [ ] Outcomes resolve to target, stop, expired, or invalidated with MAE and MFE
-- [ ] Reconciliation compares live to backtest, grouped by parameter set
-- [ ] Insufficient-sample banner appears below 100 resolved signals
-- [ ] Divergence table documented and surfaced
-- [ ] No code touches any order, trade, account, or withdrawal endpoint
+- [x] `go build ./... && go vet ./... && go test ./...` passes
+- [x] `SIGNAL_MODE=silent` is the default and writes signals without sending
+- [ ] `SIGNAL_MODE=notify` delivers to a real device — **not done, deliberately
+      deferred to phase 09.** There is no device token. The sender is complete
+      and tested against an `httptest` server, and the service account against
+      a key generated in the test; the last hop is untested.
+- [x] Signals record the full resolved parameter set — on every signal, not
+      once at start-up
+- [x] Outcomes resolve to target, stop, expired, or invalidated with MAE and MFE
+- [x] Reconciliation compares live to backtest, grouped by parameter set
+- [x] Insufficient-sample banner appears below 100 resolved signals — and
+      suppresses the divergence readings while it is showing
+- [x] Divergence table documented and surfaced — `docs/reading-a-divergence.md`
+- [x] No code touches any order, trade, account, or withdrawal endpoint —
+      enforced by `TestNothingReachesATradingEndpoint`, and by
+      `TestTheOnlyGoogleScopeIsSendingMessages` for the FCM credential
+
+## What was built differently from this spec
+
+Three deliberate departures, each agreed before the work:
+
+**`internal/notify` and `cmd/reconcile` became `server/services/notify/` and
+`server/reconcile/`.** This spec was written against an older layout; CLAUDE.md
+§5 governs.
+
+**Signals carry `signal_price` separately from `entry_price`.** A strategy
+decides on a bar's close and nothing can fill there, so the entry is the next
+bar's open plus slippage — filled in one bar later. Recording the close as the
+entry would put that difference into every comparison as slippage nobody
+introduced. The notification goes out immediately on `signal_price`, labelled
+a reference, because the owner needs the news before the entry is knowable.
+
+**The "live win rate much lower" row was split in two,** by whether the entries
+match. Entries matching means the same trades did worse — the rule was fitted.
+Entries differing means the live path took different trades and the win rate is
+a symptom of that. Those point in opposite directions.
+
+## Outstanding
+
+**The engine prices an entry that gaps past its own stop optimistically**, and
+how much that affects the sixty-four logged evaluations is not measured. It
+could not be measured in the environment where it was found: no Binance access,
+no real BTCUSDT history. Every run now reports the count. See ADR 0023 for the
+command, the bound, and what to do with either answer.
+
+**Live trend filtering is not built.** A configured `STRATEGY_TREND_FILTER` is
+refused at start-up rather than run around, because unfiltered live signals
+compared against a filtered backtest would diverge for a reason that is an
+artefact of the configuration.
 
 ---
 

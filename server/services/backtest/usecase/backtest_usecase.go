@@ -300,6 +300,11 @@ type runner struct {
 	entriesRequested   int64
 	limitOrdersExpired int64
 
+	// entriesBeyondStop and entriesBeyondTarget count positions that opened
+	// already past the level meant to bound them.
+	entriesBeyondStop   int64
+	entriesBeyondTarget int64
+
 	// trailAmbiguousBars counts bars where the trail would have both extended
 	// and triggered, and the trigger was assumed.
 	trailAmbiguousBars int64
@@ -506,6 +511,10 @@ func (r *runner) applyPending(bar models.Candle) error {
 	entryATR := r.pendingATR
 	r.pending = nil
 
+	// Whether a position existed before this batch, so an entry that opened
+	// here can be told from one carried in.
+	wasOpen := r.position.isOpen()
+
 	for _, intent := range intents {
 		switch intent.Kind {
 		case strategy.IntentEnterLong:
@@ -538,7 +547,28 @@ func (r *runner) applyPending(bar models.Candle) error {
 	}
 
 	r.attachLevels(intents)
+
+	if !wasOpen && r.position.isOpen() {
+		r.countEntryBeyondItsLevels()
+	}
 	return nil
+}
+
+// countEntryBeyondItsLevels records a position that opened past the level
+// meant to bound it.
+//
+// It is counted and not corrected. The exit is still priced at the level, so
+// the trade is recorded as better than a real fill would have been — which is
+// a flaw in the model rather than in this bookkeeping, and one that cannot be
+// changed without changing every number in docs/experiments.md. Counting it
+// is what makes the size of that flaw knowable. See ADR 0023.
+func (r *runner) countEntryBeyondItsLevels() {
+	switch r.position.levels().EntryBeyond(r.position.entryPrice) {
+	case backtest.ExitStop:
+		r.entriesBeyondStop++
+	case backtest.ExitTarget:
+		r.entriesBeyondTarget++
+	}
 }
 
 // attachLevels sets the stop and target carried by a batch of intents.
@@ -1040,6 +1070,8 @@ func (r *runner) fill(result *backtest.Result) {
 	result.MakerExits = r.makerExits
 	result.TakerExits = r.takerExits
 	result.TrailAmbiguousBars = r.trailAmbiguousBars
+	result.EntriesBeyondStop = r.entriesBeyondStop
+	result.EntriesBeyondTarget = r.entriesBeyondTarget
 	result.EntriesBelowMinLot = r.entriesBelowMinLot
 	result.EntriesRefusedAfterCap = r.entriesRefusedAfterCap
 	result.EntriesRequested = r.entriesRequested

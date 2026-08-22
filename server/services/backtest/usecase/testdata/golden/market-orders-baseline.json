@@ -52,7 +52,9 @@
     "stop_and_target_both_reachable": 0,
     "vetoed": 0,
     "filter_not_ready": 0,
-    "trail_ambiguous": 0
+    "trail_ambiguous": 0,
+    "entries_beyond_stop": 0,
+    "entries_beyond_target": 0
   },
   "performance": {
     "net_return": 1.0460975475968022,

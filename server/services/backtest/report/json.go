@@ -158,6 +158,14 @@ type barsDoc struct {
 	// TrailAmbiguous counts bars where the trailing stop would have both
 	// extended and triggered, and the trigger was assumed.
 	TrailAmbiguous int64 `json:"trail_ambiguous"`
+
+	// EntriesBeyondStop and EntriesBeyondTarget count positions that opened
+	// already past the level meant to bound them, because the market moved
+	// between the close the decision was taken on and the open it filled at.
+	// Their exits are priced at the level, which was not traded on that bar,
+	// so those trades are recorded as better than they were. See ADR 0023.
+	EntriesBeyondStop   int64 `json:"entries_beyond_stop"`
+	EntriesBeyondTarget int64 `json:"entries_beyond_target"`
 }
 
 // exitReasonDoc is how one kind of exit performed.
@@ -353,6 +361,8 @@ func BuildDocument(result backtest.Result, stats Statistics) Document {
 			Vetoed:                     result.BarsVetoed,
 			FilterNotReady:             result.BarsFilterNotReady,
 			TrailAmbiguous:             result.TrailAmbiguousBars,
+			EntriesBeyondStop:          result.EntriesBeyondStop,
+			EntriesBeyondTarget:        result.EntriesBeyondTarget,
 		},
 		Performance: performanceDoc{
 			NetReturn:   stats.NetReturn,

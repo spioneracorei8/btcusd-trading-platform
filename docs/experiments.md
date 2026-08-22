@@ -34,6 +34,30 @@ deserves rather than overstating it.
 When counting the entries above a result, count distinct configurations up to
 48, and entries after that.
 
+## 2026-08-22 — an unmeasured flaw affecting every entry below
+
+Phase 07 found a case the engine prices optimistically. A position whose entry
+gaps past its own stop — the decision taken on one bar's close, the fill at
+the next bar's open, the market having moved further than the stop distance in
+between — is still **closed at the stop's price**, which that bar never traded
+at. The loss is understated, and in the worst case the sign flips: a long that
+gapped down is recorded as a stop that made money.
+
+**How many trades in the entries below are affected is not known.** It could
+not be measured where the flaw was found: that environment cannot reach
+Binance and holds no real BTCUSDT history, and the entries below record no
+field that would answer it.
+
+Every run from 2026-08-22 onward reports `entries_beyond_stop` and
+`entries_beyond_target`, so the question is now answerable by running. The
+measurement is **outstanding work**, and ADR 0023 carries the exact command,
+what is already known about the bound, and what to do with either answer.
+
+Nothing below has been edited. If the share turns out to be material, the
+correction will come with a new engine version and the affected entries will
+be re-run and marked as such — rather than these being quietly restated under
+arithmetic they were not produced by.
+
 ## Why this file exists
 
 Two reasons, and the second matters more.
