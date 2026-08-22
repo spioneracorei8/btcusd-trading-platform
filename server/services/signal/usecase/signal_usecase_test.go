@@ -48,6 +48,27 @@ func (s *spyRepo) FetchSignalById(
 	return models.Signal{}, constants.ErrNotFound
 }
 
+func (s *spyRepo) SetEntryPrice(
+	_ context.Context, id uuid.UUID, entry decimal.Decimal,
+) (models.Signal, error) {
+	if s.err != nil {
+		return models.Signal{}, s.err
+	}
+	for i := range s.inserted {
+		if s.inserted[i].Id != id {
+			continue
+		}
+		if s.inserted[i].EntryPrice.Valid {
+			// Write-once: the query matches only a row whose entry is still
+			// null, and no row matched is what the repository reports.
+			return models.Signal{}, constants.ErrNotFound
+		}
+		s.inserted[i].EntryPrice = decimal.NullDecimal{Decimal: entry, Valid: true}
+		return s.inserted[i], nil
+	}
+	return models.Signal{}, constants.ErrNotFound
+}
+
 func closedBar() models.Candle {
 	return models.Candle{
 		Symbol: "BTCUSDT", MarketType: constants.MarketTypeSpot,

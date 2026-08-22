@@ -82,6 +82,25 @@ const (
 	// DefaultNotifyInterval is how often the delivery queue is swept.
 	DefaultNotifyInterval = 10 * time.Second
 
+	// DefaultSignalExpiryBars is how long a signal is followed before it is
+	// recorded as expired.
+	//
+	// Forty-eight bars: eight hours on 10m, eight days on 4h. Long enough
+	// that a trade with room to work is not cut off by the clock, short
+	// enough that a signal nobody could still act on stops being counted as
+	// live. It is a measurement window and not a trading rule — nothing here
+	// places or closes anything — so the only cost of it being wrong is that
+	// some outcomes read "expired" where a longer window would have resolved
+	// them, which the reconciliation reports rather than hides.
+	DefaultSignalExpiryBars = 48
+
+	// DefaultOutcomeInterval is how often open signals are followed against
+	// newly stored candles.
+	DefaultOutcomeInterval = time.Minute
+
+	// OutcomeBatchSize is how many open signals one resolution pass takes.
+	OutcomeBatchSize = 50
+
 	// DefaultSignalMode records signals and delivers nothing.
 	//
 	// Silent is the default deliberately. Beginning to send alerts should be a

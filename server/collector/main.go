@@ -31,6 +31,7 @@ import (
 	"github.com/spioneracorei8/btcusd-trading-platform/server/logger"
 	"github.com/spioneracorei8/btcusd-trading-platform/server/models"
 
+	"github.com/spioneracorei8/btcusd-trading-platform/server/services/backtest"
 	"github.com/spioneracorei8/btcusd-trading-platform/server/services/candle"
 	_candle_repo "github.com/spioneracorei8/btcusd-trading-platform/server/services/candle/repository"
 	_candle_us "github.com/spioneracorei8/btcusd-trading-platform/server/services/candle/usecase"
@@ -44,6 +45,8 @@ import (
 	_notify_repo "github.com/spioneracorei8/btcusd-trading-platform/server/services/notify/repository"
 	"github.com/spioneracorei8/btcusd-trading-platform/server/services/notify/repository/fcm"
 	_notify_us "github.com/spioneracorei8/btcusd-trading-platform/server/services/notify/usecase"
+	_outcome_repo "github.com/spioneracorei8/btcusd-trading-platform/server/services/outcome/repository"
+	_outcome_us "github.com/spioneracorei8/btcusd-trading-platform/server/services/outcome/usecase"
 	_signal "github.com/spioneracorei8/btcusd-trading-platform/server/services/signal"
 	_signal_repo "github.com/spioneracorei8/btcusd-trading-platform/server/services/signal/repository"
 	_signal_us "github.com/spioneracorei8/btcusd-trading-platform/server/services/signal/usecase"
@@ -118,6 +121,23 @@ func run(cfg *config.Config, log *slog.Logger) error {
 		return err
 	}
 
+	//==============================================================
+	// # OUTCOMES
+	//==============================================================
+	outcomeUs, err := _outcome_us.NewOutcomeUsecaseImpl(
+		_outcome_repo.NewOutcomeRepoImpl(pool), log, signalUs, candleUs, dataGapUs,
+		_outcome_us.Config{
+			Symbol:     cfg.Market.Symbol,
+			MarketType: cfg.Market.Type,
+			Costs:      liveCosts(cfg),
+			ExpiryBars: cfg.Outcome.ExpiryBars,
+			Interval:   cfg.Outcome.Interval,
+		},
+	)
+	if err != nil {
+		return err
+	}
+
 	marketUs := _market_us.NewMarketUsecaseImpl(
 		_market_us.Config{
 			Symbol:            cfg.Market.Symbol,
@@ -165,6 +185,12 @@ func run(cfg *config.Config, log *slog.Logger) error {
 	group.Go(func() error {
 		if err := notifyUs.Run(groupCtx); err != nil {
 			return fmt.Errorf("run delivery: %w", err)
+		}
+		return nil
+	})
+	group.Go(func() error {
+		if err := outcomeUs.Run(groupCtx); err != nil {
+			return fmt.Errorf("run outcome follower: %w", err)
 		}
 		return nil
 	})
@@ -289,6 +315,20 @@ func buildEvaluator(
 		return nil, err
 	}
 	return evaluator, nil
+}
+
+// liveCosts is the venue as configured, in the engine's own type.
+//
+// The same values the backtest is run with, so a live signal's entry is
+// filled by the same rule with the same slippage. A follower using its own
+// idea of cost would make every comparison between prediction and outcome a
+// comparison of two cost models.
+func liveCosts(cfg *config.Config) backtest.Costs {
+	return backtest.Costs{
+		FeeTakerPct:   cfg.Market.FeeTakerPct,
+		TickSize:      cfg.Market.TickSize,
+		SlippageTicks: cfg.Market.SlippageTicks,
+	}
 }
 
 // roundTripCostPct is what one entry and one exit cost, in percent.

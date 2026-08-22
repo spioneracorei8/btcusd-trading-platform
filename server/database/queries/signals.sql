@@ -18,3 +18,15 @@ RETURNING *;
 -- name: FetchSignalById :one
 -- One signal, for a delivery worker holding a queue row that points at it.
 SELECT * FROM signals WHERE id = sqlc.arg(id);
+
+-- name: SetSignalEntryPrice :one
+-- Fill in what a position would have opened at.
+--
+-- It is not knowable when the signal is recorded: the decision is taken on a
+-- bar's close and the fill is the next bar's open plus slippage, so this is
+-- written one bar later. Only ever from null, because a second write would
+-- mean two different answers to a question with one.
+UPDATE signals
+SET entry_price = sqlc.arg(entry_price)
+WHERE id = sqlc.arg(id) AND entry_price IS NULL
+RETURNING *;

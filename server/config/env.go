@@ -139,6 +139,25 @@ type Strategy struct {
 // Enabled reports whether a strategy is configured to run live.
 func (s Strategy) Enabled() bool { return s.Name != "" }
 
+// Outcome is how live signals are followed to their end.
+//
+// # Why this runs whether or not a strategy does
+//
+// The follower reads signals out of the table, not out of the evaluator. A
+// process that stops following when no strategy is configured would leave the
+// signals of a strategy that has just been switched off unresolved forever —
+// and those are exactly the ones worth knowing about.
+type Outcome struct {
+	// ExpiryBars is how many bars a signal is followed before it is recorded
+	// as expired. It is a measurement window, not a trading rule: nothing
+	// here opens or closes anything.
+	ExpiryBars int
+
+	// Interval is how often open signals are advanced against newly stored
+	// candles.
+	Interval time.Duration
+}
+
 // Notify holds push notification settings. Phase 01 only carries the values;
 // no notification client is wired up yet.
 type Notify struct {
@@ -171,6 +190,7 @@ type Config struct {
 	Database Database
 	Market   Market
 	Strategy Strategy
+	Outcome  Outcome
 	Notify   Notify
 
 	// EnvFile is the .env that filled any gaps in the environment, or empty
@@ -265,6 +285,11 @@ func LoadFrom(lookup helper.LookupFunc, opts ...Option) (*Config, error) {
 			Timeframe:   l.optionalTimeframe("STRATEGY_TIMEFRAME", constants.DefaultStrategyTimeframe),
 			Params:      l.params("STRATEGY_PARAMS"),
 			TrendFilter: l.optionalString("STRATEGY_TREND_FILTER", ""),
+		},
+
+		Outcome: Outcome{
+			ExpiryBars: l.optionalInt("SIGNAL_EXPIRY_BARS", constants.DefaultSignalExpiryBars, 1, 10_000),
+			Interval:   l.duration("OUTCOME_INTERVAL", constants.DefaultOutcomeInterval, time.Second, time.Hour),
 		},
 
 		Notify: Notify{

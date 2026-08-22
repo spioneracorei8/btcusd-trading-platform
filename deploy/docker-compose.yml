@@ -172,6 +172,10 @@ services:
       STRATEGY_TIMEFRAME: ${STRATEGY_TIMEFRAME:-4h}
       STRATEGY_PARAMS: ${STRATEGY_PARAMS:-}
       STRATEGY_TREND_FILTER: ${STRATEGY_TREND_FILTER:-}
+      # Outcome tracking. Runs whether or not a strategy is configured: a
+      # strategy switched off still has outstanding signals to resolve.
+      SIGNAL_EXPIRY_BARS: ${SIGNAL_EXPIRY_BARS:-48}
+      OUTCOME_INTERVAL: ${OUTCOME_INTERVAL:-1m}
       # Delivery. SIGNAL_MODE replaced NOTIFY_ENABLED and the loader rejects
       # the old name, so both services must carry the same value or one starts
       # and the other does not.

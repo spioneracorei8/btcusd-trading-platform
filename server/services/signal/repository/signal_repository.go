@@ -9,6 +9,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/shopspring/decimal"
 
 	"github.com/spioneracorei8/btcusd-trading-platform/server/constants"
 	"github.com/spioneracorei8/btcusd-trading-platform/server/database"
@@ -79,6 +80,25 @@ func (r *signalRepository) FetchSignalById(
 	}
 	if err != nil {
 		return models.Signal{}, fmt.Errorf("fetch signal %s: %w", id, err)
+	}
+	return toSignalModel(row)
+}
+
+// SetEntryPrice fills in the entry price, only from null.
+func (r *signalRepository) SetEntryPrice(
+	ctx context.Context, id uuid.UUID, entry decimal.Decimal,
+) (models.Signal, error) {
+	row, err := r.queries.SetSignalEntryPrice(ctx, db.SetSignalEntryPriceParams{
+		ID:         database.PgtypeFromUUID(id),
+		EntryPrice: database.NumericFromDecimal(entry),
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		// Either there is no such signal, or it already has an entry price.
+		// The caller decides which of those matters to it.
+		return models.Signal{}, constants.ErrNotFound
+	}
+	if err != nil {
+		return models.Signal{}, fmt.Errorf("set entry price on signal %s: %w", id, err)
 	}
 	return toSignalModel(row)
 }

@@ -8,6 +8,7 @@ import (
 	"context"
 
 	"github.com/google/uuid"
+	"github.com/shopspring/decimal"
 
 	"github.com/spioneracorei8/btcusd-trading-platform/server/models"
 )
@@ -22,4 +23,9 @@ type SignalRepository interface {
 	// FetchSignalById returns one signal, or constants.ErrNotFound when no
 	// row has that id.
 	FetchSignalById(ctx context.Context, id uuid.UUID) (models.Signal, error)
+
+	// SetEntryPrice fills in the entry price, only when it is still unset. It
+	// returns constants.ErrNotFound when the signal is gone or already has
+	// one, which the usecase distinguishes.
+	SetEntryPrice(ctx context.Context, id uuid.UUID, entry decimal.Decimal) (models.Signal, error)
 }

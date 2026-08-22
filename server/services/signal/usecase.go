@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/google/uuid"
+	"github.com/shopspring/decimal"
 
 	"github.com/spioneracorei8/btcusd-trading-platform/server/models"
 )
@@ -24,4 +25,13 @@ type SignalUsecase interface {
 	// row has that id. The delivery queue holds ids, not signals, so
 	// something has to turn one back into the other.
 	FetchSignalById(ctx context.Context, id uuid.UUID) (models.Signal, error)
+
+	// SetEntryPrice fills in what a position would have opened at.
+	//
+	// Written one bar after the signal, because it is not knowable before
+	// then: the decision is taken on a bar's close and the fill is the next
+	// bar's open plus slippage. It is write-once — a second answer to a
+	// question with one would silently change every comparison already drawn
+	// against the first.
+	SetEntryPrice(ctx context.Context, id uuid.UUID, entry decimal.Decimal) (models.Signal, error)
 }

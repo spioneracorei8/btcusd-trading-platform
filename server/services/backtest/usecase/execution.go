@@ -15,24 +15,12 @@ var hundred = decimal.NewFromInt(100)
 
 // fillPrice applies slippage to a reference price.
 //
-// Slippage always works against the trade: a buy fills higher than it hoped
-// and a sell lower. The symmetry matters more than the magnitude — a model
-// where slippage could help in either direction would turn a cost into an
-// occasional bonus, and the average would come out flattering.
+// The rule itself is backtest.FillPrice, at the service root, because phase
+// 07 fills live entries by the same one. Two copies would drift, and the
+// comparison between backtest prediction and live outcome would then be
+// measuring the drift.
 func fillPrice(reference decimal.Decimal, buying bool, costs backtest.Costs) decimal.Decimal {
-	slip := costs.SlippageAmount()
-	if buying {
-		return reference.Add(slip)
-	}
-
-	filled := reference.Sub(slip)
-	// A fill cannot go through zero. On any real instrument the slippage is
-	// vanishing next to the price, so this guards a nonsense configuration
-	// rather than a plausible fill.
-	if filled.IsNegative() {
-		return decimal.Zero
-	}
-	return filled
+	return backtest.FillPrice(reference, buying, costs)
 }
 
 // feeOn is the cost charged on one side of a round trip, in quote currency.
@@ -206,24 +194,17 @@ func (p *openPosition) equityAt(reference decimal.Decimal, costs backtest.Costs)
 
 // stopReachedBy reports whether the bar traded through the stop.
 func (p *openPosition) stopReachedBy(bar models.Candle) bool {
-	if p.stop.IsZero() {
-		return false
-	}
-	if p.direction == constants.DirectionLong {
-		return bar.Low.LessThanOrEqual(p.stop)
-	}
-	return bar.High.GreaterThanOrEqual(p.stop)
+	return p.levels().StopReachedBy(bar)
+}
+
+// levels is the position's stop and target in the form the shared rule takes.
+func (p *openPosition) levels() backtest.Levels {
+	return backtest.Levels{Direction: p.direction, Stop: p.stop, Target: p.target}
 }
 
 // targetReachedBy reports whether the bar traded through the target.
 func (p *openPosition) targetReachedBy(bar models.Candle) bool {
-	if p.target.IsZero() {
-		return false
-	}
-	if p.direction == constants.DirectionLong {
-		return bar.High.GreaterThanOrEqual(p.target)
-	}
-	return bar.Low.LessThanOrEqual(p.target)
+	return p.levels().TargetReachedBy(bar)
 }
 
 // trailStop is where the trail would sit given a running extreme.
@@ -301,22 +282,14 @@ func (p *openPosition) barExtreme(bar models.Candle) decimal.Decimal {
 // These bars are counted into the report. A strategy whose result depends on
 // many of them is being scored on an assumption rather than on evidence.
 func (p *openPosition) levelHitBy(bar models.Candle) (reason backtest.ExitReason, level decimal.Decimal, ambiguous, hit bool) {
-	stopHit := p.stopReachedBy(bar)
-	targetHit := p.targetReachedBy(bar)
+	reason, level, ambiguous, hit = p.levels().HitBy(bar)
 
-	stopReason := backtest.ExitStop
-	if p.trailing {
-		stopReason = backtest.ExitTrailingStop
+	// A stop that has been moved in the position's favour is reported apart
+	// from one that never moved, so whether a strategy's results come from its
+	// own stop or from the trail can be counted. The engine knows that; the
+	// shared rule does not need to.
+	if hit && reason == backtest.ExitStop && p.trailing {
+		reason = backtest.ExitTrailingStop
 	}
-
-	switch {
-	case stopHit && targetHit:
-		return stopReason, p.stop, true, true
-	case stopHit:
-		return stopReason, p.stop, false, true
-	case targetHit:
-		return backtest.ExitTarget, p.target, false, true
-	default:
-		return "", decimal.Zero, false, false
-	}
+	return reason, level, ambiguous, hit
 }

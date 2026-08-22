@@ -25,6 +25,20 @@ type Querier interface {
 	// their retries: the status endpoint reports what is missing, not what is
 	// still being chased.
 	CountUnfilledGaps(ctx context.Context, arg CountUnfilledGapsParams) (int64, error)
+	// Open an outcome row for every signal that has none yet.
+	//
+	// Done as a set rather than one at a time so a follower starting against a
+	// table of existing signals — a first deploy, or a restart after an outage —
+	// picks them up without one round trip each.
+	//
+	// The two halves do different jobs and both are needed. The LEFT JOIN filter
+	// is what makes the batch find signals that still need a row: without it the
+	// LIMIT would return the oldest signals, which are the ones already followed,
+	// and a new signal would never be picked up once the backlog exceeded the
+	// batch size — silently, because every pass would still look like it worked.
+	// ON CONFLICT DO NOTHING is what makes it safe to run twice: a signal already
+	// being followed is left exactly as it is, progress included.
+	EnsureSignalOutcomes(ctx context.Context, arg EnsureSignalOutcomesParams) ([]SignalOutcome, error)
 	// Given up on. last_error is the reason, and it is the last thing written
 	// about this row: nothing retries a failed notification.
 	FailNotification(ctx context.Context, arg FailNotificationParams) (Notification, error)
@@ -35,8 +49,17 @@ type Querier interface {
 	// one defaults to now() and is therefore due at once; a failed one carries its
 	// backoff in the column, so the wait survives the process that decided it.
 	FetchDueNotifications(ctx context.Context, arg FetchDueNotificationsParams) ([]Notification, error)
+	// Signals still being followed, oldest first, so a backlog is worked through
+	// in the order the signals happened.
+	//
+	// The signals table is joined to order and filter, and nothing is selected
+	// from it: the outcome service reads a signal through the signal service's
+	// usecase, not by reaching into its rows. That costs one point lookup per
+	// open signal per pass, against a batch of fifty once a minute.
+	FetchOpenSignalOutcomes(ctx context.Context, arg FetchOpenSignalOutcomesParams) ([]SignalOutcome, error)
 	// One signal, for a delivery worker holding a queue row that points at it.
 	FetchSignalById(ctx context.Context, id pgtype.UUID) (Signal, error)
+	FetchSignalOutcome(ctx context.Context, signalID pgtype.UUID) (SignalOutcome, error)
 	// Holes in the expected sequence, found with a window function.
 	//
 	// The diff is computed in the database on purpose: pulling three years of 1m
@@ -128,6 +151,17 @@ type Querier interface {
 	// Records a lifecycle transition. state_changed_at only moves when the state
 	// actually changes, so the time spent in a state is measurable.
 	SetCollectorState(ctx context.Context, arg SetCollectorStateParams) error
+	// Fill in what a position would have opened at.
+	//
+	// It is not knowable when the signal is recorded: the decision is taken on a
+	// bar's close and the fill is the next bar's open plus slippage, so this is
+	// written one bar later. Only ever from null, because a second write would
+	// mean two different answers to a question with one.
+	SetSignalEntryPrice(ctx context.Context, arg SetSignalEntryPriceParams) (Signal, error)
+	// Record progress or a resolution. The same statement serves both: an
+	// outcome still open carries its running excursions and bar count, and a
+	// resolved one adds when and where it ended.
+	UpdateSignalOutcome(ctx context.Context, arg UpdateSignalOutcomeParams) (SignalOutcome, error)
 	// Idempotent write of one closed candle. Re-delivering the same bar (after a
 	// reconnect or a REST backfill) updates it in place instead of duplicating it.
 	UpsertCandle(ctx context.Context, arg UpsertCandleParams) error

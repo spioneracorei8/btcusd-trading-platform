@@ -83,3 +83,17 @@ type Signal struct {
 	// The close the strategy decided on. entry_price is what a position would have been opened at: the next bar's open plus slippage, filled in once that bar closes.
 	SignalPrice pgtype.Numeric
 }
+
+type SignalOutcome struct {
+	SignalID          pgtype.UUID
+	Status            string
+	ResolvedAt        pgtype.Timestamptz
+	ResolvedPrice     pgtype.Numeric
+	Mae               pgtype.Numeric
+	Mfe               pgtype.Numeric
+	BarsHeld          int32
+	BacktestWouldHave []byte
+	DivergenceNote    string
+	CreatedAt         pgtype.Timestamptz
+	UpdatedAt         pgtype.Timestamptz
+}

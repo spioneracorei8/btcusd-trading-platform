@@ -141,6 +141,14 @@ func (r *recordingSignals) FetchSignalById(
 	return models.Signal{}, constants.ErrNotFound
 }
 
+// SetEntryPrice is the outcome follower's, not this path's: the evaluator
+// deliberately leaves the entry unset.
+func (r *recordingSignals) SetEntryPrice(
+	context.Context, uuid.UUID, decimal.Decimal,
+) (models.Signal, error) {
+	return models.Signal{}, errors.New("the evaluator must not set an entry price")
+}
+
 func (r *recordingSignals) stored() []models.Signal {
 	r.mu.Lock()
 	defer r.mu.Unlock()

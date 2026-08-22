@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/google/uuid"
+	"github.com/shopspring/decimal"
 
 	"github.com/spioneracorei8/btcusd-trading-platform/server/models"
 	"github.com/spioneracorei8/btcusd-trading-platform/server/services/signal"
@@ -54,4 +55,18 @@ func (u *signalUsecase) FetchSignalById(
 	ctx context.Context, id uuid.UUID,
 ) (models.Signal, error) {
 	return u.signalRepository.FetchSignalById(ctx, id)
+}
+
+// SetEntryPrice fills in what a position would have opened at.
+//
+// A non-positive price is refused rather than stored: the entry is the
+// denominator of every return computed from this signal, and a zero would
+// turn a comparison into an infinity.
+func (u *signalUsecase) SetEntryPrice(
+	ctx context.Context, id uuid.UUID, entry decimal.Decimal,
+) (models.Signal, error) {
+	if !entry.IsPositive() {
+		return models.Signal{}, fmt.Errorf("signal: entry price %s is not positive", entry)
+	}
+	return u.signalRepository.SetEntryPrice(ctx, id, entry)
 }

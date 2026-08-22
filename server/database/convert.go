@@ -101,6 +101,14 @@ func UUIDFromPgtype(id pgtype.UUID) (uuid.UUID, error) {
 	return uuid.UUID(id.Bytes), nil
 }
 
+// NullTimestamptzFromTimePtr converts an optional time; nil becomes SQL NULL.
+func NullTimestamptzFromTimePtr(t *time.Time) pgtype.Timestamptz {
+	if t == nil {
+		return pgtype.Timestamptz{}
+	}
+	return TimestamptzFromTime(*t)
+}
+
 // PgtypeFromUUID converts a google/uuid value into the pgtype value pgx
 // writes. uuid.Nil is written as NULL rather than as a row of zero bytes,
 // which no foreign key would match and which reads as a real id at a glance.

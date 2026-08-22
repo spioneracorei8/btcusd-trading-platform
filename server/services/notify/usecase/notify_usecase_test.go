@@ -209,6 +209,12 @@ func (s *storedSignals) CreateSignal(
 	return models.Signal{}, errors.New("not used")
 }
 
+func (s *storedSignals) SetEntryPrice(
+	context.Context, uuid.UUID, decimal.Decimal,
+) (models.Signal, error) {
+	return models.Signal{}, errors.New("not used")
+}
+
 func (s *storedSignals) FetchSignalById(
 	_ context.Context, id uuid.UUID,
 ) (models.Signal, error) {

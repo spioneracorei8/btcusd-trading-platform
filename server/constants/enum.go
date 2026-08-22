@@ -173,6 +173,72 @@ func ParseDirection(s string) (Direction, error) {
 	return d, nil
 }
 
+// OutcomeStatus is what became of a signal.
+type OutcomeStatus string
+
+// Supported outcome statuses.
+const (
+	// OutcomeOpen is a signal still being followed.
+	OutcomeOpen OutcomeStatus = "open"
+
+	// OutcomeTarget and OutcomeStop are level hits. A bar reaching both is
+	// recorded as a stop, matching the backtest's pessimistic rule — it must
+	// be the same assumption in both places or the comparison between them
+	// compares assumptions rather than outcomes.
+	OutcomeTarget OutcomeStatus = "target"
+	OutcomeStop   OutcomeStatus = "stop"
+
+	// OutcomeExpired is a signal that reached neither level within its
+	// window. It is a real outcome and counts: a strategy whose signals
+	// mostly expire is a strategy that mostly does nothing.
+	OutcomeExpired OutcomeStatus = "expired"
+
+	// OutcomeInvalidated is a signal whose window has missing data. It is
+	// excluded from statistics rather than counted as anything: what happened
+	// is not knowable, and guessing would put a number where there is none.
+	OutcomeInvalidated OutcomeStatus = "invalidated"
+)
+
+// Valid reports whether s is a known outcome status.
+func (s OutcomeStatus) Valid() bool {
+	switch s {
+	case OutcomeOpen, OutcomeTarget, OutcomeStop, OutcomeExpired, OutcomeInvalidated:
+		return true
+	default:
+		return false
+	}
+}
+
+// Resolved reports whether the signal is finished with.
+func (s OutcomeStatus) Resolved() bool { return s.Valid() && s != OutcomeOpen }
+
+// Measurable reports whether this outcome may be counted in a statistic.
+//
+// An invalidated signal is excluded. Its window has a hole in it, so whether
+// it would have won is not knowable — and a win rate that quietly counted
+// guesses would be worse than one with a smaller sample.
+func (s OutcomeStatus) Measurable() bool {
+	switch s {
+	case OutcomeTarget, OutcomeStop, OutcomeExpired:
+		return true
+	default:
+		return false
+	}
+}
+
+// String returns the wire/database representation of the status.
+func (s OutcomeStatus) String() string { return string(s) }
+
+// ParseOutcomeStatus converts s into an OutcomeStatus, rejecting unknown
+// values.
+func ParseOutcomeStatus(s string) (OutcomeStatus, error) {
+	st := OutcomeStatus(s)
+	if !st.Valid() {
+		return "", fmt.Errorf("unknown outcome status %q", s)
+	}
+	return st, nil
+}
+
 // SignalMode decides whether a recorded signal is also delivered.
 //
 // There are exactly two, and there will not be a third. The system can send or

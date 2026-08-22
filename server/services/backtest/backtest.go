@@ -321,6 +321,110 @@ func (c Costs) SlippageAmount() decimal.Decimal {
 	return c.TickSize.Mul(decimal.NewFromInt(int64(c.SlippageTicks)))
 }
 
+// FillPrice applies slippage to a reference price.
+//
+// Slippage always works against the trade: a buy fills higher than it hoped
+// and a sell lower. The symmetry matters more than the magnitude — a model
+// where slippage could help in either direction would turn a cost into an
+// occasional bonus, and the average would come out flattering.
+//
+// It lives at the service root rather than inside the engine because phase 07
+// resolves live signals against the same rule. Two copies of it would drift,
+// and the whole point of comparing live outcomes to backtest predictions is
+// that the assumptions on both sides are the same ones.
+func FillPrice(reference decimal.Decimal, buying bool, costs Costs) decimal.Decimal {
+	slip := costs.SlippageAmount()
+	if buying {
+		return reference.Add(slip)
+	}
+
+	filled := reference.Sub(slip)
+	// A fill cannot go through zero. On any real instrument the slippage is
+	// vanishing next to the price, so this guards a nonsense configuration
+	// rather than a plausible fill.
+	if filled.IsNegative() {
+		return decimal.Zero
+	}
+	return filled
+}
+
+// Levels are a position's stop and target, and the rule for reading a bar
+// against them.
+//
+// # Why this is not inside the engine
+//
+// Phase 07 follows live signals against the same levels on the same stored
+// candles. If the engine and the live resolver each had their own reading of
+// "did this bar hit the stop", the comparison between backtest prediction and
+// live outcome would be measuring the difference between two implementations
+// rather than the difference between prediction and reality — which is the
+// one thing that comparison exists to detect.
+type Levels struct {
+	Direction constants.Direction
+	Stop      decimal.Decimal
+	Target    decimal.Decimal
+}
+
+// StopReachedBy reports whether the bar traded through the stop.
+func (l Levels) StopReachedBy(bar models.Candle) bool {
+	if l.Stop.IsZero() {
+		return false
+	}
+	if l.Direction == constants.DirectionLong {
+		return bar.Low.LessThanOrEqual(l.Stop)
+	}
+	return bar.High.GreaterThanOrEqual(l.Stop)
+}
+
+// TargetReachedBy reports whether the bar traded through the target.
+func (l Levels) TargetReachedBy(bar models.Candle) bool {
+	if l.Target.IsZero() {
+		return false
+	}
+	if l.Direction == constants.DirectionLong {
+		return bar.High.GreaterThanOrEqual(l.Target)
+	}
+	return bar.Low.LessThanOrEqual(l.Target)
+}
+
+// HitBy reports which level the bar reached.
+//
+// # The stop wins when both are reachable
+//
+// A bar records four prices and says nothing about the path between them, so
+// a bar spanning both levels genuinely does not say which came first. Taking
+// the stop is the pessimistic reading, and it is deliberate: the optimistic
+// one is how a backtest quietly inflates itself, and it would do so precisely
+// on the bars where the data cannot contradict it.
+//
+// ambiguous marks those bars so they can be counted. A result resting largely
+// on them rests on an assumption rather than on evidence.
+func (l Levels) HitBy(bar models.Candle) (reason ExitReason, level decimal.Decimal, ambiguous, hit bool) {
+	stopHit := l.StopReachedBy(bar)
+	targetHit := l.TargetReachedBy(bar)
+
+	switch {
+	case stopHit && targetHit:
+		return ExitStop, l.Stop, true, true
+	case stopHit:
+		return ExitStop, l.Stop, false, true
+	case targetHit:
+		return ExitTarget, l.Target, false, true
+	default:
+		return "", decimal.Zero, false, false
+	}
+}
+
+// Favours reports whether a price moved in the position's direction relative
+// to a reference. It is what separates a maximum favourable excursion from an
+// adverse one.
+func (l Levels) Favours(price, reference decimal.Decimal) bool {
+	if l.Direction == constants.DirectionLong {
+		return price.GreaterThan(reference)
+	}
+	return price.LessThan(reference)
+}
+
 // SizingMode decides how much a position commits.
 type SizingMode string
 

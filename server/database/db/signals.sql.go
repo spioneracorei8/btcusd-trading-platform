@@ -109,3 +109,44 @@ func (q *Queries) InsertSignal(ctx context.Context, arg InsertSignalParams) (Sig
 	)
 	return i, err
 }
+
+const setSignalEntryPrice = `-- name: SetSignalEntryPrice :one
+UPDATE signals
+SET entry_price = $1
+WHERE id = $2 AND entry_price IS NULL
+RETURNING id, symbol, market_type, timeframe, signal_time, direction, strength, entry_price, stop_loss, take_profit, strategy_name, strategy_version, reason, created_at, signal_price
+`
+
+type SetSignalEntryPriceParams struct {
+	EntryPrice pgtype.Numeric
+	ID         pgtype.UUID
+}
+
+// Fill in what a position would have opened at.
+//
+// It is not knowable when the signal is recorded: the decision is taken on a
+// bar's close and the fill is the next bar's open plus slippage, so this is
+// written one bar later. Only ever from null, because a second write would
+// mean two different answers to a question with one.
+func (q *Queries) SetSignalEntryPrice(ctx context.Context, arg SetSignalEntryPriceParams) (Signal, error) {
+	row := q.db.QueryRow(ctx, setSignalEntryPrice, arg.EntryPrice, arg.ID)
+	var i Signal
+	err := row.Scan(
+		&i.ID,
+		&i.Symbol,
+		&i.MarketType,
+		&i.Timeframe,
+		&i.SignalTime,
+		&i.Direction,
+		&i.Strength,
+		&i.EntryPrice,
+		&i.StopLoss,
+		&i.TakeProfit,
+		&i.StrategyName,
+		&i.StrategyVersion,
+		&i.Reason,
+		&i.CreatedAt,
+		&i.SignalPrice,
+	)
+	return i, err
+}
