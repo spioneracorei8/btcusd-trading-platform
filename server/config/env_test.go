@@ -227,6 +227,10 @@ func TestLoadFromInvalidValues(t *testing.T) {
 		{name: "gapcheck not a duration", key: "MARKET_GAPCHECK_INTERVAL", value: "15", wantKey: "MARKET_GAPCHECK_INTERVAL"},
 		{name: "gapcheck too short", key: "MARKET_GAPCHECK_INTERVAL", value: "1s", wantKey: "MARKET_GAPCHECK_INTERVAL"},
 		{name: "heartbeat too long", key: "COLLECTOR_HEARTBEAT_INTERVAL", value: "10m", wantKey: "COLLECTOR_HEARTBEAT_INTERVAL"},
+		{name: "strategy timeframe unsupported", key: "STRATEGY_TIMEFRAME", value: "7m", wantKey: "STRATEGY_TIMEFRAME"},
+		{name: "strategy params not a pair", key: "STRATEGY_PARAMS", value: "fast", wantKey: "STRATEGY_PARAMS"},
+		{name: "strategy params unnamed", key: "STRATEGY_PARAMS", value: "=9", wantKey: "STRATEGY_PARAMS"},
+		{name: "strategy params repeated", key: "STRATEGY_PARAMS", value: "fast=9,fast=21", wantKey: "STRATEGY_PARAMS"},
 	}
 
 	for _, tt := range tests {
@@ -262,6 +266,66 @@ func TestLoadFromNotifyEnabledRequiresCredentials(t *testing.T) {
 	for _, key := range []string{"FCM_PROJECT_ID", "FCM_CREDENTIALS_FILE"} {
 		if !strings.Contains(err.Error(), key) {
 			t.Errorf("error %q does not name %s", err, key)
+		}
+	}
+}
+
+// TestNoStrategyIsConfiguredByDefault.
+//
+// Evaluating a strategy against the live stream has to be a decision somebody
+// made. A default that started doing it would mean a deploy could begin
+// producing signals nobody chose to produce.
+func TestNoStrategyIsConfiguredByDefault(t *testing.T) {
+	cfg, err := config.LoadFrom(env(validEnv()))
+	if err != nil {
+		t.Fatalf("LoadFrom() returned error: %v", err)
+	}
+
+	if cfg.Strategy.Enabled() {
+		t.Errorf("a bare environment configures %q to run live", cfg.Strategy.Name)
+	}
+	if cfg.Strategy.TrendFilter != "" {
+		t.Errorf("Strategy.TrendFilter = %q, want none", cfg.Strategy.TrendFilter)
+	}
+	if len(cfg.Strategy.Params) != 0 {
+		t.Errorf("Strategy.Params = %v, want none", cfg.Strategy.Params)
+	}
+	if cfg.Strategy.Timeframe != constants.Timeframe(constants.DefaultStrategyTimeframe) {
+		t.Errorf("Strategy.Timeframe = %q, want %q",
+			cfg.Strategy.Timeframe, constants.DefaultStrategyTimeframe)
+	}
+}
+
+// TestStrategyParametersAreReadInTheSameFormTheCLITakes.
+//
+// The reconciliation this phase exists to produce compares a live run against
+// the backtest that predicted it. Two ways of spelling a parameter set is two
+// ways for them to differ without anybody meaning them to.
+func TestStrategyParametersAreReadInTheSameFormTheCLITakes(t *testing.T) {
+	e := validEnv()
+	e["STRATEGY_NAME"] = "ema_crossover"
+	e["STRATEGY_TIMEFRAME"] = "1h"
+	e["STRATEGY_PARAMS"] = "fast=9, slow = 21 ,stop_atr_mult=1.5"
+
+	cfg, err := config.LoadFrom(env(e))
+	if err != nil {
+		t.Fatalf("LoadFrom() returned error: %v", err)
+	}
+
+	if !cfg.Strategy.Enabled() {
+		t.Fatal("a named strategy is not enabled")
+	}
+	if cfg.Strategy.Timeframe != constants.Timeframe1h {
+		t.Errorf("Strategy.Timeframe = %q, want 1h", cfg.Strategy.Timeframe)
+	}
+
+	want := map[string]string{"fast": "9", "slow": "21", "stop_atr_mult": "1.5"}
+	if len(cfg.Strategy.Params) != len(want) {
+		t.Fatalf("Strategy.Params = %v, want %v", cfg.Strategy.Params, want)
+	}
+	for name, value := range want {
+		if got := cfg.Strategy.Params[name]; got != value {
+			t.Errorf("Strategy.Params[%q] = %q, want %q", name, got, value)
 		}
 	}
 }

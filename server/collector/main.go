@@ -15,20 +15,31 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"slices"
+	"strings"
 	"syscall"
+	"time"
 
 	"github.com/spioneracorei8/btcusd-trading-platform/server/config"
 	"github.com/spioneracorei8/btcusd-trading-platform/server/constants"
 	"github.com/spioneracorei8/btcusd-trading-platform/server/database"
+	"github.com/spioneracorei8/btcusd-trading-platform/server/helper"
 	"github.com/spioneracorei8/btcusd-trading-platform/server/logger"
+	"github.com/spioneracorei8/btcusd-trading-platform/server/models"
 
+	"github.com/spioneracorei8/btcusd-trading-platform/server/services/candle"
 	_candle_repo "github.com/spioneracorei8/btcusd-trading-platform/server/services/candle/repository"
 	_candle_us "github.com/spioneracorei8/btcusd-trading-platform/server/services/candle/usecase"
 	_datagap_repo "github.com/spioneracorei8/btcusd-trading-platform/server/services/datagap/repository"
 	_datagap_us "github.com/spioneracorei8/btcusd-trading-platform/server/services/datagap/usecase"
+	_indicator_us "github.com/spioneracorei8/btcusd-trading-platform/server/services/indicator/usecase"
 	_market_repo "github.com/spioneracorei8/btcusd-trading-platform/server/services/market/repository"
 	"github.com/spioneracorei8/btcusd-trading-platform/server/services/market/repository/binance"
 	_market_us "github.com/spioneracorei8/btcusd-trading-platform/server/services/market/usecase"
+	_signal "github.com/spioneracorei8/btcusd-trading-platform/server/services/signal"
+	_signal_repo "github.com/spioneracorei8/btcusd-trading-platform/server/services/signal/repository"
+	_signal_us "github.com/spioneracorei8/btcusd-trading-platform/server/services/signal/usecase"
+	_strategy_us "github.com/spioneracorei8/btcusd-trading-platform/server/services/strategy/usecase"
 )
 
 func main() {
@@ -84,6 +95,16 @@ func run(cfg *config.Config, log *slog.Logger) error {
 	//==============================================================
 	candleUs := _candle_us.NewCandleUsecaseImpl(candleRepo)
 	dataGapUs := _datagap_us.NewDataGapUsecaseImpl(dataGapRepo)
+
+	//==============================================================
+	// # LIVE SIGNALS
+	//==============================================================
+	signalUs := _signal_us.NewSignalUsecaseImpl(_signal_repo.NewSignalRepoImpl(pool))
+	evaluator, err := buildEvaluator(cfg, log, candleUs, signalUs)
+	if err != nil {
+		return err
+	}
+
 	marketUs := _market_us.NewMarketUsecaseImpl(
 		_market_us.Config{
 			Symbol:            cfg.Market.Symbol,
@@ -92,9 +113,18 @@ func run(cfg *config.Config, log *slog.Logger) error {
 			BackfillFrom:      cfg.Market.BackfillFrom,
 			GapcheckInterval:  cfg.Market.GapcheckInterval,
 			HeartbeatInterval: cfg.Market.HeartbeatInterval,
+			OnClosedCandle:    closedCandleObserver(log, evaluator),
 		},
 		log, marketDataRepo, collectorStatusRepo, candleUs, dataGapUs,
 	)
+
+	if evaluator != nil {
+		// Warm-up before the stream opens, so the first live bar is decided on
+		// converged values rather than being spent converging them.
+		if err := evaluator.Warmup(ctx); err != nil {
+			return err
+		}
+	}
 
 	//==============================================================
 	// # INGESTION
@@ -112,6 +142,123 @@ func run(cfg *config.Config, log *slog.Logger) error {
 		return fmt.Errorf("run ingestion: %w", err)
 	}
 	return nil
+}
+
+// buildEvaluator constructs the live signal path, or nothing when no strategy
+// is configured.
+func buildEvaluator(
+	cfg *config.Config,
+	log *slog.Logger,
+	candleUs candle.CandleUsecase,
+	signalUs _signal.SignalUsecase,
+) (_signal.SignalEvaluator, error) {
+	if !cfg.Strategy.Enabled() {
+		log.Info("no strategy is configured, so no signals will be evaluated",
+			"hint", "set STRATEGY_NAME to one of "+strings.Join(_strategy_us.Names(), ", "))
+		return nil, nil
+	}
+
+	// Live filtering needs an aligner that can follow a series forward
+	// indefinitely, and the one that exists reads a bounded range for a
+	// backtest. Refusing is the honest answer: running unfiltered while the
+	// configuration asks for a filter would produce signals that the backtest
+	// it is compared against would never have emitted.
+	if cfg.Strategy.TrendFilter != "" {
+		return nil, fmt.Errorf(
+			"STRATEGY_TREND_FILTER is %q, and live trend filtering is not built yet. "+
+				"Leave it empty to run unfiltered, which is a configuration the backtest "+
+				"also supports (--no-trend-filter)", cfg.Strategy.TrendFilter)
+	}
+
+	if !slices.Contains(cfg.Market.Timeframes, cfg.Strategy.Timeframe) {
+		return nil, fmt.Errorf(
+			"STRATEGY_TIMEFRAME is %s but MARKET_TIMEFRAMES does not collect it, "+
+				"so the bars it decides on would never arrive",
+			cfg.Strategy.Timeframe)
+	}
+
+	entry, err := _strategy_us.Lookup(cfg.Strategy.Name)
+	if err != nil {
+		return nil, err
+	}
+
+	// The same construction path the backtest uses, so a live run and the
+	// backtest that predicted it cannot be configured differently.
+	strat, resolved, err := entry.BuildWith(
+		cfg.Strategy.Params,
+		roundTripCostPct(cfg),
+		cfg.Market.Type == constants.MarketTypeSpot,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	values, err := helper.ParamValues(resolved)
+	if err != nil {
+		return nil, err
+	}
+
+	evaluator, err := _signal_us.NewSignalEvaluatorImpl(
+		_signal_us.EvaluatorConfig{
+			Symbol:     cfg.Market.Symbol,
+			MarketType: cfg.Market.Type,
+			Timeframe:  cfg.Strategy.Timeframe,
+			Strategy:   strat,
+			Params:     values,
+			Indicators: _indicator_us.DefaultSetConfig(),
+		},
+		log, candleUs, signalUs,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return evaluator, nil
+}
+
+// roundTripCostPct is what one entry and one exit cost, in percent.
+//
+// The same figure the backtest validates a configuration against, so a
+// strategy that the backtest refused to build cannot be started live.
+func roundTripCostPct(cfg *config.Config) float64 {
+	taker, _ := cfg.Market.FeeTakerPct.Float64()
+	return taker * 2
+}
+
+// closedCandleObserver hands each stored candle to the evaluator.
+//
+// # Why a failure here is logged and not returned
+//
+// The candle is the durable artefact and the signal is derived from it. A
+// signal that could not be written is recoverable — the bar is stored and can
+// be replayed — while a candle that was not written because a signal failed is
+// a hole in the series that only the next gap scan will find. The priority is
+// not close.
+func closedCandleObserver(log *slog.Logger, evaluator _signal.SignalEvaluator) func(context.Context, models.Candle) {
+	if evaluator == nil {
+		return nil
+	}
+
+	return func(ctx context.Context, bar models.Candle) {
+		recorded, ok, err := evaluator.OnClosedCandle(ctx, bar)
+		if err != nil {
+			log.ErrorContext(ctx, "could not record a signal; the candle is stored",
+				"error", err,
+				"timeframe", bar.Timeframe.String(),
+				"close_time", bar.CloseTime.UTC().Format(time.RFC3339))
+			return
+		}
+		if !ok {
+			return
+		}
+
+		log.InfoContext(ctx, "signal recorded",
+			"id", recorded.Id.String(),
+			"direction", recorded.Direction.String(),
+			"signal_time", recorded.SignalTime.UTC().Format(time.RFC3339),
+			"signal_price", recorded.SignalPrice.Decimal.String(),
+			"strategy", recorded.StrategyName,
+		)
+	}
 }
 
 func timeframeNames(cfg *config.Config) []string {

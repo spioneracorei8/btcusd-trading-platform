@@ -3,6 +3,7 @@ package signal
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/spioneracorei8/btcusd-trading-platform/server/constants"
@@ -43,6 +44,53 @@ type Reason struct {
 	// Levels are the advisory stop and target. This system never places
 	// orders; these are numbers for the owner to act on or ignore.
 	Levels LevelReason `json:"levels"`
+
+	// Strategy is what produced the decision, and Params the resolved
+	// parameter set it ran with.
+	//
+	// # Why the parameters are on every signal and not recorded once at startup
+	//
+	// A parameter change between two signals has to be visible in the data.
+	// Recorded once, two incomparable groups sit in one table looking alike,
+	// and every reconciliation silently averages across the change — which
+	// produces a number describing nothing and no way to notice.
+	//
+	// The full resolved set, not only what differs from the defaults: a
+	// default that changes in a later release would otherwise reinterpret
+	// every signal already recorded under it.
+	Strategy StrategyReason `json:"strategy"`
+}
+
+// StrategyReason identifies the code and configuration behind a decision.
+type StrategyReason struct {
+	Name    string `json:"name"`
+	Version string `json:"version"`
+
+	// Params is sorted by name. A slice rather than a map for the same
+	// determinism reason as everything else here: Go randomises map iteration
+	// and two identical decisions must serialise identically.
+	Params []ParamReason `json:"params"`
+}
+
+// ParamReason is one resolved parameter.
+type ParamReason struct {
+	Name  string `json:"name"`
+	Value string `json:"value"`
+}
+
+// SortedParams renders a resolved parameter set for a Reason.
+func SortedParams(values map[string]string) []ParamReason {
+	names := make([]string, 0, len(values))
+	for name := range values {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	out := make([]ParamReason, 0, len(names))
+	for _, name := range names {
+		out = append(out, ParamReason{Name: name, Value: values[name]})
+	}
+	return out
 }
 
 // BarReason identifies the candle behind a signal.
@@ -99,9 +147,11 @@ func BuildReason(
 	bar models.Candle,
 	indicators models.IndicatorSnapshot,
 	entry, stop, target string,
+	strategy StrategyReason,
 ) Reason {
 	return Reason{
-		Trigger: trigger,
+		Strategy: strategy,
+		Trigger:  trigger,
 		Bar: BarReason{
 			OpenTime:  bar.OpenTime.UTC().Format(time.RFC3339),
 			CloseTime: bar.CloseTime.UTC().Format(time.RFC3339),

@@ -100,3 +100,52 @@ func TestInsertSignalSeparatesMarketTypes(t *testing.T) {
 		t.Errorf("MarketType = %q, want %q", stored.MarketType, constants.MarketTypeFutures)
 	}
 }
+
+// TestSignalPriceSurvivesTheRoundTrip.
+//
+// The whole point of the column is that it holds a different number from
+// entry_price. A conversion that dropped it, or one that filled entry_price
+// from it, would leave every other test passing and make the phase 07
+// reconciliation compare a close against a next-bar open while calling the
+// difference slippage.
+func TestSignalPriceSurvivesTheRoundTrip(t *testing.T) {
+	pool := testhelper.NewTestPool(t)
+	const symbol = "TESTSIGNALPRICE"
+	testhelper.CleanupSymbol(t, pool, symbol)
+
+	repo := _signal_repo.NewSignalRepoImpl(pool)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	// What a live signal looks like the moment it is written: the close is
+	// known, the entry is not.
+	decided := decimal.RequireFromString("64123.45000000")
+	stored, err := repo.InsertSignal(ctx, models.Signal{
+		Symbol:          symbol,
+		MarketType:      constants.MarketTypeSpot,
+		Timeframe:       constants.Timeframe4h,
+		SignalTime:      time.Date(2026, 8, 1, 4, 0, 0, 0, time.UTC),
+		Direction:       constants.DirectionLong,
+		Strength:        decimal.NewFromInt(constants.SignalStrengthNotReported),
+		SignalPrice:     decimal.NullDecimal{Decimal: decided, Valid: true},
+		StopLoss:        decimal.NullDecimal{Decimal: decimal.RequireFromString("63900.00000000"), Valid: true},
+		TakeProfit:      decimal.NullDecimal{Decimal: decimal.RequireFromString("64600.00000000"), Valid: true},
+		StrategyName:    "ema_crossover",
+		StrategyVersion: "v1",
+		Reason:          []byte(`{"note":"integration test"}`),
+	})
+	if err != nil {
+		t.Fatalf("InsertSignal() returned error: %v", err)
+	}
+
+	if !stored.SignalPrice.Valid {
+		t.Fatal("signal_price came back NULL after being written")
+	}
+	if !stored.SignalPrice.Decimal.Equal(decided) {
+		t.Errorf("SignalPrice = %s, want %s", stored.SignalPrice.Decimal, decided)
+	}
+	if stored.EntryPrice.Valid {
+		t.Errorf("EntryPrice = %s; it is not knowable until the next bar opens",
+			stored.EntryPrice.Decimal)
+	}
+}

@@ -14,14 +14,16 @@ import (
 const insertSignal = `-- name: InsertSignal :one
 INSERT INTO signals (
     symbol, market_type, timeframe, signal_time, direction, strength,
-    entry_price, stop_loss, take_profit, strategy_name, strategy_version, reason
+    signal_price, entry_price, stop_loss, take_profit,
+    strategy_name, strategy_version, reason
 ) VALUES (
     $1, $2, $3,
     $4, $5, $6,
     $7, $8, $9,
-    $10, $11, $12
+    $10,
+    $11, $12, $13
 )
-RETURNING id, symbol, market_type, timeframe, signal_time, direction, strength, entry_price, stop_loss, take_profit, strategy_name, strategy_version, reason, created_at
+RETURNING id, symbol, market_type, timeframe, signal_time, direction, strength, entry_price, stop_loss, take_profit, strategy_name, strategy_version, reason, created_at, signal_price
 `
 
 type InsertSignalParams struct {
@@ -31,6 +33,7 @@ type InsertSignalParams struct {
 	SignalTime      pgtype.Timestamptz
 	Direction       string
 	Strength        pgtype.Numeric
+	SignalPrice     pgtype.Numeric
 	EntryPrice      pgtype.Numeric
 	StopLoss        pgtype.Numeric
 	TakeProfit      pgtype.Numeric
@@ -50,6 +53,7 @@ func (q *Queries) InsertSignal(ctx context.Context, arg InsertSignalParams) (Sig
 		arg.SignalTime,
 		arg.Direction,
 		arg.Strength,
+		arg.SignalPrice,
 		arg.EntryPrice,
 		arg.StopLoss,
 		arg.TakeProfit,
@@ -73,6 +77,7 @@ func (q *Queries) InsertSignal(ctx context.Context, arg InsertSignalParams) (Sig
 		&i.StrategyVersion,
 		&i.Reason,
 		&i.CreatedAt,
+		&i.SignalPrice,
 	)
 	return i, err
 }

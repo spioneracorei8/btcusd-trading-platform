@@ -39,6 +39,20 @@ const (
 	// One lot is one BTC, so a round trip at the 0.01 lot minimum costs
 	// 25 x 0.01 = 0.25 USD whatever the price level — against 0.63 USD for the
 	// same size on Binance at 63,000.
+	// SignalStrengthNotReported is the strength recorded when a strategy does
+	// not report one.
+	//
+	// The column is NOT NULL and every strategy here emits a decision rather
+	// than a confidence, so some value has to go in. Zero is chosen because no
+	// strategy would ever report zero confidence *and* emit an entry, which
+	// makes it unambiguous — and because a plausible-looking 50 would invite
+	// somebody to average it.
+	SignalStrengthNotReported = 0
+
+	// DefaultStrategyTimeframe is the base timeframe the live signal path
+	// decides on when none is configured.
+	DefaultStrategyTimeframe = "4h"
+
 	DefaultCostModel        = "percentage"
 	DefaultSpreadPoints     = 2500
 	DefaultPointValue       = "0.01"

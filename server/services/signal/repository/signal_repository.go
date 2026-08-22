@@ -44,6 +44,7 @@ func (r *signalRepository) InsertSignal(ctx context.Context, s models.Signal) (m
 		SignalTime:      database.TimestamptzFromTime(s.SignalTime),
 		Direction:       s.Direction.String(),
 		Strength:        database.NumericFromDecimal(s.Strength),
+		SignalPrice:     database.NullNumericFromDecimal(s.SignalPrice),
 		EntryPrice:      database.NullNumericFromDecimal(s.EntryPrice),
 		StopLoss:        database.NullNumericFromDecimal(s.StopLoss),
 		TakeProfit:      database.NullNumericFromDecimal(s.TakeProfit),
@@ -88,6 +89,10 @@ func toSignalModel(row db.Signal) (models.Signal, error) {
 	if err != nil {
 		return models.Signal{}, fmt.Errorf("signal %s: strength: %w", id, err)
 	}
+	signalPrice, err := database.NullDecimalFromNumeric(row.SignalPrice)
+	if err != nil {
+		return models.Signal{}, fmt.Errorf("signal %s: signal_price: %w", id, err)
+	}
 	entry, err := database.NullDecimalFromNumeric(row.EntryPrice)
 	if err != nil {
 		return models.Signal{}, fmt.Errorf("signal %s: entry_price: %w", id, err)
@@ -108,6 +113,7 @@ func toSignalModel(row db.Signal) (models.Signal, error) {
 		Timeframe:       timeframe,
 		SignalTime:      database.TimeFromTimestamptz(row.SignalTime),
 		Direction:       direction,
+		SignalPrice:     signalPrice,
 		Strength:        strength,
 		EntryPrice:      entry,
 		StopLoss:        stop,

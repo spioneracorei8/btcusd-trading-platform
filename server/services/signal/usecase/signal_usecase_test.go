@@ -53,7 +53,8 @@ func validSignal(t *testing.T, bar models.Candle) models.Signal {
 	t.Helper()
 
 	reason, err := signal.BuildReason("test trigger", bar, snapshot(),
-		"27020", "26980", "27100").Encode()
+		"27020", "26980", "27100",
+		signal.StrategyReason{Name: "ema_crossover", Version: "v1"}).Encode()
 	if err != nil {
 		t.Fatalf("encode reason: %v", err)
 	}
@@ -152,7 +153,8 @@ func TestAValidSignalIsStored(t *testing.T) {
 func TestTheReasonCarriesTheWholeSnapshot(t *testing.T) {
 	bar := closedBar()
 	reason := signal.BuildReason("ema(9) crossed above ema(21)", bar, snapshot(),
-		"27020", "26980", "27100")
+		"27020", "26980", "27100",
+		signal.StrategyReason{Name: "ema_crossover", Version: "v1"})
 	reason.Trend = &signal.TrendReason{
 		Filter: "ema_rsi_mtf", Version: "v1", Bias: "bullish",
 		Confidence: 0.62, Ready: true,
@@ -202,12 +204,14 @@ func TestTheReasonCarriesTheWholeSnapshot(t *testing.T) {
 func TestTheReasonIsDeterministic(t *testing.T) {
 	bar := closedBar()
 
-	first, err := signal.BuildReason("t", bar, snapshot(), "1", "2", "3").Encode()
+	first, err := signal.BuildReason("t", bar, snapshot(), "1", "2", "3",
+		signal.StrategyReason{Name: "ema_crossover", Version: "v1"}).Encode()
 	if err != nil {
 		t.Fatalf("Encode() returned error: %v", err)
 	}
 	for i := range 20 {
-		next, err := signal.BuildReason("t", bar, snapshot(), "1", "2", "3").Encode()
+		next, err := signal.BuildReason("t", bar, snapshot(), "1", "2", "3",
+			signal.StrategyReason{Name: "ema_crossover", Version: "v1"}).Encode()
 		if err != nil {
 			t.Fatalf("Encode() returned error on render %d: %v", i, err)
 		}
@@ -224,7 +228,8 @@ func TestNaNIndicatorsAreRefused(t *testing.T) {
 	broken := snapshot()
 	broken.RSI = math.NaN()
 
-	if _, err := signal.BuildReason("t", bar, broken, "1", "2", "3").Encode(); err == nil {
+	if _, err := signal.BuildReason("t", bar, broken, "1", "2", "3",
+		signal.StrategyReason{Name: "ema_crossover", Version: "v1"}).Encode(); err == nil {
 		t.Fatal("a reason with a NaN indicator encoded successfully")
 	}
 }

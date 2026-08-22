@@ -26,6 +26,21 @@ type Config struct {
 	BackfillFrom      time.Time
 	GapcheckInterval  time.Duration
 	HeartbeatInterval time.Duration
+
+	// OnClosedCandle is called after a closed candle has been durably stored,
+	// and is optional.
+	//
+	// # Why a callback rather than a dependency
+	//
+	// Ingestion's job is to keep the candle series complete, and it must not
+	// acquire an opinion about what else the system does with a bar. A
+	// signal evaluator passed in here would make the collector unable to
+	// collect if signalling were misconfigured.
+	//
+	// It is called *after* the write, never instead of it, and whatever it
+	// returns is its own business: the candle is the durable artefact and a
+	// failure downstream of it must not cost one.
+	OnClosedCandle func(ctx context.Context, bar models.Candle)
 }
 
 type marketUsecase struct {
@@ -261,8 +276,31 @@ func (u *marketUsecase) writeLoop(ctx context.Context, closed <-chan models.Cand
 		if err := u.candles.SaveCandle(ctx, c); err != nil {
 			return storeCandleError(c, err)
 		}
+		u.observeClosed(ctx, c)
 	}
 	return nil
+}
+
+// observeClosed hands a stored candle to whatever is watching.
+//
+// Guarded rather than assumed, because most processes configure nothing here,
+// and a panic in an observer must not take ingestion down with it — the
+// collector host has one job and it is not this one.
+func (u *marketUsecase) observeClosed(ctx context.Context, c models.Candle) {
+	if u.cfg.OnClosedCandle == nil {
+		return
+	}
+
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			u.log.ErrorContext(ctx, "the closed-candle observer panicked; ingestion continues",
+				"panic", recovered,
+				"timeframe", c.Timeframe.String(),
+				"open_time", c.OpenTime.UTC().Format(time.RFC3339))
+		}
+	}()
+
+	u.cfg.OnClosedCandle(ctx, c)
 }
 
 // drainRemaining finishes candles that were already accepted when the context

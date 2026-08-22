@@ -53,7 +53,8 @@ func TestASignalSurvivesTheRoundTripThroughPostgres(t *testing.T) {
 
 	reason := signal.BuildReason("ema(9) crossed above ema(21)", bar,
 		models.IndicatorSnapshot{OpenTime: open, EMA: 64010.5, RSI: 58.25, ATR: 130.75, VWAP: 64005},
-		"64080.25", "63950.00", "64470.50")
+		"64080.25", "63950.00", "64470.50",
+		signal.StrategyReason{Name: "ema_crossover", Version: "v1"})
 	reason.Trend = &signal.TrendReason{
 		Filter: "ema_rsi_mtf", Version: "v1", Bias: "bullish",
 		Confidence: 0.62, Ready: true,
@@ -174,7 +175,8 @@ func TestAForminBarProducesNoRowAtAll(t *testing.T) {
 
 	encoded, err := signal.BuildReason("test", forming,
 		models.IndicatorSnapshot{OpenTime: open, EMA: 1, RSI: 2, ATR: 3, VWAP: 4},
-		"1", "2", "3").Encode()
+		"1", "2", "3",
+		signal.StrategyReason{Name: "ema_crossover", Version: "v1"}).Encode()
 	if err != nil {
 		t.Fatalf("Encode() returned error: %v", err)
 	}

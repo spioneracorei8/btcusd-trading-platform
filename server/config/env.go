@@ -111,6 +111,34 @@ type Market struct {
 	HeartbeatInterval time.Duration
 }
 
+// Strategy is the live signal path's configuration.
+//
+// # Why an empty name means no live evaluation
+//
+// Beginning to evaluate a strategy against the live stream should be a
+// decision somebody made, not something that happened because a deploy went
+// out. An unset STRATEGY_NAME leaves the collector doing exactly what it did
+// before: collecting candles and nothing else.
+type Strategy struct {
+	// Name is the registered strategy to run, or empty for none.
+	Name string
+
+	// Timeframe is the base timeframe it decides on. It must be one of
+	// MARKET_TIMEFRAMES, or the candles it needs are not being collected.
+	Timeframe constants.Timeframe
+
+	// Params are the overrides, in the same key=value form --param takes, so
+	// live and backtest are configured through one mechanism and one set of
+	// names.
+	Params map[string]string
+
+	// TrendFilter is the filter to gate signals with, or empty for none.
+	TrendFilter string
+}
+
+// Enabled reports whether a strategy is configured to run live.
+func (s Strategy) Enabled() bool { return s.Name != "" }
+
 // Notify holds push notification settings. Phase 01 only carries the values;
 // no notification client is wired up yet.
 type Notify struct {
@@ -127,6 +155,7 @@ type Config struct {
 	App      App
 	Database Database
 	Market   Market
+	Strategy Strategy
 	Notify   Notify
 
 	// EnvFile is the .env that filled any gaps in the environment, or empty
@@ -216,6 +245,13 @@ func LoadFrom(lookup helper.LookupFunc, opts ...Option) (*Config, error) {
 			GapcheckInterval:  l.duration("MARKET_GAPCHECK_INTERVAL", constants.DefaultGapcheckInterval, time.Minute, 24*time.Hour),
 			HeartbeatInterval: l.duration("COLLECTOR_HEARTBEAT_INTERVAL", constants.DefaultHeartbeatInterval, time.Second, time.Minute),
 		},
+		Strategy: Strategy{
+			Name:        l.optionalString("STRATEGY_NAME", ""),
+			Timeframe:   l.optionalTimeframe("STRATEGY_TIMEFRAME", constants.DefaultStrategyTimeframe),
+			Params:      l.params("STRATEGY_PARAMS"),
+			TrendFilter: l.optionalString("STRATEGY_TREND_FILTER", ""),
+		},
+
 		Notify: Notify{
 			Enabled:            l.optionalBool("NOTIFY_ENABLED", false),
 			FCMProjectId:       l.optionalString("FCM_PROJECT_ID", ""),
@@ -498,6 +534,52 @@ func (l *loader) makerFeePct(key string) decimal.Decimal {
 		return decimal.Zero
 	}
 	return d
+}
+
+// optionalTimeframe parses a timeframe, falling back to a default.
+func (l *loader) optionalTimeframe(key, def string) constants.Timeframe {
+	v := l.optionalString(key, def)
+	parsed, err := constants.ParseTimeframe(v)
+	if err != nil {
+		l.invalidf(key, "%v", err)
+		return ""
+	}
+	return parsed
+}
+
+// params reads a comma-separated key=value list.
+//
+// The same names --param takes, so a live run and the backtest that predicted
+// it are configured through one mechanism. A malformed entry is an error
+// rather than a skipped pair: a typo that silently ran the default is exactly
+// what phase 06 made impossible on the command line, and it must not become
+// possible again through the environment.
+func (l *loader) params(key string) map[string]string {
+	raw := l.optionalString(key, "")
+	if raw == "" {
+		return nil
+	}
+
+	out := map[string]string{}
+	for _, pair := range strings.Split(raw, ",") {
+		pair = strings.TrimSpace(pair)
+		if pair == "" {
+			continue
+		}
+
+		name, value, found := strings.Cut(pair, "=")
+		name = strings.TrimSpace(name)
+		if !found || name == "" {
+			l.invalidf(key, "%q is not name=value", pair)
+			return nil
+		}
+		if _, dup := out[name]; dup {
+			l.invalidf(key, "%s is given twice", name)
+			return nil
+		}
+		out[name] = strings.TrimSpace(value)
+	}
+	return out
 }
 
 // costModel parses percentage or spread.

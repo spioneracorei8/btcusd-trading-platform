@@ -27,6 +27,20 @@ type Signal struct {
 	// Strength is a 0-100 confidence score, numeric(5,2) in the database.
 	Strength decimal.Decimal
 
+	// SignalPrice is the close the strategy decided on, and EntryPrice what a
+	// position would have been opened at.
+	//
+	// # Why these are two fields
+	//
+	// A decision taken on a bar's close cannot also fill on it, so the
+	// backtest fills at the next bar's open plus slippage. Recording the close
+	// as the entry would put that difference into every live-against-backtest
+	// comparison as though it were slippage, permanently.
+	//
+	// SignalPrice is known immediately and is what a notification quotes.
+	// EntryPrice stays unset until the next bar opens.
+	SignalPrice decimal.NullDecimal
+
 	// Advisory levels only. This system never places orders.
 	EntryPrice decimal.NullDecimal
 	StopLoss   decimal.NullDecimal
