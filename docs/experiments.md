@@ -913,3 +913,92 @@ of the arithmetic, not a market observation. Ignore that section in runs 1–7.
 - **Cost sweep:** 1.0x +4.78% (PF 1.13) | 1.5x -0.46% (PF 0.99) | 2.0x -0.67% (PF 0.98)
 - **Verdict:** fail — Profit factor (1.13, needs > 1.30), Trades in the development period (69, needs >= 200)
 - **Note:** _(to fill in — what you learned, not what you hoped)_
+
+### 59. 2026-08-22 — ema_crossover v1 (4h)
+
+- **Dataset:** dev (2023-01-01 .. 2024-12-31), `--allow-gaps=skip`
+- **Parameters:** trailing_atr_mult=2 trailing_activate_atr=1, timeframe 4h
+- **Filter:** none (unfiltered)
+- **Sizing:** risk 1% of equity, 20x notional limit
+- **Net return after costs:** -2.6757%
+- **Profit factor / max drawdown / trades:** 0.92 / -8.07% / 69
+- **Costs as share of gross profit:** n/a — gross is not positive (costs 51)
+- **Concentration (best 5):** 29.68%
+- **Cost sweep:** 1.0x -2.68% (PF 0.92) | 1.5x -2.83% (PF 0.91) | 2.0x -3.76% (PF 0.89)
+- **Verdict:** fail — Net return after costs (-2.68%, needs > 0.00%), Profit factor (0.92, needs > 1.30), Trades in the development period (69, needs >= 200), Total costs as a share of gross profit (not measurable)
+- **Note:** _(to fill in — what you learned, not what you hoped)_
+
+### 60. 2026-08-22 — ema_crossover v1 (4h)
+
+- **Dataset:** dev (2023-01-01 .. 2024-12-31), `--allow-gaps=skip`
+- **Parameters:** trailing_atr_mult=4 trailing_activate_atr=2, timeframe 4h
+- **Filter:** none (unfiltered)
+- **Sizing:** risk 1% of equity, 20x notional limit
+- **Net return after costs:** +5.1403%
+- **Profit factor / max drawdown / trades:** 1.14 / -10.25% / 69
+- **Costs as share of gross profit:** 32% (costs 49 vs gross profit 152)
+- **Concentration (best 5):** 23.27%
+- **Cost sweep:** 1.0x +5.14% (PF 1.14) | 1.5x -0.10% (PF 1.00) | 2.0x -0.31% (PF 0.99)
+- **Verdict:** fail — Profit factor (1.14, needs > 1.30), Trades in the development period (69, needs >= 200)
+- **Note:** _(to fill in — what you learned, not what you hoped)_
+
+### 61. 2026-08-22 — ema_crossover v1 (4h)
+
+- **Dataset:** dev (2023-01-01 .. 2024-12-31), `--allow-gaps=skip`
+- **Parameters:** max_holding_bars=12, timeframe 4h
+- **Filter:** none (unfiltered)
+- **Sizing:** risk 1% of equity, 20x notional limit
+- **Net return after costs:** -4.8279%
+- **Profit factor / max drawdown / trades:** 0.86 / -10.31% / 70
+- **Costs as share of gross profit:** n/a — gross is not positive (costs 50)
+- **Concentration (best 5):** 29.86%
+- **Cost sweep:** 1.0x -4.83% (PF 0.86) | 1.5x -4.74% (PF 0.86) | 2.0x -5.87% (PF 0.83)
+- **Verdict:** fail — Net return after costs (-4.83%, needs > 0.00%), Profit factor (0.86, needs > 1.30), Trades in the development period (70, needs >= 200), Total costs as a share of gross profit (not measurable)
+- **Note:** _(to fill in — what you learned, not what you hoped)_
+
+### 62. 2026-08-22 — ema_crossover v1 (4h)
+
+- **Dataset:** dev (2023-01-01 .. 2024-12-31), `--allow-gaps=skip`
+- **Parameters:** target_atr_mult=2, timeframe 4h
+- **Filter:** none (unfiltered)
+- **Sizing:** risk 1% of equity, 20x notional limit
+- **Net return after costs:** -3.9432%
+- **Profit factor / max drawdown / trades:** 0.88 / -11.21% / 66
+- **Costs as share of gross profit:** n/a — gross is not positive (costs 48)
+- **Concentration (best 5):** 21.40%
+- **Cost sweep:** 1.0x -3.94% (PF 0.88) | 1.5x -4.57% (PF 0.86) | 2.0x -5.64% (PF 0.83)
+- **Verdict:** fail — Net return after costs (-3.94%, needs > 0.00%), Profit factor (0.88, needs > 1.30), Trades in the development period (66, needs >= 200), Total costs as a share of gross profit (not measurable)
+- **Note:** _(to fill in — what you learned, not what you hoped)_
+
+### 63. 2026-08-22 — ema_crossover v1 (4h)
+
+- **Dataset:** dev (2023-01-01 .. 2024-12-31), `--allow-gaps=skip`
+- **Parameters:** target_atr_mult=2.5, timeframe 4h
+- **Filter:** none (unfiltered)
+- **Sizing:** risk 1% of equity, 20x notional limit
+- **Net return after costs:** +6.3450%
+- **Profit factor / max drawdown / trades:** 1.19 / -9.49% / 70
+- **Costs as share of gross profit:** 28% (costs 50 vs gross profit 177)
+- **Concentration (best 5):** 20.19%
+- **Cost sweep:** 1.0x +6.34% (PF 1.19) | 1.5x -0.23% (PF 0.99) | 2.0x -1.45% (PF 0.96)
+- **Verdict:** fail — Profit factor (1.19, needs > 1.30), Trades in the development period (70, needs >= 200)
+- **Note:** _(to fill in — what you learned, not what you hoped)_
+
+### 64. 2026-08-22 — ema_crossover v1 (4h)
+
+- **Dataset:** dev (2023-01-01 .. 2024-12-31), `--allow-gaps=skip`
+- **Parameters:** target_atr_mult=2.5, timeframe 4h
+- **Filter:** none (unfiltered)
+- **Sizing:** risk 1% of equity, 20x notional limit
+- **Neighbourhood:**
+  |  | target_atr_mult | net return | trades | PF |
+  |---|---|---|---|---|
+  | base | 2.5 | +6.34% | 70 | 1.1857 |
+  | target_atr_mult-1 | 2.25 | -1.42% | 66 | 0.9570 |
+  | target_atr_mult+1 | 2.75 | -0.32% | 67 | 0.9910 |
+- **Net return after costs:** +6.3450%
+- **Profit factor / max drawdown / trades:** 1.19 / -9.49% / 70
+- **Costs as share of gross profit:** 28% (costs 50 vs gross profit 177)
+- **Concentration (best 5):** 20.19%
+- **Verdict:** fail — Profit factor (1.19, needs > 1.30), Trades in the development period (70, needs >= 200)
+- **Note:** _(to fill in — what you learned, not what you hoped)_
