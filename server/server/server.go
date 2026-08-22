@@ -17,6 +17,7 @@ import (
 	"syscall"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/shopspring/decimal"
 
 	"github.com/spioneracorei8/btcusd-trading-platform/server/config"
 	"github.com/spioneracorei8/btcusd-trading-platform/server/constants"
@@ -24,6 +25,8 @@ import (
 	"github.com/spioneracorei8/btcusd-trading-platform/server/middleware"
 	"github.com/spioneracorei8/btcusd-trading-platform/server/routes"
 
+	"github.com/spioneracorei8/btcusd-trading-platform/server/services/backtest"
+	_backtest_us "github.com/spioneracorei8/btcusd-trading-platform/server/services/backtest/usecase"
 	_candle_repo "github.com/spioneracorei8/btcusd-trading-platform/server/services/candle/repository"
 	_candle_us "github.com/spioneracorei8/btcusd-trading-platform/server/services/candle/usecase"
 	_datagap_repo "github.com/spioneracorei8/btcusd-trading-platform/server/services/datagap/repository"
@@ -31,10 +34,14 @@ import (
 	_health_handler "github.com/spioneracorei8/btcusd-trading-platform/server/services/health/handler"
 	_health_repo "github.com/spioneracorei8/btcusd-trading-platform/server/services/health/repository"
 	_health_us "github.com/spioneracorei8/btcusd-trading-platform/server/services/health/usecase"
+	_indicator_us "github.com/spioneracorei8/btcusd-trading-platform/server/services/indicator/usecase"
 	_market_handler "github.com/spioneracorei8/btcusd-trading-platform/server/services/market/handler"
 	_market_repo "github.com/spioneracorei8/btcusd-trading-platform/server/services/market/repository"
 	"github.com/spioneracorei8/btcusd-trading-platform/server/services/market/repository/binance"
 	_market_us "github.com/spioneracorei8/btcusd-trading-platform/server/services/market/usecase"
+	_outcome_handler "github.com/spioneracorei8/btcusd-trading-platform/server/services/outcome/handler"
+	_outcome_repo "github.com/spioneracorei8/btcusd-trading-platform/server/services/outcome/repository"
+	_outcome_us "github.com/spioneracorei8/btcusd-trading-platform/server/services/outcome/usecase"
 )
 
 // Server holds everything the API process needs to start.
@@ -98,11 +105,36 @@ func (s *Server) Start() error {
 		s.Logger, marketDataRepo, collectorStatusRepo, candleUs, dataGapUs,
 	)
 
+	// The engine is what makes the reconciliation a comparison rather than a
+	// report: it replays the same strategy and parameters over the same
+	// period the live signals came from.
+	engine := _backtest_us.NewBacktestUsecaseImpl(
+		s.Logger, candleUs, dataGapUs, _indicator_us.DefaultSetConfig(),
+	)
+
+	reconcileUs, err := _outcome_us.NewReconcileUsecaseImpl(
+		_outcome_repo.NewReconcileRepoImpl(pool), s.Logger,
+		_outcome_us.ReconcileConfig{
+			Backtest: _outcome_us.EngineComparer{
+				Engine:     engine,
+				Timeframe:  s.Config.Strategy.Timeframe,
+				Costs:      apiCosts(s.Config),
+				Equity:     decimal.RequireFromString(constants.DefaultInitialEquity),
+				MarketType: s.Config.Market.Type,
+			},
+		},
+	)
+	if err != nil {
+		return err
+	}
+
 	//==============================================================
 	// # HANDLERS
 	//==============================================================
 	healthHandler := _health_handler.NewHealthHandlerImpl(healthUs, s.Logger)
 	marketHandler := _market_handler.NewMarketHandlerImpl(marketUs, s.Logger)
+	outcomeHandler := _outcome_handler.NewOutcomeHandlerImpl(
+		reconcileUs, s.Logger, s.Config.Market.Symbol, s.Config.Market.Type)
 
 	//==============================================================
 	// # API
@@ -110,6 +142,7 @@ func (s *Server) Start() error {
 	route := routes.NewRoute(router, middl)
 	route.RegisterHealthHandler(healthHandler)
 	route.RegisterMarketHandler(marketHandler)
+	route.RegisterOutcomeHandler(outcomeHandler)
 
 	// A database that is not up yet must not stop the API from starting:
 	// /ready is what reports the truth about it.
@@ -172,4 +205,17 @@ func (s *Server) listen(ctx context.Context, handler http.Handler) error {
 
 	s.Logger.Info("api stopped cleanly")
 	return nil
+}
+
+// apiCosts is the venue as configured, in the engine's own type.
+//
+// The same values the collector follows outcomes with and the backtest CLI is
+// run with. A reconciliation using a different cost model would report a
+// divergence that is an artefact of its own configuration.
+func apiCosts(cfg *config.Config) backtest.Costs {
+	return backtest.Costs{
+		FeeTakerPct:   cfg.Market.FeeTakerPct,
+		TickSize:      cfg.Market.TickSize,
+		SlippageTicks: cfg.Market.SlippageTicks,
+	}
 }

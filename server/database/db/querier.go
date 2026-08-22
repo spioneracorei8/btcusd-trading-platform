@@ -135,6 +135,28 @@ type Querier interface {
 	// Delivered. attempts counts the one that worked, so a row that took four
 	// tries says four rather than three.
 	MarkNotificationSent(ctx context.Context, arg MarkNotificationSentParams) (Notification, error)
+	// The live side of the comparison, grouped so only like is compared with like.
+	//
+	// # Why the parameter set is part of the grouping key
+	//
+	// A parameter change between two signals leaves two incomparable groups in
+	// one table looking alike. Averaging across it produces a number describing
+	// nothing — and it would look exactly like a number describing something.
+	// The resolved set is recorded on every signal for this reason, and it is
+	// grouped on here rather than assumed constant.
+	//
+	// # What counts
+	//
+	// Invalidated outcomes are counted and then excluded from every statistic.
+	// Their window has missing data, so whether they would have won is not
+	// knowable; a win rate that quietly counted guesses would be worse than one
+	// with a smaller sample. They are still reported, because a period where many
+	// signals were invalidated is itself a finding.
+	//
+	// A win is a positive return after modelled cost, which is the same
+	// definition the backtest's win rate uses. Scalping at these timeframes is
+	// dominated by cost, so a gross figure would flatter every strategy equally.
+	ReconcileLiveGroups(ctx context.Context, arg ReconcileLiveGroupsParams) ([]ReconcileLiveGroupsRow, error)
 	// Counts one failed attempt and records why. Returns the updated row so the
 	// caller can see whether the retry budget is spent.
 	RecordGapFillAttempt(ctx context.Context, arg RecordGapFillAttemptParams) (DataGap, error)

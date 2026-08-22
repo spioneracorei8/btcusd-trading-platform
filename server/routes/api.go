@@ -11,6 +11,7 @@ import (
 	"github.com/spioneracorei8/btcusd-trading-platform/server/middleware"
 	"github.com/spioneracorei8/btcusd-trading-platform/server/services/health"
 	"github.com/spioneracorei8/btcusd-trading-platform/server/services/market"
+	"github.com/spioneracorei8/btcusd-trading-platform/server/services/outcome"
 )
 
 type route struct {
@@ -49,4 +50,13 @@ func (r *route) RegisterHealthHandler(handler health.HealthHandler) {
 // loopback behind the VPS firewall.
 func (r *route) RegisterMarketHandler(handler market.MarketHandler) {
 	r.router.Get("/internal/market/status", handler.Status)
+}
+
+// RegisterOutcomeHandler mounts the reconciliation endpoint.
+//
+// Internal for the same reason as the market status, and for one more: it is
+// expensive. The backtest half replays history, so this is a page somebody
+// opens deliberately rather than something polled.
+func (r *route) RegisterOutcomeHandler(handler outcome.OutcomeHandler) {
+	r.router.Get("/internal/signals/reconciliation", handler.Reconciliation)
 }

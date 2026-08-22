@@ -101,6 +101,45 @@ const (
 	// OutcomeBatchSize is how many open signals one resolution pass takes.
 	OutcomeBatchSize = 50
 
+	// DefaultInitialEquity is the starting balance a run is scored against,
+	// in quote currency.
+	//
+	// It matters to the reconciliation only through position sizing: the two
+	// sides must be sized the same way or their average wins are not
+	// comparable. It is the backtest CLI's own default, so a reconciliation
+	// and a hand-run backtest agree without anybody passing a flag.
+	DefaultInitialEquity = "10000"
+
+	// ReconcileMinResolved is how many resolved signals a group needs before
+	// its numbers are treated as saying anything.
+	//
+	// A hundred, and the report says so rather than leaving the reader to
+	// judge. At the 4h strategy's rate of about a tenth of a trade a day that
+	// is nearly three years — which is better known up front than discovered
+	// after acting on twenty trades. If the wait is unacceptable the answer is
+	// a higher-frequency strategy, not a smaller sample.
+	ReconcileMinResolved = 100
+
+	// ReconcileWinRateTolerance is how far below the backtest's win rate the
+	// live one has to fall before it is called a divergence, as a fraction.
+	//
+	// Ten points. Below that, the difference between a hundred-signal sample
+	// and a backtest over years is ordinary variation, and firing on it would
+	// train the reader to ignore the report.
+	ReconcileWinRateTolerance = 0.10
+
+	// ReconcileEntryTolerancePct is how far the live average entry may sit
+	// from the backtest's before slippage is suspected, in percent.
+	ReconcileEntryTolerancePct = 0.05
+
+	// ReconcileWinSizeTolerance is the share of the backtest's average win
+	// below which the live one is called smaller.
+	ReconcileWinSizeTolerance = 0.80
+
+	// ReconcileSignalCountTolerance is the share of the engine's signal count
+	// below which the live count is called short.
+	ReconcileSignalCountTolerance = 0.80
+
 	// DefaultSignalMode records signals and delivers nothing.
 	//
 	// Silent is the default deliberately. Beginning to send alerts should be a

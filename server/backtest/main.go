@@ -324,7 +324,8 @@ func parseFlags(args []string) (options, error) {
 	fs.StringVar(&opts.allowGaps, "allow-gaps", backtest.GapHalt.String(),
 		"what to do about unfilled gaps: halt, skip or ignore")
 	fs.StringVar(&opts.out, "out", "", "write the JSON report to this path")
-	fs.StringVar(&opts.equity, "initial-equity", "10000", "starting balance in quote currency")
+	fs.StringVar(&opts.equity, "initial-equity", constants.DefaultInitialEquity,
+		"starting balance in quote currency")
 	fs.StringVar(&opts.trendFilter, "trend-filter", _trend_us.FilterName,
 		"multi-timeframe trend filter to gate entries with")
 	fs.BoolVar(&opts.noTrendFilter, "no-trend-filter", false,

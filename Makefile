@@ -73,7 +73,23 @@ help: ## Show this help
 
 .PHONY: build
 build: ## Build every binary into server/bin
-	cd $(SERVER) && go build -trimpath -o bin/api . && go build -trimpath -o bin/ ./collector ./backtest
+	cd $(SERVER) && go build -trimpath -o bin/api . && go build -trimpath -o bin/ ./collector ./backtest ./reconcile
+
+# The two read-only CLIs. Both take their flags through ARGS:
+#
+#   make backtest  ARGS="--strategy ema_crossover --timeframe 4h"
+#   make reconcile ARGS="--days 90"
+#
+# Neither places an order. backtest scores history; reconcile compares live
+# outcomes against what the engine says the same period should have produced.
+
+.PHONY: backtest
+backtest: require-db-url ## Run the backtest CLI (flags via ARGS)
+	cd $(SERVER) && go run ./backtest $(ARGS)
+
+.PHONY: reconcile
+reconcile: require-db-url ## Compare live outcomes against backtest predictions (flags via ARGS)
+	cd $(SERVER) && go run ./reconcile $(ARGS)
 
 # Tests run with the trenddebug tag so the cross-timeframe look-ahead
 # assertion is compiled in and panics loudly. Shipped binaries build without
