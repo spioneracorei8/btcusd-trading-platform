@@ -24,7 +24,6 @@ import (
 	"github.com/spioneracorei8/btcusd-trading-platform/server/constants"
 	"github.com/spioneracorei8/btcusd-trading-platform/server/database"
 	"github.com/spioneracorei8/btcusd-trading-platform/server/logger"
-	"github.com/spioneracorei8/btcusd-trading-platform/server/services/backtest"
 	_backtest_us "github.com/spioneracorei8/btcusd-trading-platform/server/services/backtest/usecase"
 	_candle_repo "github.com/spioneracorei8/btcusd-trading-platform/server/services/candle/repository"
 	_candle_us "github.com/spioneracorei8/btcusd-trading-platform/server/services/candle/usecase"
@@ -103,7 +102,7 @@ func run() int {
 					_indicator_us.DefaultSetConfig(),
 				),
 				Timeframe:  cfg.Strategy.Timeframe,
-				Costs:      reconcileCosts(cfg),
+				Costs:      cfg.BacktestCosts(),
 				Equity:     decimal.RequireFromString(constants.DefaultInitialEquity),
 				MarketType: cfg.Market.Type,
 			},
@@ -185,13 +184,4 @@ func (o options) params(cfg *config.Config) (outcome.ReconcileParams, error) {
 			params.To.Format(time.RFC3339), params.From.Format(time.RFC3339))
 	}
 	return params, nil
-}
-
-// reconcileCosts is the venue as configured, in the engine's own type.
-func reconcileCosts(cfg *config.Config) backtest.Costs {
-	return backtest.Costs{
-		FeeTakerPct:   cfg.Market.FeeTakerPct,
-		TickSize:      cfg.Market.TickSize,
-		SlippageTicks: cfg.Market.SlippageTicks,
-	}
 }

@@ -135,28 +135,24 @@ type Querier interface {
 	// Delivered. attempts counts the one that worked, so a row that took four
 	// tries says four rather than three.
 	MarkNotificationSent(ctx context.Context, arg MarkNotificationSentParams) (Notification, error)
-	// The live side of the comparison, grouped so only like is compared with like.
+	// Every live signal in the window, one row each, with what became of it.
 	//
-	// # Why the parameter set is part of the grouping key
+	// # Why rows rather than an aggregate
 	//
-	// A parameter change between two signals leaves two incomparable groups in
-	// one table looking alike. Averaging across it produces a number describing
-	// nothing — and it would look exactly like a number describing something.
-	// The resolved set is recorded on every signal for this reason, and it is
-	// grouped on here rather than assumed constant.
+	// The report needs three views of the same population: everything the live
+	// path produced, the subset the engine also emitted, and the surplus it did
+	// not. Which signals fall in which is only knowable after the engine has run,
+	// so the split cannot be pushed into SQL without running the engine first and
+	// passing its timestamps back in.
 	//
-	// # What counts
+	// One projection and one aggregation in Go is the alternative to three
+	// aggregates that must agree. The window is bounded and the strategies here
+	// trade at most a few times a day, so the row count is small.
 	//
-	// Invalidated outcomes are counted and then excluded from every statistic.
-	// Their window has missing data, so whether they would have won is not
-	// knowable; a win rate that quietly counted guesses would be worse than one
-	// with a smaller sample. They are still reported, because a period where many
-	// signals were invalidated is itself a finding.
-	//
-	// A win is a positive return after modelled cost, which is the same
-	// definition the backtest's win rate uses. Scalping at these timeframes is
-	// dominated by cost, so a gross figure would flatter every strategy equally.
-	ReconcileLiveGroups(ctx context.Context, arg ReconcileLiveGroupsParams) ([]ReconcileLiveGroupsRow, error)
+	// The grouping key comes back with each row: a parameter change between two
+	// signals leaves two incomparable groups, and averaging across it produces a
+	// number describing nothing.
+	ReconcileLiveSignals(ctx context.Context, arg ReconcileLiveSignalsParams) ([]ReconcileLiveSignalsRow, error)
 	// Counts one failed attempt and records why. Returns the updated row so the
 	// caller can see whether the retry budget is spent.
 	RecordGapFillAttempt(ctx context.Context, arg RecordGapFillAttemptParams) (DataGap, error)

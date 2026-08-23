@@ -35,8 +35,16 @@ type groupResponse struct {
 	Version  string          `json:"version"`
 	Params   []paramResponse `json:"params"`
 
+	// Live is everything the live path produced. Matched is the subset the
+	// engine also emitted and is what Backtest is comparable with; Surplus is
+	// the rest, which has no counterpart and is reported on its own terms.
 	Live     sideResponse  `json:"live"`
+	Matched  *sideResponse `json:"matched"`
+	Surplus  *sideResponse `json:"surplus"`
 	Backtest *sideResponse `json:"backtest"`
+
+	// SurplusNote explains why a surplus is expected rather than alarming.
+	SurplusNote string `json:"surplus_note,omitempty"`
 
 	// Unavailable says why there is no backtest side. A report that quietly
 	// dropped the comparison would look like one that found no divergence.
@@ -118,7 +126,8 @@ func toResponse(report outcome.Reconciliation) reconciliationResponse {
 		Groups:      groups,
 		Note: "There is no total across groups. Only like is compared with like: " +
 			"averaging across a strategy version or a parameter change produces a " +
-			"number describing nothing.",
+			"number describing nothing. Within a group, only `matched` is comparable " +
+			"with `backtest`.",
 	}
 }
 
@@ -144,9 +153,22 @@ func toGroupResponse(g outcome.ReconciledGroup) groupResponse {
 		Sample:      toSampleResponse(g.Sample),
 		Divergences: divergences,
 	}
-	if g.Backtest != nil {
-		side := toSideResponse(*g.Backtest)
-		out.Backtest = &side
+	for _, pair := range []struct {
+		from *outcome.Side
+		into **sideResponse
+	}{
+		{g.Backtest, &out.Backtest},
+		{g.Matched, &out.Matched},
+		{g.Surplus, &out.Surplus},
+	} {
+		if pair.from == nil {
+			continue
+		}
+		side := toSideResponse(*pair.from)
+		*pair.into = &side
+	}
+	if g.Surplus != nil && g.Surplus.Signals > 0 {
+		out.SurplusNote = outcome.SurplusNote
 	}
 	return out
 }

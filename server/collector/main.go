@@ -31,7 +31,6 @@ import (
 	"github.com/spioneracorei8/btcusd-trading-platform/server/logger"
 	"github.com/spioneracorei8/btcusd-trading-platform/server/models"
 
-	"github.com/spioneracorei8/btcusd-trading-platform/server/services/backtest"
 	"github.com/spioneracorei8/btcusd-trading-platform/server/services/candle"
 	_candle_repo "github.com/spioneracorei8/btcusd-trading-platform/server/services/candle/repository"
 	_candle_us "github.com/spioneracorei8/btcusd-trading-platform/server/services/candle/usecase"
@@ -129,7 +128,7 @@ func run(cfg *config.Config, log *slog.Logger) error {
 		_outcome_us.Config{
 			Symbol:     cfg.Market.Symbol,
 			MarketType: cfg.Market.Type,
-			Costs:      liveCosts(cfg),
+			Costs:      cfg.BacktestCosts(),
 			ExpiryBars: cfg.Outcome.ExpiryBars,
 			Interval:   cfg.Outcome.Interval,
 		},
@@ -315,20 +314,6 @@ func buildEvaluator(
 		return nil, err
 	}
 	return evaluator, nil
-}
-
-// liveCosts is the venue as configured, in the engine's own type.
-//
-// The same values the backtest is run with, so a live signal's entry is
-// filled by the same rule with the same slippage. A follower using its own
-// idea of cost would make every comparison between prediction and outcome a
-// comparison of two cost models.
-func liveCosts(cfg *config.Config) backtest.Costs {
-	return backtest.Costs{
-		FeeTakerPct:   cfg.Market.FeeTakerPct,
-		TickSize:      cfg.Market.TickSize,
-		SlippageTicks: cfg.Market.SlippageTicks,
-	}
 }
 
 // roundTripCostPct is what one entry and one exit cost, in percent.

@@ -227,6 +227,13 @@ type wouldHave struct {
 	// return above is then better than a real fill would have been, because
 	// the exit is priced at a level the market did not trade at.
 	GappedPast string `json:"gapped_past,omitempty"`
+
+	// CostModel is the venue's rule the cost above was computed under, so a
+	// row can be read without knowing what the configuration said at the time.
+	CostModel string `json:"cost_model"`
+
+	// CostExcludes names anything the cost could not include.
+	CostExcludes string `json:"cost_excludes,omitempty"`
 }
 
 // accountFor computes what the backtest makes of this trade, and notes any
@@ -252,10 +259,11 @@ func (u *outcomeUsecase) accountFor(
 	}
 	gross := move.Div(w.entry).Mul(hundred)
 
-	// Both sides pay taker: an entry crossing the spread, and a stop or an
-	// expiry leaving as a market order. A target could rest, but the live
-	// path places nothing, so assuming the cheaper side would flatter it.
-	cost := u.cfg.Costs.FeeTakerPct.Mul(decimal.NewFromInt(2))
+	// The venue's own rule, not a percentage assumed here. This used to be
+	// FeeTakerPct x 2 regardless of the configured model, so a spread venue
+	// had every live signal priced with a fee it does not charge — and the
+	// reconciliation reported that as a difference in the strategy.
+	cost, commissionExcluded := u.cfg.Costs.RoundTripPctOf(w.entry)
 
 	accounting := wouldHave{
 		EntryPrice:     w.entry.String(),
@@ -267,6 +275,15 @@ func (u *outcomeUsecase) accountFor(
 		CostPct:        cost.StringFixed(4),
 		AmbiguousBar:   w.ambiguous,
 		GappedPast:     string(w.gappedPast),
+		CostModel:      u.cfg.Costs.CostModel().String(),
+	}
+
+	// A per-lot commission cannot be expressed as a share of price without a
+	// size, and the live path sizes nothing. Saying so is the difference
+	// between a figure that is short and a figure that is short in a way
+	// nobody can see.
+	if commissionExcluded {
+		accounting.CostExcludes = "per-lot commission, which needs a position size the live path does not have"
 	}
 
 	encoded, err := json.Marshal(accounting)

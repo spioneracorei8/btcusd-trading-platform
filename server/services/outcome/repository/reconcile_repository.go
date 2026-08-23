@@ -4,12 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"math"
 
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/shopspring/decimal"
 
+	"github.com/spioneracorei8/btcusd-trading-platform/server/constants"
 	"github.com/spioneracorei8/btcusd-trading-platform/server/database"
 	"github.com/spioneracorei8/btcusd-trading-platform/server/database/db"
 	"github.com/spioneracorei8/btcusd-trading-platform/server/services/outcome"
@@ -24,96 +24,77 @@ func NewReconcileRepoImpl(pool *pgxpool.Pool) outcome.ReconcileRepository {
 	return &reconcileRepository{queries: db.New(pool)}
 }
 
-// LiveGroups aggregates resolved outcomes by strategy, version and parameters.
-func (r *reconcileRepository) LiveGroups(
+// LiveSignals returns every live signal in the window, one row each.
+func (r *reconcileRepository) LiveSignals(
 	ctx context.Context, params outcome.ReconcileParams,
-) ([]outcome.ReconciledGroup, error) {
-	rows, err := r.queries.ReconcileLiveGroups(ctx, db.ReconcileLiveGroupsParams{
+) ([]outcome.LiveSignal, error) {
+	rows, err := r.queries.ReconcileLiveSignals(ctx, db.ReconcileLiveSignalsParams{
 		Symbol:     params.Symbol,
 		MarketType: params.MarketType.String(),
 		FromTime:   database.TimestamptzFromTime(params.From),
 		ToTime:     database.TimestamptzFromTime(params.To),
 	})
 	if err != nil {
-		return nil, fmt.Errorf("reconcile live groups: %w", err)
+		return nil, fmt.Errorf("reconcile live signals: %w", err)
 	}
 
-	groups := make([]outcome.ReconciledGroup, 0, len(rows))
+	out := make([]outcome.LiveSignal, 0, len(rows))
 	for _, row := range rows {
-		group, err := toReconciledGroup(row)
+		signal, err := toLiveSignal(row)
 		if err != nil {
 			return nil, err
 		}
-		groups = append(groups, group)
+		out = append(out, signal)
 	}
-	return groups, nil
+	return out, nil
 }
 
-// toReconciledGroup converts one aggregate row.
-func toReconciledGroup(row db.ReconcileLiveGroupsRow) (outcome.ReconciledGroup, error) {
+// toLiveSignal converts one row.
+func toLiveSignal(row db.ReconcileLiveSignalsRow) (outcome.LiveSignal, error) {
+	at := database.TimeFromTimestamptz(row.SignalTime)
+
+	status, err := constants.ParseOutcomeStatus(row.Status)
+	if err != nil {
+		return outcome.LiveSignal{}, fmt.Errorf("live signal at %s: %w", at, err)
+	}
 	values, err := decodeParams(row.Params)
 	if err != nil {
-		return outcome.ReconciledGroup{}, fmt.Errorf(
-			"reconcile %s %s: %w", row.StrategyName, row.StrategyVersion, err)
+		return outcome.LiveSignal{}, fmt.Errorf("live signal at %s: %w", at, err)
 	}
 
-	side := outcome.Side{
-		Signals:     int(row.Signals),
-		StillOpen:   int(row.StillOpen),
-		Invalidated: int(row.Invalidated),
-		Resolved:    int(row.Resolved),
-		Targets:     int(row.Targets),
-		Stops:       int(row.Stops),
-		Expired:     int(row.Expired),
-		Noted:       int(row.Noted),
-		Wins:        int(row.Wins),
-		Losses:      int(row.Losses),
-		First:       database.TimeFromTimestamptz(row.FirstSignal),
-		Last:        database.TimeFromTimestamptz(row.LastSignal),
-	}
-
-	// NaN rather than zero when nothing has resolved. A zero would read as a
-	// strategy that never wins, which is a different claim from "nothing has
-	// finished yet".
-	side.WinRate = math.NaN()
-	if side.Resolved > 0 {
-		side.WinRate = float64(side.Wins) / float64(side.Resolved)
+	signal := outcome.LiveSignal{
+		Strategy:           row.StrategyName,
+		Version:            row.StrategyVersion,
+		Params:             values,
+		At:                 at,
+		Status:             status,
+		BarsHeld:           row.BarsHeld,
+		RestedOnAssumption: row.RestedOnAssumption,
 	}
 
 	for _, field := range []struct {
-		into  *decimal.Decimal
+		into  *decimal.NullDecimal
 		from  pgtype.Numeric
 		label string
 	}{
-		{&side.AverageWinPct, row.AverageWinPct, "average_win_pct"},
-		{&side.AverageLossPct, row.AverageLossPct, "average_loss_pct"},
-		{&side.AverageCostPct, row.AverageCostPct, "average_cost_pct"},
-		{&side.AverageEntryPrice, row.AverageEntryPrice, "average_entry_price"},
-		{&side.AverageBarsHeld, row.AverageBarsHeld, "average_bars_held"},
+		{&signal.EntryPrice, row.EntryPrice, "entry_price"},
+		{&signal.NetReturnPct, row.NetReturnPct, "net_return_pct"},
+		{&signal.CostPct, row.CostPct, "cost_pct"},
 	} {
-		// An average over no rows is SQL NULL, which is zero here and is the
-		// right reading: there were none to average.
 		value, err := database.NullDecimalFromNumeric(field.from)
 		if err != nil {
-			return outcome.ReconciledGroup{}, fmt.Errorf(
-				"reconcile %s: %s: %w", row.StrategyName, field.label, err)
+			return outcome.LiveSignal{}, fmt.Errorf("live signal at %s: %s: %w", at, field.label, err)
 		}
-		*field.into = value.Decimal
+		*field.into = value
 	}
-
-	return outcome.ReconciledGroup{
-		Strategy: row.StrategyName,
-		Version:  row.StrategyVersion,
-		Params:   values,
-		Live:     side,
-	}, nil
+	return signal, nil
 }
 
-// decodeParams reads the resolved parameter set recorded on the signals.
+// decodeParams reads the resolved parameter set recorded on the signal.
 //
-// It is the grouping key, so a set that will not decode is an error rather
-// than an empty list: silently grouping two different parameter sets under
-// "no parameters" is the exact mistake this key exists to prevent.
+// It is part of the grouping key, so a set that will not decode is an error
+// rather than an empty list: silently grouping two different parameter sets
+// under "no parameters" is the exact mistake this key exists to prevent.
 func decodeParams(raw []byte) ([]outcome.ParamValue, error) {
 	if len(raw) == 0 {
 		return nil, nil

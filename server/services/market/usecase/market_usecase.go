@@ -273,10 +273,9 @@ func (u *marketUsecase) writeLoop(ctx context.Context, closed <-chan models.Cand
 		if ctx.Err() != nil {
 			return u.drainRemaining(ctx, c, closed)
 		}
-		if err := u.candles.SaveCandle(ctx, c); err != nil {
-			return storeCandleError(c, err)
+		if err := u.store(ctx, c); err != nil {
+			return err
 		}
-		u.observeClosed(ctx, c)
 	}
 	return nil
 }
@@ -315,14 +314,36 @@ func (u *marketUsecase) drainRemaining(ctx context.Context, current models.Candl
 	drainCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), constants.ShutdownTimeout)
 	defer cancel()
 
-	if err := u.candles.SaveCandle(drainCtx, current); err != nil {
-		return storeCandleError(current, err)
+	if err := u.store(drainCtx, current); err != nil {
+		return err
 	}
 	for c := range closed {
-		if err := u.candles.SaveCandle(drainCtx, c); err != nil {
-			return storeCandleError(c, err)
+		if err := u.store(drainCtx, c); err != nil {
+			return err
 		}
 	}
+	return nil
+}
+
+// store writes one closed candle and shows it to whatever is watching.
+//
+// # Why both paths go through here
+//
+// They did not, and that was a defect. writeLoop called the observer and
+// drainRemaining did not, so every candle still buffered at SIGTERM was
+// stored without ever being shown to the strategy — and the signals for those
+// bars were lost permanently, because warm-up replays stored history and
+// deliberately emits nothing. The candle series stayed complete and nothing
+// was logged, which is the same shape as the writer defect phase 02 fixed:
+// confirmed work dropped on cancellation, invisibly.
+//
+// One function is the fix. A third path added later gets the observer by
+// construction rather than by whoever writes it remembering.
+func (u *marketUsecase) store(ctx context.Context, c models.Candle) error {
+	if err := u.candles.SaveCandle(ctx, c); err != nil {
+		return storeCandleError(c, err)
+	}
+	u.observeClosed(ctx, c)
 	return nil
 }
 

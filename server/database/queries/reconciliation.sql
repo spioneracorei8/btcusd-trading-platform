@@ -1,71 +1,42 @@
--- name: ReconcileLiveGroups :many
--- The live side of the comparison, grouped so only like is compared with like.
+-- name: ReconcileLiveSignals :many
+-- Every live signal in the window, one row each, with what became of it.
 --
--- # Why the parameter set is part of the grouping key
+-- # Why rows rather than an aggregate
 --
--- A parameter change between two signals leaves two incomparable groups in
--- one table looking alike. Averaging across it produces a number describing
--- nothing — and it would look exactly like a number describing something.
--- The resolved set is recorded on every signal for this reason, and it is
--- grouped on here rather than assumed constant.
+-- The report needs three views of the same population: everything the live
+-- path produced, the subset the engine also emitted, and the surplus it did
+-- not. Which signals fall in which is only knowable after the engine has run,
+-- so the split cannot be pushed into SQL without running the engine first and
+-- passing its timestamps back in.
 --
--- # What counts
+-- One projection and one aggregation in Go is the alternative to three
+-- aggregates that must agree. The window is bounded and the strategies here
+-- trade at most a few times a day, so the row count is small.
 --
--- Invalidated outcomes are counted and then excluded from every statistic.
--- Their window has missing data, so whether they would have won is not
--- knowable; a win rate that quietly counted guesses would be worse than one
--- with a smaller sample. They are still reported, because a period where many
--- signals were invalidated is itself a finding.
---
--- A win is a positive return after modelled cost, which is the same
--- definition the backtest's win rate uses. Scalping at these timeframes is
--- dominated by cost, so a gross figure would flatter every strategy equally.
+-- The grouping key comes back with each row: a parameter change between two
+-- signals leaves two incomparable groups, and averaging across it produces a
+-- number describing nothing.
 SELECT
     s.strategy_name,
     s.strategy_version,
     (COALESCE(s.reason -> 'strategy' -> 'params', '[]'::jsonb))::jsonb AS params,
 
-    count(*)                                            AS signals,
-    count(*) FILTER (WHERE o.status = 'open')           AS still_open,
-    count(*) FILTER (WHERE o.status = 'invalidated')    AS invalidated,
-    count(*) FILTER (WHERE o.status IN ('target', 'stop', 'expired')) AS resolved,
+    s.signal_time,
+    s.entry_price,
 
-    count(*) FILTER (WHERE o.status = 'target')         AS targets,
-    count(*) FILTER (WHERE o.status = 'stop')           AS stops,
-    count(*) FILTER (WHERE o.status = 'expired')        AS expired,
+    o.status,
+    o.bars_held,
+    (o.divergence_note <> '') AS rested_on_assumption,
 
-    -- Resolutions that rested on an assumption rather than on the data: a bar
-    -- reaching both levels, or an entry that gapped past one.
-    count(*) FILTER (WHERE o.status IN ('target', 'stop', 'expired')
-                       AND o.divergence_note <> '')     AS noted,
-
-    count(*) FILTER (WHERE o.status IN ('target', 'stop', 'expired')
-                       AND (o.backtest_would_have ->> 'net_return_pct')::numeric > 0) AS wins,
-    count(*) FILTER (WHERE o.status IN ('target', 'stop', 'expired')
-                       AND (o.backtest_would_have ->> 'net_return_pct')::numeric <= 0) AS losses,
-
-    (avg((o.backtest_would_have ->> 'net_return_pct')::numeric)
-        FILTER (WHERE o.status IN ('target', 'stop', 'expired')
-                  AND (o.backtest_would_have ->> 'net_return_pct')::numeric > 0))::numeric  AS average_win_pct,
-    (avg((o.backtest_would_have ->> 'net_return_pct')::numeric)
-        FILTER (WHERE o.status IN ('target', 'stop', 'expired')
-                  AND (o.backtest_would_have ->> 'net_return_pct')::numeric <= 0))::numeric AS average_loss_pct,
-
-    -- The cost actually modelled on these signals, so the report quotes what
-    -- was applied rather than what the configuration currently says.
-    (avg((o.backtest_would_have ->> 'cost_pct')::numeric)
-        FILTER (WHERE o.status IN ('target', 'stop', 'expired')))::numeric        AS average_cost_pct,
-
-    (avg(s.entry_price) FILTER (WHERE s.entry_price IS NOT NULL))::numeric        AS average_entry_price,
-    (avg(o.bars_held) FILTER (WHERE o.status IN ('target', 'stop', 'expired')))::numeric AS average_bars_held,
-
-    (min(s.signal_time))::timestamptz AS first_signal,
-    (max(s.signal_time))::timestamptz AS last_signal
+    -- Null while a signal is open, and for one whose window had missing data:
+    -- what happened there is not knowable, and a number would make a guess
+    -- look like a measurement.
+    ((o.backtest_would_have ->> 'net_return_pct')::numeric) AS net_return_pct,
+    ((o.backtest_would_have ->> 'cost_pct')::numeric)       AS cost_pct
 FROM signals s
 JOIN signal_outcomes o ON o.signal_id = s.id
 WHERE s.symbol = sqlc.arg(symbol)
   AND s.market_type = sqlc.arg(market_type)
   AND s.signal_time >= sqlc.arg(from_time)
   AND s.signal_time <= sqlc.arg(to_time)
-GROUP BY s.strategy_name, s.strategy_version, COALESCE(s.reason -> 'strategy' -> 'params', '[]'::jsonb)
-ORDER BY s.strategy_name, s.strategy_version, min(s.signal_time);
+ORDER BY s.strategy_name, s.strategy_version, s.signal_time;

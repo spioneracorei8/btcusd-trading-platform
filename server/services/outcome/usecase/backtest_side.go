@@ -35,16 +35,16 @@ type EngineComparer struct {
 // Compare re-runs one group's strategy and parameters over the same window.
 func (c EngineComparer) Compare(
 	ctx context.Context, params outcome.ReconcileParams, group outcome.ReconciledGroup,
-) (outcome.Side, error) {
+) (Comparison, error) {
 	if c.Engine == nil {
-		return outcome.Side{}, fmt.Errorf("no engine to run")
+		return Comparison{}, fmt.Errorf("no engine to run")
 	}
 
 	entry, err := _strategy_us.Lookup(group.Strategy)
 	if err != nil {
 		// A strategy this binary no longer ships. Said plainly, because the
 		// alternative is a report that quietly omits the comparison.
-		return outcome.Side{}, err
+		return Comparison{}, err
 	}
 
 	overrides := make(map[string]string, len(group.Params))
@@ -61,7 +61,7 @@ func (c EngineComparer) Compare(
 		c.MarketType == constants.MarketTypeSpot,
 	)
 	if err != nil {
-		return outcome.Side{}, fmt.Errorf(
+		return Comparison{}, fmt.Errorf(
 			"rebuild %s with the parameters recorded on its signals: %w", group.Strategy, err)
 	}
 
@@ -69,7 +69,7 @@ func (c EngineComparer) Compare(
 		// The code has moved since these signals were produced. Comparing
 		// against it is comparing against a different strategy, and doing so
 		// silently would attribute the difference to the market.
-		return outcome.Side{}, fmt.Errorf(
+		return Comparison{}, fmt.Errorf(
 			"these signals came from %s %s and this binary ships %s; "+
 				"the comparison would be against different code",
 			group.Strategy, group.Version, strat.Version())
@@ -88,10 +88,19 @@ func (c EngineComparer) Compare(
 		Strategy:      strat,
 	})
 	if err != nil {
-		return outcome.Side{}, fmt.Errorf("replay %s over the same period: %w", group.Strategy, err)
+		return Comparison{}, fmt.Errorf("replay %s over the same period: %w", group.Strategy, err)
 	}
 
-	return sideFrom(result), nil
+	// The instants the engine entered at. A live signal's signal_time is the
+	// close it decided on, which is the open it would have filled at — the
+	// same instant the engine records as EntryTime — so the two match exactly
+	// when both sides decided on the same bar.
+	entryAt := make([]time.Time, 0, len(result.Trades))
+	for _, trade := range result.Trades {
+		entryAt = append(entryAt, trade.EntryTime.UTC())
+	}
+
+	return Comparison{Side: sideFrom(result), EntryAt: entryAt}, nil
 }
 
 // sideFrom turns an engine result into the comparison's own shape.

@@ -6,26 +6,29 @@ Mutation testing during construction caught a great deal. This audit looks for
 what it could not — the things that need a second component, a real database,
 a shutdown, or a comparison between two implementations to become visible.
 
-**Nothing has been fixed.** Each finding says what breaks, how it would be
-noticed, and whether it is a bug or a design decision. Three of them are
-design calls that are not mine to make.
+Each finding says what breaks, how it would be noticed, and whether it is a bug
+or a design decision.
+
+**Status.** The report below was written before any fix, and is left as it was
+written. Four findings were triaged for repair and are now fixed — see
+"After triage" at the end. The rest stand as recorded.
 
 ---
 
 ## Summary
 
-| # | Area | Finding | Class | Severity |
-|---|---|---|---|---|
-| 1 | A2 | Live is position-blind; the engine is not. The two compare different populations | design | **high** |
-| 2 | A2 | Cost model dropped in three places; live and reconciliation silently price as percentage | bug | **high** |
-| 3 | A2 | The follower's accounting hardcodes `taker × 2` regardless of cost model | bug | **high** |
-| 4 | A1 | Shutdown drain stores candles without evaluating them; signals lost silently | bug | medium |
-| 5 | A2/A4 | A missing bar immediately after a signal is not detected; the outcome is fabricated | bug | medium |
-| 6 | A3 | Nothing reports the health of the signal pipeline | gap | medium |
-| 7 | A1 | A signal can exist with no notification queued, forever | design | low |
-| 8 | A4 | `SaveOutcome` has no status guard; two collectors could overwrite a resolution | bug | low |
-| 9 | A1 | Observer can run on a cancelled context; the signal is lost but logged | bug | low |
-| 10 | A2 | Resolution is one-way: a backfill that arrives later cannot correct an outcome | design | low |
+| # | Area | Finding | Class | Severity | Status |
+|---|---|---|---|---|---|
+| 1 | A2 | Live is position-blind; the engine is not. The two compare different populations | design | **high** | **fixed** |
+| 2 | A2 | Cost model dropped in three places; live and reconciliation silently price as percentage | bug | **high** | **fixed** |
+| 3 | A2 | The follower's accounting hardcodes `taker × 2` regardless of cost model | bug | **high** | **fixed** |
+| 4 | A1 | Shutdown drain stores candles without evaluating them; signals lost silently | bug | medium | **fixed** |
+| 5 | A2/A4 | A missing bar immediately after a signal is not detected; the outcome is fabricated | bug | medium | **fixed** |
+| 6 | A3 | Nothing reports the health of the signal pipeline | gap | medium | phase 08 B2 |
+| 7 | A1 | A signal can exist with no notification queued, forever | design | low | open |
+| 8 | A4 | `SaveOutcome` has no status guard; two collectors could overwrite a resolution | bug | low | open |
+| 9 | A1 | Observer can run on a cancelled context; the signal is lost but logged | bug | low | open |
+| 10 | A2 | Resolution is one-way: a backfill that arrives later cannot correct an outcome | design | low | open |
 
 Clean, with nothing found: delivery/resolution contention, connection handling
 across the Firebase call, restart-safety of outcome resolution, `entry_price`
@@ -382,3 +385,86 @@ notifications, and the collector state already available.
 - Shared-rule claims re-verified by mutation: breaking one rule must break both
   sides
 - Nothing fixed
+
+---
+
+# After triage
+
+Four findings were repaired. Everything else stands as recorded above.
+
+## Finding 2 and 3 — the cost model
+
+There is now **one** place a `Costs` is built: `Config.BacktestCosts()`. The
+backtest CLI, the collector, the API and the reconcile CLI all call it, and
+`grep 'backtest.Costs{'` outside config and tests returns nothing.
+
+That alone would only fix today's omission, so the guarantee is structural:
+`TestEveryCostFieldIsWiredFromConfiguration` loads a config with every cost
+variable set to a distinctive non-zero value, reflects over the returned
+struct, and fails on any field left at its zero value. A field added to `Costs`
+and not wired now fails immediately instead of taking a default. Verified by
+removing `Model`, `MinLot` and `FeeMakerPct` in turn — each is caught.
+
+The follower's accounting no longer hardcodes the fee. `Costs.RoundTripPctOf`
+is shared with the engine's own `Costs` and branches on `CostModel()`, so a
+spread venue is priced as a spread. Where a cost genuinely cannot be expressed
+— a per-lot commission has no meaning without a size, and the live path sizes
+nothing — the row says so in `cost_excludes` rather than reporting a figure
+that is quietly short. Each outcome row also records the model it was priced
+under.
+
+## Finding 4 — the shutdown drain
+
+`writeLoop` and `drainRemaining` now both go through one `store`, which saves
+and then observes. A third path added later inherits the observer rather than
+depending on whoever writes it remembering.
+
+The test pins the invariant rather than the call: *a candle that was stored was
+seen*. Reintroducing the exact defect — the drain saving directly — fails it,
+and so does removing the observer from the normal path.
+
+## Finding 5 — the missing first bar
+
+`windowIsHoled` now checks that `bars[0]` opens exactly at `signal_time`,
+which is where the entry must fill. Both variants from the report are covered:
+the one the gapped-past-level note happened to catch, and the silent one.
+
+## Finding 1 — the population split
+
+Chosen: **compare only signals that have a counterpart.** No shadow position,
+which would have simulated state the live path does not have and opened a new
+way for the two sides to drift.
+
+The engine comparer now returns the instants it entered at alongside its
+statistics. Each group's live signals are split into:
+
+- **matched** — the engine also entered on that bar. This is the only column
+  compared against the backtest, and the only one the divergence readings and
+  the sample banner are computed from.
+- **surplus** — the engine did not. Reported on its own, with the reason: it is
+  structural, and an entry the engine asked for and then refused for lot size
+  or leverage lands here too, because it produced no trade to compare against.
+
+The reconciliation is now one aggregation (`outcome.SideOf`) called three
+times, over rows the repository projects, rather than three SQL aggregates
+that would have to agree.
+
+`TestASurplusCannotMaskAShortfall` is the point of the change: 140 matched
+against 200 the engine entered on is a 30% shortfall, and 60 surplus signals
+bring the live total to exactly 200 — so comparing totals finds nothing wrong.
+The split reports it.
+
+Verified end to end: fifty planted signals, none of which the engine entered
+on, all land in the surplus with the matched column empty and the comparison
+correctly declining to say anything.
+
+## Also corrected
+
+ADR 0023's command used `--json`, a flag the backtest CLI does not have, and a
+`jq` path that does not exist. The whole value of that ADR is that somebody
+runs the command later. It now reads `--out /tmp/run.json` with the right
+paths, and has been run:
+
+```
+{ "beyond_stop": 0, "beyond_target": 0, "trades": 141 }
+```

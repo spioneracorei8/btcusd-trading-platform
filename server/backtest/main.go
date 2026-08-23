@@ -448,20 +448,7 @@ func buildParams(opts options, cfg *config.Config) (backtest.RunParams, error) {
 		From:          from.UTC(),
 		To:            to.UTC(),
 		InitialEquity: equity,
-		Costs: backtest.Costs{
-			FeeTakerPct:   cfg.Market.FeeTakerPct,
-			FeeMakerPct:   cfg.Market.FeeMakerPct,
-			SlippageTicks: cfg.Market.SlippageTicks,
-			TickSize:      cfg.Market.TickSize,
-
-			Model:            cfg.Market.CostModel,
-			SpreadPoints:     cfg.Market.SpreadPoints,
-			PointValue:       cfg.Market.PointValue,
-			ContractSize:     cfg.Market.ContractSize,
-			MinLot:           cfg.Market.MinLot,
-			LotStep:          cfg.Market.LotStep,
-			CommissionPerLot: cfg.Market.CommissionPerLot,
-		},
+		Costs:         cfg.BacktestCosts(),
 		Execution: backtest.Execution{
 			EntryOrderType:   cfg.Market.EntryOrderType,
 			ExitOrderType:    cfg.Market.ExitOrderType,

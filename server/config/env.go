@@ -19,6 +19,7 @@ import (
 
 	"github.com/spioneracorei8/btcusd-trading-platform/server/constants"
 	"github.com/spioneracorei8/btcusd-trading-platform/server/helper"
+	"github.com/spioneracorei8/btcusd-trading-platform/server/services/backtest"
 )
 
 // App holds process-wide settings.
@@ -733,4 +734,36 @@ func (l *loader) err() error {
 	}
 	errs = append(errs, l.invalid...)
 	return errors.Join(errs...)
+}
+
+// BacktestCosts is the venue as configured, in the engine's own type.
+//
+// # Why every process builds its costs here and nowhere else
+//
+// There used to be four constructors: the backtest CLI set all eleven fields
+// and the collector, the API and the reconcile CLI each set three. An empty
+// Model reads as percentage, so a spread-configured venue was priced as
+// percentage-with-taker everywhere except the CLI — and the reconciliation
+// then reported a cost-model difference as a verdict on the strategy.
+//
+// One constructor makes that particular mistake impossible to make again, and
+// a field added to Costs is now missed in one place rather than three. The
+// test in server/architecture_test.go walks the returned struct and fails on
+// any field left at its zero value, so adding a field without wiring it here
+// fails immediately.
+func (c *Config) BacktestCosts() backtest.Costs {
+	return backtest.Costs{
+		FeeTakerPct:   c.Market.FeeTakerPct,
+		FeeMakerPct:   c.Market.FeeMakerPct,
+		SlippageTicks: c.Market.SlippageTicks,
+		TickSize:      c.Market.TickSize,
+
+		Model:            c.Market.CostModel,
+		SpreadPoints:     c.Market.SpreadPoints,
+		PointValue:       c.Market.PointValue,
+		ContractSize:     c.Market.ContractSize,
+		MinLot:           c.Market.MinLot,
+		LotStep:          c.Market.LotStep,
+		CommissionPerLot: c.Market.CommissionPerLot,
+	}
 }

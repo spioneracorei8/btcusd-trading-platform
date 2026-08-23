@@ -275,6 +275,15 @@ func newFollower(
 	t *testing.T, sig models.Signal, series []models.Candle, expiryBars int,
 ) *follower {
 	t.Helper()
+	return newFollowerWithCosts(t, sig, series, expiryBars, testCosts())
+}
+
+// newFollowerWithCosts is the same over a venue the caller chooses.
+func newFollowerWithCosts(
+	t *testing.T, sig models.Signal, series []models.Candle, expiryBars int,
+	costs backtest.Costs,
+) *follower {
+	t.Helper()
 
 	store := newStore()
 	store.open(sig.Id)
@@ -291,7 +300,7 @@ func newFollower(
 		_outcome_us.Config{
 			Symbol:     "BTCUSDT",
 			MarketType: constants.MarketTypeSpot,
-			Costs:      testCosts(),
+			Costs:      costs,
 			ExpiryBars: expiryBars,
 			Now:        func() time.Time { return followStart.Add(24 * time.Hour) },
 		},
@@ -887,5 +896,143 @@ func TestAnEntryThatGappedPastItsTargetIsMarkedToo(t *testing.T) {
 	}
 	if !strings.Contains(stored.DivergenceNote, "target") {
 		t.Errorf("the note does not name the target: %q", stored.DivergenceNote)
+	}
+}
+
+// TestTheAccountingUsesTheConfiguredCostModel.
+//
+// This used to be FeeTakerPct x 2 regardless of the model, so a spread venue
+// had every live signal priced with a fee it does not charge — and the
+// reconciliation reported that as a difference in the strategy rather than in
+// the configuration.
+func TestTheAccountingUsesTheConfiguredCostModel(t *testing.T) {
+	sig := aLongSignal("95", "110")
+	series := []models.Candle{
+		bar(0, "101", "102", "100", "101"),
+		bar(1, "103", "111", "102", "110"),
+	}
+
+	// A spread venue: 200 points at 0.05 is 10.00 of price, so a round trip
+	// gives up 10.00 against an entry near 101 — about 9.9%.
+	spread := testCosts()
+	spread.Model = constants.CostModelSpread
+	spread.SpreadPoints = 200
+	spread.PointValue = decimal.RequireFromString("0.05")
+
+	f := newFollowerWithCosts(t, sig, series, 48, spread)
+	stored := f.run(t)
+
+	var accounting struct {
+		CostPct      string `json:"cost_pct"`
+		CostModel    string `json:"cost_model"`
+		CostExcludes string `json:"cost_excludes"`
+	}
+	if err := json.Unmarshal(stored.BacktestWouldHave, &accounting); err != nil {
+		t.Fatalf("the accounting is not readable: %v", err)
+	}
+
+	if accounting.CostModel != constants.CostModelSpread.String() {
+		t.Errorf("cost_model = %q, want spread", accounting.CostModel)
+	}
+	if accounting.CostPct == "0.1000" {
+		t.Fatal("the spread venue was priced with the percentage taker fee")
+	}
+
+	// 10.00 of price over an entry of 101.01.
+	entry := decimal.NewFromInt(101).Add(slip())
+	want := decimal.NewFromInt(10).Div(entry).Mul(decimal.NewFromInt(100))
+	if accounting.CostPct != want.StringFixed(4) {
+		t.Errorf("cost_pct = %q, want %q", accounting.CostPct, want.StringFixed(4))
+	}
+	if accounting.CostExcludes != "" {
+		t.Errorf("nothing was excluded but the row says %q", accounting.CostExcludes)
+	}
+}
+
+// TestAPerLotCommissionIsReportedAsExcluded.
+//
+// It cannot be expressed as a share of price without a size, and the live path
+// sizes nothing. A figure that is quietly short is worse than one that says so.
+func TestAPerLotCommissionIsReportedAsExcluded(t *testing.T) {
+	sig := aLongSignal("95", "110")
+	series := []models.Candle{
+		bar(0, "101", "102", "100", "101"),
+		bar(1, "103", "111", "102", "110"),
+	}
+
+	withCommission := testCosts()
+	withCommission.CommissionPerLot = decimal.NewFromInt(6)
+	withCommission.ContractSize = decimal.NewFromInt(1)
+
+	f := newFollowerWithCosts(t, sig, series, 48, withCommission)
+	stored := f.run(t)
+
+	var accounting struct {
+		CostExcludes string `json:"cost_excludes"`
+	}
+	if err := json.Unmarshal(stored.BacktestWouldHave, &accounting); err != nil {
+		t.Fatalf("the accounting is not readable: %v", err)
+	}
+	if !strings.Contains(accounting.CostExcludes, "commission") {
+		t.Errorf("cost_excludes = %q, does not say the commission is missing", accounting.CostExcludes)
+	}
+}
+
+// TestAMissingFirstBarInvalidatesTheWindow.
+//
+// The bar the entry should have filled on is absent and nothing recorded it as
+// a gap. Taking the entry from whatever bar came next produces a trade
+// resolved against prices that have nothing to do with the decision — and when
+// the price has not moved much, no other check notices.
+//
+// Both variants are covered: the one the gapped-past-level note happens to
+// catch, and the one it does not.
+func TestAMissingFirstBarInvalidatesTheWindow(t *testing.T) {
+	tests := map[string][]models.Candle{
+		"the price jumped while the bar was missing": {
+			bar(1, "140", "141", "139", "140"),
+			bar(2, "140", "141", "139", "140"),
+		},
+		"the price barely moved, so nothing else would notice": {
+			bar(1, "101", "102", "100", "101"),
+			bar(2, "101", "111", "100", "110"),
+		},
+	}
+
+	for name, series := range tests {
+		t.Run(name, func(t *testing.T) {
+			sig := aLongSignal("95", "110")
+			f := newFollower(t, sig, series, 48)
+
+			stored := f.run(t)
+
+			if stored.Status != constants.OutcomeInvalidated {
+				t.Errorf("Status = %q, want invalidated: the entry would have come from a bar "+
+					"an hour after the decision", stored.Status)
+			}
+			if stored.Status.Measurable() {
+				t.Error("a fabricated outcome was counted in the statistics")
+			}
+			if f.signals.rows[sig.Id].EntryPrice.Valid {
+				t.Errorf("an entry price of %s was recorded from the wrong bar",
+					f.signals.rows[sig.Id].EntryPrice.Decimal)
+			}
+		})
+	}
+}
+
+// TestTheFirstBarBeingTheRightOneIsNotInvalidated, so the check means
+// something when it fires.
+func TestTheFirstBarBeingTheRightOneIsNotInvalidated(t *testing.T) {
+	sig := aLongSignal("95", "110")
+	f := newFollower(t, sig, []models.Candle{
+		bar(0, "101", "102", "100", "101"),
+		bar(1, "103", "111", "102", "110"),
+	}, 48)
+
+	stored := f.run(t)
+
+	if stored.Status != constants.OutcomeTarget {
+		t.Errorf("Status = %q, want target on a contiguous window", stored.Status)
 	}
 }

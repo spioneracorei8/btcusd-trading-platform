@@ -104,9 +104,16 @@ later:
 
 ```sh
 make backtest ARGS="--strategy ema_crossover --timeframe 4h \
-  --from 2023-01-01T00:00:00Z --to 2024-12-31T00:00:00Z --json" \
-  | jq '.bars.entries_beyond_stop, .bars.entries_beyond_target, .performance.trades'
+  --from 2023-01-01T00:00:00Z --to 2024-12-31T00:00:00Z \
+  --out /tmp/run.json"
+
+jq '{beyond_stop: .bars.entries_beyond_stop,
+     beyond_target: .bars.entries_beyond_target,
+     trades: .trade_stats.count}' /tmp/run.json
 ```
+
+The rendered report also prints the count, as a share of trades, whenever
+either is non-zero — so the number is visible without `--out` at all.
 
 Repeat for the configurations behind the evaluations that mattered —
 `ema_crossover` on 4h and 1h, `trend_pullback`, `rsi_reversion` — and record

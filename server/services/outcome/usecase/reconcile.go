@@ -34,7 +34,21 @@ type ReconcileConfig struct {
 // history — is separable from the arithmetic, and so a test can exercise the
 // divergence rules without a database or an engine.
 type BacktestComparer interface {
-	Compare(ctx context.Context, params outcome.ReconcileParams, group outcome.ReconciledGroup) (outcome.Side, error)
+	// Compare replays the group's strategy and parameters over the same
+	// window. It returns the engine's own statistics and the instants it
+	// entered at, which is what says whether a live signal has a counterpart.
+	Compare(ctx context.Context, params outcome.ReconcileParams, group outcome.ReconciledGroup) (Comparison, error)
+}
+
+// Comparison is what the engine made of one group's window.
+type Comparison struct {
+	Side outcome.Side
+
+	// EntryAt is every instant the engine opened a position. A live signal at
+	// one of these has a counterpart to be compared against; one that is not
+	// has none, and comparing it to the aggregate would be comparing it to
+	// trades that are not it.
+	EntryAt []time.Time
 }
 
 type reconcileUsecase struct {
@@ -77,14 +91,23 @@ func (u *reconcileUsecase) Reconcile(
 		required = u.cfg.MinResolved
 	}
 
-	groups, err := u.repo.LiveGroups(ctx, params)
+	signals, err := u.repo.LiveSignals(ctx, params)
 	if err != nil {
 		return outcome.Reconciliation{}, err
 	}
 
+	groups := group(signals)
 	for i := range groups {
-		groups[i].Sample = adequacy(groups[i].Live, required)
 		u.compare(ctx, params, &groups[i])
+
+		// Over the population the numbers are drawn from. With a comparison
+		// that is the matched subset; without one it is everything live
+		// produced, which is all there is to say anything about.
+		measured := groups[i].Live
+		if groups[i].Matched != nil {
+			measured = *groups[i].Matched
+		}
+		groups[i].Sample = adequacy(measured, required)
 		groups[i].Divergences = divergences(groups[i])
 	}
 
@@ -115,14 +138,76 @@ func (u *reconcileUsecase) compare(
 		return
 	}
 
-	side, err := u.cfg.Backtest.Compare(ctx, params, *group)
+	comparison, err := u.cfg.Backtest.Compare(ctx, params, *group)
 	if err != nil {
 		group.Unavailable = err.Error()
 		u.log.WarnContext(ctx, "the backtest side of a comparison could not be produced",
 			"error", err, "strategy", group.Strategy, "version", group.Version)
 		return
 	}
-	group.Backtest = &side
+
+	group.Backtest = &comparison.Side
+	matched, surplus := split(group.Signals, comparison.EntryAt)
+	group.Matched, group.Surplus = &matched, &surplus
+}
+
+// group collects signals into their comparison populations.
+func group(signals []outcome.LiveSignal) []outcome.ReconciledGroup {
+	order := make([]string, 0)
+	byKey := map[string][]outcome.LiveSignal{}
+
+	for _, s := range signals {
+		key := s.GroupKey()
+		if _, seen := byKey[key]; !seen {
+			order = append(order, key)
+		}
+		byKey[key] = append(byKey[key], s)
+	}
+
+	groups := make([]outcome.ReconciledGroup, 0, len(order))
+	for _, key := range order {
+		members := byKey[key]
+		groups = append(groups, outcome.ReconciledGroup{
+			Strategy: members[0].Strategy,
+			Version:  members[0].Version,
+			Params:   members[0].Params,
+			Live:     outcome.SideOf(members),
+			Signals:  members,
+		})
+	}
+	return groups
+}
+
+// split separates the signals the engine also emitted from the surplus.
+//
+// # Why the surplus exists at all
+//
+// Every shipped strategy suppresses an entry while a position is open, and
+// the live evaluator always shows a flat position because it holds nothing.
+// So live decides on bars where the engine's copy of the same strategy stayed
+// silent. The difference is structural, not a divergence, and reporting it as
+// one would be wrong twice over: it would flag a healthy pipeline, and it
+// would mask a real shortfall by padding the count.
+//
+// An entry the engine asked for and then refused — below the minimum lot,
+// past the leverage cap — also lands in the surplus, because it produced no
+// trade and so has nothing to be compared against. The engine's own counters
+// report how many of those there were.
+func split(signals []outcome.LiveSignal, entryAt []time.Time) (matched, surplus outcome.Side) {
+	engine := make(map[int64]bool, len(entryAt))
+	for _, at := range entryAt {
+		engine[at.UTC().Unix()] = true
+	}
+
+	var paired, extra []outcome.LiveSignal
+	for _, s := range signals {
+		if engine[s.At.UTC().Unix()] {
+			paired = append(paired, s)
+			continue
+		}
+		extra = append(extra, s)
+	}
+	return outcome.SideOf(paired), outcome.SideOf(extra)
 }
 
 // adequacy states how far the sample is from saying anything.
@@ -186,7 +271,13 @@ func divergences(group outcome.ReconciledGroup) []outcome.Divergence {
 		return nil
 	}
 
-	live, back := group.Live, *group.Backtest
+	// The matched subset, never the whole live population: the two are not
+	// the same thing, and comparing everything live produced against what the
+	// engine traded would report a structural difference as a divergence.
+	if group.Matched == nil {
+		return nil
+	}
+	live, back := *group.Matched, *group.Backtest
 	var found []outcome.Divergence
 
 	if !math.IsNaN(live.WinRate) && !math.IsNaN(back.WinRate) {

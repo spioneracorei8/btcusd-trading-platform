@@ -54,29 +54,38 @@ func renderGroup(w io.Writer, group outcome.ReconciledGroup) {
 	fmt.Fprintln(w)
 	table := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
 
+	// The matched subset is what sits beside the engine, because it is the
+	// only column comparable with it.
+	compared := group.Live
+	if group.Matched != nil {
+		compared = *group.Matched
+	}
 	back := group.Backtest
-	fmt.Fprintf(table, "\tLIVE\tBACKTEST\n")
-	row(table, "signals", fmt.Sprint(group.Live.Signals), sideInt(back, func(s outcome.Side) int { return s.Signals }))
-	row(table, "resolved", fmt.Sprint(group.Live.Resolved), sideInt(back, func(s outcome.Side) int { return s.Resolved }))
-	row(table, "still open", fmt.Sprint(group.Live.StillOpen), "—")
-	row(table, "invalidated (excluded)", fmt.Sprint(group.Live.Invalidated), "—")
-	row(table, "win rate", rate(group.Live.WinRate), sideRate(back))
+
+	fmt.Fprintf(table, "\tLIVE (matched)\tBACKTEST\n")
+	row(table, "signals", fmt.Sprint(compared.Signals), sideInt(back, func(s outcome.Side) int { return s.Signals }))
+	row(table, "resolved", fmt.Sprint(compared.Resolved), sideInt(back, func(s outcome.Side) int { return s.Resolved }))
+	row(table, "still open", fmt.Sprint(compared.StillOpen), "—")
+	row(table, "invalidated (excluded)", fmt.Sprint(compared.Invalidated), "—")
+	row(table, "win rate", rate(compared.WinRate), sideRate(back))
 	row(table, "wins / losses",
-		fmt.Sprintf("%d / %d", group.Live.Wins, group.Live.Losses),
+		fmt.Sprintf("%d / %d", compared.Wins, compared.Losses),
 		sideStr(back, func(s outcome.Side) string { return fmt.Sprintf("%d / %d", s.Wins, s.Losses) }))
-	row(table, "average win %", group.Live.AverageWinPct.StringFixed(3),
+	row(table, "average win %", compared.AverageWinPct.StringFixed(3),
 		sideStr(back, func(s outcome.Side) string { return s.AverageWinPct.StringFixed(3) }))
-	row(table, "average loss %", group.Live.AverageLossPct.StringFixed(3),
+	row(table, "average loss %", compared.AverageLossPct.StringFixed(3),
 		sideStr(back, func(s outcome.Side) string { return s.AverageLossPct.StringFixed(3) }))
-	row(table, "average entry", group.Live.AverageEntryPrice.StringFixed(2),
+	row(table, "average entry", compared.AverageEntryPrice.StringFixed(2),
 		sideStr(back, func(s outcome.Side) string { return s.AverageEntryPrice.StringFixed(2) }))
-	row(table, "round-trip cost %", group.Live.AverageCostPct.StringFixed(4),
+	row(table, "round-trip cost %", compared.AverageCostPct.StringFixed(4),
 		sideStr(back, func(s outcome.Side) string { return s.AverageCostPct.StringFixed(4) }))
-	row(table, "average bars held", group.Live.AverageBarsHeld.StringFixed(1),
+	row(table, "average bars held", compared.AverageBarsHeld.StringFixed(1),
 		sideStr(back, func(s outcome.Side) string { return s.AverageBarsHeld.StringFixed(1) }))
-	row(table, "rested on assumption", fmt.Sprint(group.Live.Noted),
+	row(table, "rested on assumption", fmt.Sprint(compared.Noted),
 		sideInt(back, func(s outcome.Side) int { return s.Noted }))
 	table.Flush()
+
+	renderSurplus(w, group)
 
 	if group.Unavailable != "" {
 		fmt.Fprintf(w, "\nNo backtest side: %s\n", wrap(group.Unavailable, 74))
@@ -165,4 +174,26 @@ func wrapIndent(text string, width int, indent string) string {
 	}
 	out.WriteString(line)
 	return out.String()
+}
+
+// renderSurplus reports the live signals the engine did not emit.
+//
+// Below the comparison and clearly apart from it: they have no counterpart,
+// so putting them in the same column would invite exactly the arithmetic the
+// split exists to prevent.
+func renderSurplus(w io.Writer, group outcome.ReconciledGroup) {
+	if group.Surplus == nil || group.Surplus.Signals == 0 {
+		return
+	}
+
+	surplus := *group.Surplus
+	fmt.Fprintf(w, "\nLIVE-ONLY (not compared)\n")
+
+	table := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
+	row(table, "  signals", fmt.Sprint(surplus.Signals), "")
+	row(table, "  resolved", fmt.Sprint(surplus.Resolved), "")
+	row(table, "  win rate", rate(surplus.WinRate), "")
+	table.Flush()
+
+	fmt.Fprintf(w, "  %s\n", wrapIndent(outcome.SurplusNote, 74, "  "))
 }

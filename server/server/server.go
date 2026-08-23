@@ -25,7 +25,6 @@ import (
 	"github.com/spioneracorei8/btcusd-trading-platform/server/middleware"
 	"github.com/spioneracorei8/btcusd-trading-platform/server/routes"
 
-	"github.com/spioneracorei8/btcusd-trading-platform/server/services/backtest"
 	_backtest_us "github.com/spioneracorei8/btcusd-trading-platform/server/services/backtest/usecase"
 	_candle_repo "github.com/spioneracorei8/btcusd-trading-platform/server/services/candle/repository"
 	_candle_us "github.com/spioneracorei8/btcusd-trading-platform/server/services/candle/usecase"
@@ -118,7 +117,7 @@ func (s *Server) Start() error {
 			Backtest: _outcome_us.EngineComparer{
 				Engine:     engine,
 				Timeframe:  s.Config.Strategy.Timeframe,
-				Costs:      apiCosts(s.Config),
+				Costs:      s.Config.BacktestCosts(),
 				Equity:     decimal.RequireFromString(constants.DefaultInitialEquity),
 				MarketType: s.Config.Market.Type,
 			},
@@ -205,17 +204,4 @@ func (s *Server) listen(ctx context.Context, handler http.Handler) error {
 
 	s.Logger.Info("api stopped cleanly")
 	return nil
-}
-
-// apiCosts is the venue as configured, in the engine's own type.
-//
-// The same values the collector follows outcomes with and the backtest CLI is
-// run with. A reconciliation using a different cost model would report a
-// divergence that is an artefact of its own configuration.
-func apiCosts(cfg *config.Config) backtest.Costs {
-	return backtest.Costs{
-		FeeTakerPct:   cfg.Market.FeeTakerPct,
-		TickSize:      cfg.Market.TickSize,
-		SlippageTicks: cfg.Market.SlippageTicks,
-	}
 }

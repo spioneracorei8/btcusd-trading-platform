@@ -339,6 +339,20 @@ func (u *outcomeUsecase) windowIsHoled(
 ) (bool, error) {
 	span := signalRow.Timeframe.Duration()
 
+	// The bar the entry should have filled on. signal_time is the deciding
+	// bar's close, which is the next bar's open, so the first bar read has to
+	// open exactly there.
+	//
+	// This was missing, and the consequence was not a wrong number but an
+	// invented one: with the next bar absent the entry was taken from
+	// whatever bar came next — hours later — and the trade resolved against
+	// prices that had nothing to do with the decision. Sometimes the
+	// gapped-past-level note marked the row; when the price had not moved
+	// much, nothing did, and a fabricated win entered the statistics.
+	if !bars[0].OpenTime.Equal(signalRow.SignalTime.UTC()) {
+		return true, nil
+	}
+
 	// A break between consecutive bars. Checked without the database because
 	// it is visible in what was already read.
 	for i := 1; i < len(bars); i++ {

@@ -121,12 +121,12 @@ func TestTheAggregateGroupsByParameterSetAndVersion(t *testing.T) {
 		version: "v2", status: constants.OutcomeStop, netPct: "-0.4", entry: "64300"})
 
 	repo := _outcome_repo.NewReconcileRepoImpl(pool)
-	groups, err := repo.LiveGroups(ctx, outcome.ReconcileParams{
+	groups, err := liveGroups(ctx, repo, outcome.ReconcileParams{
 		Symbol: symbol, MarketType: constants.MarketTypeSpot,
 		From: base.Add(-time.Hour), To: base.Add(24 * time.Hour),
 	})
 	if err != nil {
-		t.Fatalf("LiveGroups() returned error: %v", err)
+		t.Fatalf("LiveSignals() returned error: %v", err)
 	}
 
 	if len(groups) != 3 {
@@ -190,12 +190,12 @@ func TestInvalidatedSignalsAreCountedAndThenExcluded(t *testing.T) {
 		status: constants.OutcomeOpen, entry: "64200"})
 
 	repo := _outcome_repo.NewReconcileRepoImpl(pool)
-	groups, err := repo.LiveGroups(ctx, outcome.ReconcileParams{
+	groups, err := liveGroups(ctx, repo, outcome.ReconcileParams{
 		Symbol: symbol, MarketType: constants.MarketTypeSpot,
 		From: base.Add(-time.Hour), To: base.Add(24 * time.Hour),
 	})
 	if err != nil {
-		t.Fatalf("LiveGroups() returned error: %v", err)
+		t.Fatalf("LiveSignals() returned error: %v", err)
 	}
 	if len(groups) != 1 {
 		t.Fatalf("one parameter set produced %d groups", len(groups))
@@ -238,12 +238,12 @@ func TestSignalsOutsideTheWindowAreNotCounted(t *testing.T) {
 		status: constants.OutcomeStop, netPct: "-1.0", entry: "64100"})
 
 	repo := _outcome_repo.NewReconcileRepoImpl(pool)
-	groups, err := repo.LiveGroups(ctx, outcome.ReconcileParams{
+	groups, err := liveGroups(ctx, repo, outcome.ReconcileParams{
 		Symbol: symbol, MarketType: constants.MarketTypeSpot,
 		From: base.Add(-time.Hour), To: base.Add(time.Hour),
 	})
 	if err != nil {
-		t.Fatalf("LiveGroups() returned error: %v", err)
+		t.Fatalf("LiveSignals() returned error: %v", err)
 	}
 	if len(groups) != 1 {
 		t.Fatalf("the window produced %d groups", len(groups))
@@ -276,12 +276,12 @@ func TestResolutionsRestingOnAnAssumptionAreCounted(t *testing.T) {
 		note: "one bar reached both the stop and the target"})
 
 	repo := _outcome_repo.NewReconcileRepoImpl(pool)
-	groups, err := repo.LiveGroups(ctx, outcome.ReconcileParams{
+	groups, err := liveGroups(ctx, repo, outcome.ReconcileParams{
 		Symbol: symbol, MarketType: constants.MarketTypeSpot,
 		From: base.Add(-time.Hour), To: base.Add(24 * time.Hour),
 	})
 	if err != nil {
-		t.Fatalf("LiveGroups() returned error: %v", err)
+		t.Fatalf("LiveSignals() returned error: %v", err)
 	}
 	if got := groups[0].Live.Noted; got != 1 {
 		t.Errorf("resolutions resting on an assumption = %d, want 1", got)
@@ -325,12 +325,12 @@ func TestAWinIsAPositiveReturnAfterCostAndNotAReachedTarget(t *testing.T) {
 		status: constants.OutcomeStop, netPct: "0.80", entry: "64200"})
 
 	repo := _outcome_repo.NewReconcileRepoImpl(pool)
-	groups, err := repo.LiveGroups(ctx, outcome.ReconcileParams{
+	groups, err := liveGroups(ctx, repo, outcome.ReconcileParams{
 		Symbol: symbol, MarketType: constants.MarketTypeSpot,
 		From: base.Add(-time.Hour), To: base.Add(24 * time.Hour),
 	})
 	if err != nil {
-		t.Fatalf("LiveGroups() returned error: %v", err)
+		t.Fatalf("LiveSignals() returned error: %v", err)
 	}
 
 	side := groups[0].Live
@@ -347,4 +347,40 @@ func TestAWinIsAPositiveReturnAfterCostAndNotAReachedTarget(t *testing.T) {
 	if got := side.AverageLossPct.StringFixed(2); got != "-0.05" {
 		t.Errorf("average loss = %s, want the unprofitable target at -0.05", got)
 	}
+}
+
+// liveGroups aggregates what the repository projects, the same way the
+// usecase does — so these tests still assert on groups while the repository
+// has gone back to returning rows.
+func liveGroups(
+	ctx context.Context, repo outcome.ReconcileRepository, params outcome.ReconcileParams,
+) ([]outcome.ReconciledGroup, error) {
+	signals, err := repo.LiveSignals(ctx, params)
+	if err != nil {
+		return nil, err
+	}
+
+	var (
+		order []string
+		byKey = map[string][]outcome.LiveSignal{}
+	)
+	for _, s := range signals {
+		key := s.GroupKey()
+		if _, seen := byKey[key]; !seen {
+			order = append(order, key)
+		}
+		byKey[key] = append(byKey[key], s)
+	}
+
+	groups := make([]outcome.ReconciledGroup, 0, len(order))
+	for _, key := range order {
+		members := byKey[key]
+		groups = append(groups, outcome.ReconciledGroup{
+			Strategy: members[0].Strategy,
+			Version:  members[0].Version,
+			Params:   members[0].Params,
+			Live:     outcome.SideOf(members),
+		})
+	}
+	return groups, nil
 }

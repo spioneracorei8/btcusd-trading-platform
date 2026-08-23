@@ -148,6 +148,39 @@ func (c Costs) HalfSpread() decimal.Decimal {
 	return c.SpreadPrice().Div(decimal.NewFromInt(2))
 }
 
+// RoundTripPctOf is what one entry and one exit cost at this price, as a
+// percentage of it.
+//
+// # Why it lives here
+//
+// The outcome follower prices live signals with it and the engine charges its
+// trades with the same Costs. Two readings of "what does a round trip cost"
+// would drift, and the drift would land in the live-against-backtest
+// comparison as a difference in returns — which is the one thing that
+// comparison exists to detect. See ADR 0022.
+//
+// # What it cannot include
+//
+// commissionExcluded is true when a per-lot commission is configured. A live
+// signal has no size — the live path places nothing and sizes nothing — so a
+// charge quoted per lot cannot be converted into a percentage of price. The
+// caller is told rather than left with a figure that is quietly short.
+func (c Costs) RoundTripPctOf(price decimal.Decimal) (pct decimal.Decimal, commissionExcluded bool) {
+	commissionExcluded = c.CommissionPerLot.IsPositive() && c.ContractSize.IsPositive()
+
+	if c.CostModel() == constants.CostModelSpread {
+		if !price.IsPositive() {
+			return decimal.Zero, commissionExcluded
+		}
+		// Both sides cross the spread: the entry, and a stop or expiry
+		// leaving as a market order. A target could rest, but the live path
+		// places nothing, so assuming the cheaper side would flatter it.
+		crossed := c.HalfSpread().Mul(decimal.NewFromInt(2))
+		return crossed.Div(price).Mul(decimal.NewFromInt(100)), commissionExcluded
+	}
+	return c.FeeTakerPct.Mul(decimal.NewFromInt(2)), commissionExcluded
+}
+
 // LotConstrained reports whether position sizes must land on the venue's lot
 // grid.
 //

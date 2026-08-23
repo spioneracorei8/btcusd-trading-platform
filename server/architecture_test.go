@@ -6,10 +6,13 @@ import (
 	"go/token"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/spioneracorei8/btcusd-trading-platform/server/config"
 )
 
 // The import rules from CLAUDE.md §5, checked by walking the source.
@@ -263,6 +266,7 @@ func TestOnlyTheWiringKnowsImplementations(t *testing.T) {
 		"main.go":           true,
 		"collector/main.go": true,
 		"backtest/main.go":  true,
+		"reconcile/main.go": true,
 		"testhelper":        true,
 	}
 
@@ -276,6 +280,59 @@ func TestOnlyTheWiringKnowsImplementations(t *testing.T) {
 					}
 				}
 			}
+		}
+	}
+}
+
+// TestEveryCostFieldIsWiredFromConfiguration.
+//
+// # What this prevents
+//
+// backtest.Costs has eleven fields. There used to be four constructors: the
+// backtest CLI set all eleven, and the collector, the API and the reconcile
+// CLI each set three. An empty Model reads as percentage, so a spread
+// configured venue was priced as percentage-with-taker in three of the four —
+// and the reconciliation reported that cost-model difference as a verdict on
+// the strategy. Everything rendered normally.
+//
+// There is now one constructor, Config.BacktestCosts. This walks what it
+// returns and fails on any field left at its zero value, so a field added to
+// Costs and not wired here fails immediately rather than defaulting into a
+// number nobody checks.
+//
+// It is a reflection test rather than a list of field names on purpose: a list
+// is a second place to forget.
+func TestEveryCostFieldIsWiredFromConfiguration(t *testing.T) {
+	// Every cost variable set to a distinctive non-zero value, so a field that
+	// arrives zero can only have arrived that way by not being wired.
+	env := map[string]string{
+		"APP_ENV": "dev", "LOG_LEVEL": "info", "HTTP_PORT": "8080",
+		"DATABASE_URL": "postgres://u:p@localhost:5432/d?sslmode=disable",
+
+		"FEE_TAKER_PCT": "0.07", "FEE_MAKER_PCT": "0.03",
+		"SLIPPAGE_TICKS": "3", "MARKET_TICK_SIZE": "0.05",
+		"COST_MODEL": "spread", "SPREAD_POINTS": "1700", "POINT_VALUE": "0.02",
+		"CONTRACT_SIZE": "2", "MIN_LOT": "0.03", "LOT_STEP": "0.04",
+		"COMMISSION_PER_LOT": "6",
+	}
+
+	cfg, err := config.LoadFrom(func(key string) (string, bool) {
+		v, ok := env[key]
+		return v, ok
+	})
+	if err != nil {
+		t.Fatalf("LoadFrom() returned error: %v", err)
+	}
+
+	costs := reflect.ValueOf(cfg.BacktestCosts())
+	for i := range costs.NumField() {
+		field := costs.Type().Field(i)
+		if costs.Field(i).IsZero() {
+			t.Errorf("Costs.%s is zero after Config.BacktestCosts(), though %s was configured "+
+				"to a non-zero value.\n"+
+				"Every field has to be wired there: an unwired one does not fail, it takes a\n"+
+				"default — and an unwired Model silently prices a spread venue as percentage.",
+				field.Name, field.Name)
 		}
 	}
 }
