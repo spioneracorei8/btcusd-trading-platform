@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/spioneracorei8/btcusd-trading-platform/server/config"
+	"github.com/spioneracorei8/btcusd-trading-platform/server/services/stream"
 )
 
 // The import rules from CLAUDE.md §5, checked by walking the source.
@@ -364,6 +365,88 @@ func allGoFiles(t *testing.T) []string {
 		t.Fatal("no Go files found; the test is looking in the wrong place")
 	}
 	return files
+}
+
+// TestNothingInTheStreamCanPersistACandle.
+//
+// # What this prevents
+//
+// GET /api/v1/stream is the only place in the system permitted to send a
+// candle that has not closed, and CLAUDE.md §3.1 says such a bar must never
+// reach storage, an indicator or a strategy. Every one of those lives behind a
+// repository or a usecase, so the rule reduces to a reachability question the
+// compiler can be made to answer: the stream may hold a market data client and
+// nothing else that could write or compute.
+//
+// The api process reaches the exchange a second time to get the forming bar —
+// the collector's copy is in another process's memory — and that second
+// connection is the one that could quietly acquire a writer. A future change
+// that gave a stream source a candle usecase "just to backfill the chart"
+// would be one line, would work, and would begin storing forming bars. This
+// fails on the import instead.
+//
+// It is a reachability rule rather than a review note because the violation is
+// invisible at the call site: SaveCandle would only be called on the closed
+// branch, and the branch is what a later edit removes.
+func TestNothingInTheStreamCanPersistACandle(t *testing.T) {
+	// The stream's own layers are in scope of the rule rather than exempt from
+	// it — they are checked, they just may name each other. Everything else
+	// ending in /repository or /usecase belongs to somebody who can write.
+	own := "services/stream/"
+
+	for _, dir := range []string{
+		"services/stream", "services/stream/handler",
+		"services/stream/usecase", "services/stream/repository",
+	} {
+		for _, file := range goFilesIn(t, dir) {
+			for _, imported := range projectImports(t, file) {
+				if strings.HasPrefix(imported, own) {
+					continue
+				}
+
+				switch {
+				case strings.HasPrefix(imported, "database"):
+					t.Errorf("%s imports %q. The stream carries forming candles and must not\n"+
+						"be able to reach the database at all.", file, imported)
+
+				case strings.Contains(imported+"/", "/repository/"),
+					strings.HasSuffix(imported, "/repository"):
+					t.Errorf("%s imports %q. A repository can write; the stream sends\n"+
+						"unclosed bars and must hold nothing that could store one.", file, imported)
+
+				case strings.Contains(imported+"/", "/usecase/"):
+					t.Errorf("%s imports %q. A usecase can store and compute; the stream\n"+
+						"must reach only interface packages, which can do neither.", file, imported)
+				}
+			}
+		}
+	}
+}
+
+// TestTheStreamsMarketFeedCanOnlyWatch.
+//
+// The other half of the rule above. The stream is allowed one capability —
+// watching the exchange — and stream.CandleSource is how that capability is
+// expressed. If a Save, Store or Upsert appeared on it, the import test would
+// still pass while the stream had gained a writer.
+//
+// Checked by reflection over the interface rather than by reading the file, so
+// a method added anywhere fails here.
+func TestTheStreamsMarketFeedCanOnlyWatch(t *testing.T) {
+	source := reflect.TypeOf((*stream.CandleSource)(nil)).Elem()
+
+	if source.NumMethod() != 1 {
+		var names []string
+		for i := 0; i < source.NumMethod(); i++ {
+			names = append(names, source.Method(i).Name)
+		}
+		t.Fatalf("stream.CandleSource has %d methods (%s), want exactly one: Watch.\n"+
+			"The stream sends unclosed candles; watching is the only thing it may do.",
+			source.NumMethod(), strings.Join(names, ", "))
+	}
+	if got := source.Method(0).Name; got != "Watch" {
+		t.Fatalf("stream.CandleSource's only method is %s, want Watch", got)
+	}
 }
 
 // TestNothingReachesATradingEndpoint is CLAUDE.md §1, which is the one rule in

@@ -110,6 +110,73 @@ const (
 	// and a hand-run backtest agree without anybody passing a flag.
 	DefaultInitialEquity = "10000"
 
+	// APIVersion is the path segment every endpoint sits under.
+	//
+	// Versioned from the first release so phase 09's app can keep working
+	// while the shape changes: a deployed phone cannot be redeployed with the
+	// server.
+	APIVersion = "v1"
+
+	// APICandleLimit is the most candles one request may return, and
+	// APICandleLimitDefault what it returns when no limit is asked for.
+	//
+	// A phone asking for three years of 1m candles is asking for 1.5 million
+	// rows. Refusing that clearly is better than serving it slowly: the
+	// request would time out somewhere, and where it timed out would be the
+	// thing that got investigated.
+	APICandleLimit        = 5000
+	APICandleLimitDefault = 500
+
+	// APIPageLimit and APIPageLimitDefault bound the list endpoints.
+	APIPageLimit        = 500
+	APIPageLimitDefault = 50
+
+	// APIStalePipelineBars is how many bars of the strategy's own timeframe
+	// may pass with no signal before /status says the pipeline looks quiet.
+	//
+	// It is not an alarm. A strategy at a tenth of a signal a day is silent
+	// for weeks by design, and the endpoint reports the age rather than
+	// judging it — but a number with no reference point is one nobody can
+	// act on.
+	APIStalePipelineBars = 200
+
+	// StreamFeedMaxBackoff bounds the api display feed's reconnect wait. It
+	// is not the ingestion path: a gap here costs a redraw, not a hole in the
+	// candle series.
+	StreamFeedMaxBackoff = 30 * time.Second
+
+	// StreamPollInterval is how often the api looks for new signals and
+	// outcomes to push.
+	//
+	// The collector writes them and the api serves them, sharing a database
+	// and nothing else, so a poll is the whole mechanism. Two seconds is
+	// under human reaction time for an alert whose bar closed minutes ago.
+	StreamPollInterval = 2 * time.Second
+
+	// StreamStatusInterval is how often the pipeline status is pushed. Slow,
+	// because it is a health view rather than a feed and its query touches
+	// three tables.
+	StreamStatusInterval = 15 * time.Second
+
+	// StreamPollBatch bounds one poll.
+	StreamPollBatch = 50
+
+	// StreamQueueSize is how many events a subscriber may fall behind before
+	// they are dropped and counted.
+	//
+	// Dropping is deliberate: buffering without limit means one stalled phone
+	// grows the server's memory until something dies, and the thing that dies
+	// is not the phone.
+	StreamQueueSize = 256
+
+	// StreamPingInterval is how often the server pings an idle connection.
+	// A phone on a mobile network drops without closing, and a socket nobody
+	// writes to can stay open for hours after the client is gone.
+	StreamPingInterval = 20 * time.Second
+
+	// StreamWriteTimeout bounds one write to one client.
+	StreamWriteTimeout = 10 * time.Second
+
 	// ReconcileMinResolved is how many resolved signals a group needs before
 	// its numbers are treated as saying anything.
 	//

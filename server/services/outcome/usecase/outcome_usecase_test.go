@@ -20,6 +20,7 @@ import (
 	"github.com/spioneracorei8/btcusd-trading-platform/server/services/datagap"
 	"github.com/spioneracorei8/btcusd-trading-platform/server/services/outcome"
 	_outcome_us "github.com/spioneracorei8/btcusd-trading-platform/server/services/outcome/usecase"
+	"github.com/spioneracorei8/btcusd-trading-platform/server/services/signal"
 )
 
 // ---------------------------------------------------------------------------
@@ -76,6 +77,20 @@ func (s *outcomeStore) SaveOutcome(
 	}
 	s.rows[o.SignalId] = o
 	return o, nil
+}
+
+func (s *outcomeStore) ListOutcomes(
+	_ context.Context, params outcome.ListParams,
+) ([]models.SignalOutcome, int64, error) {
+	rows := make([]models.SignalOutcome, 0, len(s.order))
+	for _, id := range s.order {
+		row := s.rows[id]
+		if params.Status != "" && row.Status != params.Status {
+			continue
+		}
+		rows = append(rows, row)
+	}
+	return rows, int64(len(rows)), nil
 }
 
 func (s *outcomeStore) FetchOutcome(
@@ -1035,4 +1050,10 @@ func TestTheFirstBarBeingTheRightOneIsNotInvalidated(t *testing.T) {
 	if stored.Status != constants.OutcomeTarget {
 		t.Errorf("Status = %q, want target on a contiguous window", stored.Status)
 	}
+}
+
+func (s *signalStore) ListSignals(
+	context.Context, signal.ListParams,
+) ([]models.Signal, int64, error) {
+	return nil, 0, errors.New("not used")
 }

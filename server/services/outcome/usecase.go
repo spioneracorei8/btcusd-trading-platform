@@ -15,6 +15,9 @@ type OutcomeUsecase interface {
 	// Run follows open signals until ctx is cancelled. It returns nil on
 	// cancellation, which is the ordinary way it ends.
 	Run(ctx context.Context) error
+
+	// ListOutcomes returns a page of resolved and open outcomes.
+	ListOutcomes(ctx context.Context, params ListParams) ([]Resolved, int64, error)
 }
 
 // FollowReport is what one pass did.

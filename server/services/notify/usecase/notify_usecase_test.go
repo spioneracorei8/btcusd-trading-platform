@@ -18,6 +18,7 @@ import (
 	"github.com/spioneracorei8/btcusd-trading-platform/server/models"
 	"github.com/spioneracorei8/btcusd-trading-platform/server/services/notify"
 	_notify_us "github.com/spioneracorei8/btcusd-trading-platform/server/services/notify/usecase"
+	"github.com/spioneracorei8/btcusd-trading-platform/server/services/signal"
 )
 
 // recordingQueue is a queue that remembers what reached it, and nothing else.
@@ -786,4 +787,10 @@ func TestRunStopsWhenTheContextIsCancelled(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("Run() did not return when its context was cancelled")
 	}
+}
+
+func (s *storedSignals) ListSignals(
+	context.Context, signal.ListParams,
+) ([]models.Signal, int64, error) {
+	return nil, 0, errors.New("not used")
 }

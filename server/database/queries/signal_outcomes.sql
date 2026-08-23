@@ -60,3 +60,31 @@ RETURNING *;
 
 -- name: FetchSignalOutcome :one
 SELECT * FROM signal_outcomes WHERE signal_id = sqlc.arg(signal_id);
+
+-- name: ListSignalOutcomes :many
+-- Outcomes with the signal they describe, newest first.
+--
+-- The signals table is joined to filter and order, and nothing is selected
+-- from it: the outcome service reads a signal through the signal service's
+-- usecase rather than reaching into its rows. That costs one point lookup per
+-- row of a page bounded at fifty.
+SELECT o.*
+FROM signal_outcomes o
+JOIN signals s ON s.id = o.signal_id
+WHERE s.symbol = sqlc.arg(symbol)
+  AND s.market_type = sqlc.arg(market_type)
+  AND (sqlc.narg(status)::text IS NULL OR o.status = sqlc.narg(status)::text)
+  AND s.signal_time >= sqlc.arg(from_time)
+  AND s.signal_time <= sqlc.arg(to_time)
+ORDER BY s.signal_time DESC, o.signal_id
+LIMIT sqlc.arg(row_limit) OFFSET sqlc.arg(row_offset);
+
+-- name: CountSignalOutcomes :one
+SELECT count(*)::bigint
+FROM signal_outcomes o
+JOIN signals s ON s.id = o.signal_id
+WHERE s.symbol = sqlc.arg(symbol)
+  AND s.market_type = sqlc.arg(market_type)
+  AND (sqlc.narg(status)::text IS NULL OR o.status = sqlc.narg(status)::text)
+  AND s.signal_time >= sqlc.arg(from_time)
+  AND s.signal_time <= sqlc.arg(to_time);

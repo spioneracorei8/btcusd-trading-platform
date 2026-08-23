@@ -26,6 +26,7 @@ import (
 	"github.com/spioneracorei8/btcusd-trading-platform/server/routes"
 
 	_backtest_us "github.com/spioneracorei8/btcusd-trading-platform/server/services/backtest/usecase"
+	_candle_handler "github.com/spioneracorei8/btcusd-trading-platform/server/services/candle/handler"
 	_candle_repo "github.com/spioneracorei8/btcusd-trading-platform/server/services/candle/repository"
 	_candle_us "github.com/spioneracorei8/btcusd-trading-platform/server/services/candle/usecase"
 	_datagap_repo "github.com/spioneracorei8/btcusd-trading-platform/server/services/datagap/repository"
@@ -33,6 +34,7 @@ import (
 	_health_handler "github.com/spioneracorei8/btcusd-trading-platform/server/services/health/handler"
 	_health_repo "github.com/spioneracorei8/btcusd-trading-platform/server/services/health/repository"
 	_health_us "github.com/spioneracorei8/btcusd-trading-platform/server/services/health/usecase"
+	_indicator_handler "github.com/spioneracorei8/btcusd-trading-platform/server/services/indicator/handler"
 	_indicator_us "github.com/spioneracorei8/btcusd-trading-platform/server/services/indicator/usecase"
 	_market_handler "github.com/spioneracorei8/btcusd-trading-platform/server/services/market/handler"
 	_market_repo "github.com/spioneracorei8/btcusd-trading-platform/server/services/market/repository"
@@ -41,6 +43,15 @@ import (
 	_outcome_handler "github.com/spioneracorei8/btcusd-trading-platform/server/services/outcome/handler"
 	_outcome_repo "github.com/spioneracorei8/btcusd-trading-platform/server/services/outcome/repository"
 	_outcome_us "github.com/spioneracorei8/btcusd-trading-platform/server/services/outcome/usecase"
+	_pipeline_handler "github.com/spioneracorei8/btcusd-trading-platform/server/services/pipeline/handler"
+	_pipeline_repo "github.com/spioneracorei8/btcusd-trading-platform/server/services/pipeline/repository"
+	_pipeline_us "github.com/spioneracorei8/btcusd-trading-platform/server/services/pipeline/usecase"
+	_signal_handler "github.com/spioneracorei8/btcusd-trading-platform/server/services/signal/handler"
+	_signal_repo "github.com/spioneracorei8/btcusd-trading-platform/server/services/signal/repository"
+	_signal_us "github.com/spioneracorei8/btcusd-trading-platform/server/services/signal/usecase"
+	_stream_handler "github.com/spioneracorei8/btcusd-trading-platform/server/services/stream/handler"
+	_stream_repo "github.com/spioneracorei8/btcusd-trading-platform/server/services/stream/repository"
+	_stream_us "github.com/spioneracorei8/btcusd-trading-platform/server/services/stream/usecase"
 )
 
 // Server holds everything the API process needs to start.
@@ -104,12 +115,41 @@ func (s *Server) Start() error {
 		s.Logger, marketDataRepo, collectorStatusRepo, candleUs, dataGapUs,
 	)
 
+	signalUs := _signal_us.NewSignalUsecaseImpl(_signal_repo.NewSignalRepoImpl(pool))
+
 	// The engine is what makes the reconciliation a comparison rather than a
 	// report: it replays the same strategy and parameters over the same
 	// period the live signals came from.
 	engine := _backtest_us.NewBacktestUsecaseImpl(
 		s.Logger, candleUs, dataGapUs, _indicator_us.DefaultSetConfig(),
 	)
+
+	outcomeUs, err := _outcome_us.NewOutcomeUsecaseImpl(
+		_outcome_repo.NewOutcomeRepoImpl(pool), s.Logger, signalUs, candleUs, dataGapUs,
+		_outcome_us.Config{
+			Symbol:     s.Config.Market.Symbol,
+			MarketType: s.Config.Market.Type,
+			Costs:      s.Config.BacktestCosts(),
+			ExpiryBars: s.Config.Outcome.ExpiryBars,
+			Interval:   s.Config.Outcome.Interval,
+		},
+	)
+	if err != nil {
+		return err
+	}
+
+	pipelineUs, err := _pipeline_us.NewPipelineUsecaseImpl(
+		_pipeline_repo.NewPipelineRepoImpl(pool), marketUs,
+		_pipeline_us.Config{
+			Symbol:            s.Config.Market.Symbol,
+			MarketType:        s.Config.Market.Type,
+			SignalMode:        s.Config.Notify.SignalMode,
+			HeartbeatInterval: s.Config.Market.HeartbeatInterval,
+		},
+	)
+	if err != nil {
+		return err
+	}
 
 	reconcileUs, err := _outcome_us.NewReconcileUsecaseImpl(
 		_outcome_repo.NewReconcileRepoImpl(pool), s.Logger,
@@ -133,7 +173,25 @@ func (s *Server) Start() error {
 	healthHandler := _health_handler.NewHealthHandlerImpl(healthUs, s.Logger)
 	marketHandler := _market_handler.NewMarketHandlerImpl(marketUs, s.Logger)
 	outcomeHandler := _outcome_handler.NewOutcomeHandlerImpl(
-		reconcileUs, s.Logger, s.Config.Market.Symbol, s.Config.Market.Type)
+		reconcileUs, outcomeUs, s.Logger, s.Config.Market.Symbol, s.Config.Market.Type)
+
+	// The live push side. Its market feed is read-only by construction: the
+	// feed type holds a market data client and nothing else, so there is
+	// nothing there that could store a forming bar even by mistake.
+	hub := _stream_us.NewHub(s.Logger)
+	apiHandlers := routes.APIHandlers{
+		Candles: _candle_handler.NewCandleHandlerImpl(
+			candleUs, s.Logger, s.Config.Market.Symbol, s.Config.Market.Type,
+			s.Config.Market.Timeframes),
+		Indicators: _indicator_handler.NewIndicatorHandlerImpl(
+			candleUs, _indicator_us.DefaultSetConfig(), s.Logger,
+			s.Config.Market.Symbol, s.Config.Market.Type, s.Config.Market.Timeframes),
+		Signals: _signal_handler.NewSignalHandlerImpl(
+			signalUs, s.Logger, s.Config.Market.Symbol, s.Config.Market.Type),
+		Outcomes: outcomeHandler,
+		Status:   _pipeline_handler.NewStatusHandlerImpl(pipelineUs, s.Logger),
+		Stream:   _stream_handler.NewStreamHandlerImpl(hub, s.Logger),
+	}
 
 	//==============================================================
 	// # API
@@ -142,6 +200,31 @@ func (s *Server) Start() error {
 	route.RegisterHealthHandler(healthHandler)
 	route.RegisterMarketHandler(marketHandler)
 	route.RegisterOutcomeHandler(outcomeHandler)
+	route.RegisterAPI(apiHandlers)
+
+	// The sources that feed the stream. They run for the life of the process
+	// and stop with it; a failure in one is logged and does not take the API
+	// down, because a chart that stops updating must not also stop /status
+	// from answering why.
+	streamCtx, stopStream := context.WithCancel(ctx)
+	defer stopStream()
+	go hub.Run(streamCtx,
+		_stream_us.CandleFeed{
+			Source:     _stream_repo.NewCandleFeedImpl(marketDataRepo, s.Logger),
+			Symbol:     s.Config.Market.Symbol,
+			MarketType: s.Config.Market.Type,
+			Timeframes: s.Config.Market.Timeframes,
+		},
+		&_stream_us.SignalPoller{
+			Signals: signalUs,
+			Symbol:  s.Config.Market.Symbol, MarketType: s.Config.Market.Type,
+		},
+		&_stream_us.OutcomePoller{
+			Outcomes: outcomeUs,
+			Symbol:   s.Config.Market.Symbol, MarketType: s.Config.Market.Type,
+		},
+		_stream_us.StatusTicker{Pipeline: pipelineUs},
+	)
 
 	// A database that is not up yet must not stop the API from starting:
 	// /ready is what reports the truth about it.

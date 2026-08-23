@@ -8,6 +8,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
 
+	"github.com/spioneracorei8/btcusd-trading-platform/server/constants"
+
 	"github.com/spioneracorei8/btcusd-trading-platform/server/models"
 	"github.com/spioneracorei8/btcusd-trading-platform/server/services/signal"
 )
@@ -69,4 +71,24 @@ func (u *signalUsecase) SetEntryPrice(
 		return models.Signal{}, fmt.Errorf("signal: entry price %s is not positive", entry)
 	}
 	return u.signalRepository.SetEntryPrice(ctx, id, entry)
+}
+
+// ListSignals returns a page of the signal history.
+//
+// The limit is bounded here rather than trusted from the caller: a handler
+// that forgot to cap it would turn one request into a full table scan, and the
+// rule belongs where every caller inherits it.
+func (u *signalUsecase) ListSignals(
+	ctx context.Context, params signal.ListParams,
+) ([]models.Signal, int64, error) {
+	if params.Limit <= 0 || params.Limit > constants.APIPageLimit {
+		params.Limit = constants.APIPageLimitDefault
+	}
+	if params.Offset < 0 {
+		params.Offset = 0
+	}
+	if params.Direction != "" && !params.Direction.Valid() {
+		return nil, 0, fmt.Errorf("signal: %q is not a direction", params.Direction)
+	}
+	return u.signalRepository.ListSignals(ctx, params)
 }

@@ -8,6 +8,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/shopspring/decimal"
 
@@ -101,6 +102,46 @@ func (r *signalRepository) SetEntryPrice(
 		return models.Signal{}, fmt.Errorf("set entry price on signal %s: %w", id, err)
 	}
 	return toSignalModel(row)
+}
+
+// ListSignals returns a page of the signal history with its total.
+func (r *signalRepository) ListSignals(
+	ctx context.Context, params signal.ListParams,
+) ([]models.Signal, int64, error) {
+	direction := pgtype.Text{}
+	if params.Direction != "" {
+		direction = pgtype.Text{String: params.Direction.String(), Valid: true}
+	}
+
+	rows, err := r.queries.ListSignals(ctx, db.ListSignalsParams{
+		Symbol:     params.Symbol,
+		MarketType: params.MarketType.String(),
+		Direction:  direction,
+		RowLimit:   params.Limit,
+		RowOffset:  params.Offset,
+	})
+	if err != nil {
+		return nil, 0, fmt.Errorf("list signals: %w", err)
+	}
+
+	total, err := r.queries.CountSignals(ctx, db.CountSignalsParams{
+		Symbol:     params.Symbol,
+		MarketType: params.MarketType.String(),
+		Direction:  direction,
+	})
+	if err != nil {
+		return nil, 0, fmt.Errorf("count signals: %w", err)
+	}
+
+	out := make([]models.Signal, 0, len(rows))
+	for _, row := range rows {
+		s, err := toSignalModel(row)
+		if err != nil {
+			return nil, 0, err
+		}
+		out = append(out, s)
+	}
+	return out, total, nil
 }
 
 // toSignalModel maps a generated row onto the model.

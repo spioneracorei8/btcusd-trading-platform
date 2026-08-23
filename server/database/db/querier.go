@@ -21,6 +21,10 @@ type Querier interface {
 	// Row count for a symbol/market/timeframe; used by tests to prove that
 	// repeating an upsert does not create a second row.
 	CountCandles(ctx context.Context, arg CountCandlesParams) (int64, error)
+	CountSignalOutcomes(ctx context.Context, arg CountSignalOutcomesParams) (int64, error)
+	// The size of the collection the page came from, so a client can tell a
+	// short page from the last page.
+	CountSignals(ctx context.Context, arg CountSignalsParams) (int64, error)
 	// Every unfilled gap for a timeframe, including those that have exhausted
 	// their retries: the status endpoint reports what is missing, not what is
 	// still being chased.
@@ -91,6 +95,11 @@ type Querier interface {
 	// Most recent stored candle, used to work out where a backfill must resume.
 	GetLatestCandle(ctx context.Context, arg GetLatestCandleParams) (Candle, error)
 	// Called on every heartbeat tick. Deliberately leaves started_at untouched.
+	//
+	// The evaluator's state rides along with it. The api is a separate process and
+	// cannot see the collector's memory, so readiness that is never written down
+	// is readiness nobody outside can observe — and "warming up", "refusing to
+	// evaluate" and "found no setup" are indistinguishable from a distance.
 	HeartbeatCollector(ctx context.Context, arg HeartbeatCollectorParams) error
 	// Records a detected hole in the candle series so backfill can chase it and
 	// so a backtest can refuse to trust the period.
@@ -111,6 +120,18 @@ type Querier interface {
 	// (strategy_name, strategy_version, symbol, timeframe, signal_time) makes a
 	// duplicate insert fail loudly rather than notify the owner twice.
 	InsertSignal(ctx context.Context, arg InsertSignalParams) (Signal, error)
+	// Outcomes with the signal they describe, newest first.
+	//
+	// The signals table is joined to filter and order, and nothing is selected
+	// from it: the outcome service reads a signal through the signal service's
+	// usecase rather than reaching into its rows. That costs one point lookup per
+	// row of a page bounded at fifty.
+	ListSignalOutcomes(ctx context.Context, arg ListSignalOutcomesParams) ([]SignalOutcome, error)
+	// The signal history, newest first, for a page of the app.
+	//
+	// Newest first because that is what a person opening the app wants; the
+	// offset is what makes older pages reachable without re-reading the newest.
+	ListSignals(ctx context.Context, arg ListSignalsParams) ([]Signal, error)
 	// Gaps still awaiting a successful backfill, oldest first, excluding those
 	// whose retry budget is spent.
 	ListUnfilledGaps(ctx context.Context, arg ListUnfilledGapsParams) ([]DataGap, error)
@@ -135,6 +156,16 @@ type Querier interface {
 	// Delivered. attempts counts the one that worked, so a row that took four
 	// tries says four rather than three.
 	MarkNotificationSent(ctx context.Context, arg MarkNotificationSentParams) (Notification, error)
+	// The delivery queue, by state.
+	//
+	// failed is the number that matters: nothing retries a failed row, so a
+	// delivery path that is permanently broken shows up here and nowhere else.
+	PipelineDeliveryActivity(ctx context.Context, arg PipelineDeliveryActivityParams) (PipelineDeliveryActivityRow, error)
+	// When the signal pipeline last produced anything, and how much is waiting.
+	//
+	// One row, because a status endpoint that made five round trips would report
+	// five different instants and invite the reader to reconcile them.
+	PipelineSignalActivity(ctx context.Context, arg PipelineSignalActivityParams) (PipelineSignalActivityRow, error)
 	// Every live signal in the window, one row each, with what became of it.
 	//
 	// # Why rows rather than an aggregate

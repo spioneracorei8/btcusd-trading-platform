@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
 
+	"github.com/spioneracorei8/btcusd-trading-platform/server/constants"
 	"github.com/spioneracorei8/btcusd-trading-platform/server/models"
 )
 
@@ -28,4 +29,24 @@ type SignalRepository interface {
 	// returns constants.ErrNotFound when the signal is gone or already has
 	// one, which the usecase distinguishes.
 	SetEntryPrice(ctx context.Context, id uuid.UUID, entry decimal.Decimal) (models.Signal, error)
+
+	// ListSignals returns a page of the signal history, newest first, and the
+	// size of the collection it came from.
+	//
+	// The total travels with the page because a client cannot otherwise tell
+	// a short page from the last one, and "is there more" is the only
+	// question a pager has.
+	ListSignals(ctx context.Context, params ListParams) ([]models.Signal, int64, error)
+}
+
+// ListParams bounds a page of signals.
+type ListParams struct {
+	Symbol     string
+	MarketType constants.MarketType
+
+	// Direction filters to long or short. Empty means both.
+	Direction constants.Direction
+
+	Limit  int32
+	Offset int32
 }

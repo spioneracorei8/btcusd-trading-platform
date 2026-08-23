@@ -413,3 +413,38 @@ func (u *outcomeUsecase) invalidate(
 		"from", signalRow.SignalTime.UTC().Format(time.RFC3339))
 	return saved, nil
 }
+
+// ListOutcomes returns a page of outcomes with the signals they describe.
+//
+// The signals are read one at a time through the signal service's usecase
+// rather than joined in the query, so this service never reaches past that
+// usecase into another service's rows. The page is bounded at fifty, so it is
+// fifty point lookups by primary key.
+func (u *outcomeUsecase) ListOutcomes(
+	ctx context.Context, params outcome.ListParams,
+) ([]outcome.Resolved, int64, error) {
+	if params.Limit <= 0 || params.Limit > constants.APIPageLimit {
+		params.Limit = constants.APIPageLimitDefault
+	}
+	if params.Offset < 0 {
+		params.Offset = 0
+	}
+	if params.Status != "" && !params.Status.Valid() {
+		return nil, 0, fmt.Errorf("outcome: %q is not an outcome status", params.Status)
+	}
+
+	outcomes, total, err := u.repo.ListOutcomes(ctx, params)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	resolved := make([]outcome.Resolved, 0, len(outcomes))
+	for _, o := range outcomes {
+		signalRow, err := u.signals.FetchSignalById(ctx, o.SignalId)
+		if err != nil {
+			return nil, 0, fmt.Errorf("read the signal for outcome %s: %w", o.SignalId, err)
+		}
+		resolved = append(resolved, outcome.Resolved{Signal: signalRow, Outcome: o})
+	}
+	return resolved, total, nil
+}

@@ -11,6 +11,28 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const countSignals = `-- name: CountSignals :one
+SELECT count(*)::bigint FROM signals
+WHERE symbol = $1
+  AND market_type = $2
+  AND ($3::text IS NULL OR direction = $3::text)
+`
+
+type CountSignalsParams struct {
+	Symbol     string
+	MarketType string
+	Direction  pgtype.Text
+}
+
+// The size of the collection the page came from, so a client can tell a
+// short page from the last page.
+func (q *Queries) CountSignals(ctx context.Context, arg CountSignalsParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countSignals, arg.Symbol, arg.MarketType, arg.Direction)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const fetchSignalById = `-- name: FetchSignalById :one
 SELECT id, symbol, market_type, timeframe, signal_time, direction, strength, entry_price, stop_loss, take_profit, strategy_name, strategy_version, reason, created_at, signal_price FROM signals WHERE id = $1
 `
@@ -108,6 +130,69 @@ func (q *Queries) InsertSignal(ctx context.Context, arg InsertSignalParams) (Sig
 		&i.SignalPrice,
 	)
 	return i, err
+}
+
+const listSignals = `-- name: ListSignals :many
+SELECT id, symbol, market_type, timeframe, signal_time, direction, strength, entry_price, stop_loss, take_profit, strategy_name, strategy_version, reason, created_at, signal_price FROM signals
+WHERE symbol = $1
+  AND market_type = $2
+  AND ($3::text IS NULL OR direction = $3::text)
+ORDER BY signal_time DESC, id
+LIMIT $5 OFFSET $4
+`
+
+type ListSignalsParams struct {
+	Symbol     string
+	MarketType string
+	Direction  pgtype.Text
+	RowOffset  int32
+	RowLimit   int32
+}
+
+// The signal history, newest first, for a page of the app.
+//
+// Newest first because that is what a person opening the app wants; the
+// offset is what makes older pages reachable without re-reading the newest.
+func (q *Queries) ListSignals(ctx context.Context, arg ListSignalsParams) ([]Signal, error) {
+	rows, err := q.db.Query(ctx, listSignals,
+		arg.Symbol,
+		arg.MarketType,
+		arg.Direction,
+		arg.RowOffset,
+		arg.RowLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Signal{}
+	for rows.Next() {
+		var i Signal
+		if err := rows.Scan(
+			&i.ID,
+			&i.Symbol,
+			&i.MarketType,
+			&i.Timeframe,
+			&i.SignalTime,
+			&i.Direction,
+			&i.Strength,
+			&i.EntryPrice,
+			&i.StopLoss,
+			&i.TakeProfit,
+			&i.StrategyName,
+			&i.StrategyVersion,
+			&i.Reason,
+			&i.CreatedAt,
+			&i.SignalPrice,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const setSignalEntryPrice = `-- name: SetSignalEntryPrice :one

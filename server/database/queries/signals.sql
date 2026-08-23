@@ -30,3 +30,23 @@ UPDATE signals
 SET entry_price = sqlc.arg(entry_price)
 WHERE id = sqlc.arg(id) AND entry_price IS NULL
 RETURNING *;
+
+-- name: ListSignals :many
+-- The signal history, newest first, for a page of the app.
+--
+-- Newest first because that is what a person opening the app wants; the
+-- offset is what makes older pages reachable without re-reading the newest.
+SELECT * FROM signals
+WHERE symbol = sqlc.arg(symbol)
+  AND market_type = sqlc.arg(market_type)
+  AND (sqlc.narg(direction)::text IS NULL OR direction = sqlc.narg(direction)::text)
+ORDER BY signal_time DESC, id
+LIMIT sqlc.arg(row_limit) OFFSET sqlc.arg(row_offset);
+
+-- name: CountSignals :one
+-- The size of the collection the page came from, so a client can tell a
+-- short page from the last page.
+SELECT count(*)::bigint FROM signals
+WHERE symbol = sqlc.arg(symbol)
+  AND market_type = sqlc.arg(market_type)
+  AND (sqlc.narg(direction)::text IS NULL OR direction = sqlc.narg(direction)::text);

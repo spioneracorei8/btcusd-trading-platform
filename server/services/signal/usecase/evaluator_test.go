@@ -771,3 +771,9 @@ func TestTheConstraintStopsASecondSignalWhenTheGuardCannot(t *testing.T) {
 		t.Errorf("one bar produced %d signals, want 1", len(got))
 	}
 }
+
+func (r *recordingSignals) ListSignals(
+	context.Context, signal.ListParams,
+) ([]models.Signal, int64, error) {
+	return nil, 0, errors.New("not used")
+}

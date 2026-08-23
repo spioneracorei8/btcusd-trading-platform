@@ -14,7 +14,13 @@ import (
 )
 
 type outcomeHandler struct {
-	usecase    outcome.ReconcileUsecase
+	usecase outcome.ReconcileUsecase
+
+	// reader serves the outcome list. Nil on a process that has no follower
+	// wired up, which the endpoint reports rather than pretending an empty
+	// list is an answer.
+	reader outcome.OutcomeUsecase
+
 	logger     *slog.Logger
 	symbol     string
 	marketType constants.MarketType
@@ -24,12 +30,14 @@ type outcomeHandler struct {
 // NewOutcomeHandlerImpl builds the reconciliation handler.
 func NewOutcomeHandlerImpl(
 	usecase outcome.ReconcileUsecase,
+	reader outcome.OutcomeUsecase,
 	logger *slog.Logger,
 	symbol string,
 	marketType constants.MarketType,
 ) outcome.OutcomeHandler {
 	return &outcomeHandler{
 		usecase:    usecase,
+		reader:     reader,
 		logger:     logger,
 		symbol:     symbol,
 		marketType: marketType,

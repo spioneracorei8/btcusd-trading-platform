@@ -11,6 +11,38 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const countSignalOutcomes = `-- name: CountSignalOutcomes :one
+SELECT count(*)::bigint
+FROM signal_outcomes o
+JOIN signals s ON s.id = o.signal_id
+WHERE s.symbol = $1
+  AND s.market_type = $2
+  AND ($3::text IS NULL OR o.status = $3::text)
+  AND s.signal_time >= $4
+  AND s.signal_time <= $5
+`
+
+type CountSignalOutcomesParams struct {
+	Symbol     string
+	MarketType string
+	Status     pgtype.Text
+	FromTime   pgtype.Timestamptz
+	ToTime     pgtype.Timestamptz
+}
+
+func (q *Queries) CountSignalOutcomes(ctx context.Context, arg CountSignalOutcomesParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countSignalOutcomes,
+		arg.Symbol,
+		arg.MarketType,
+		arg.Status,
+		arg.FromTime,
+		arg.ToTime,
+	)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const ensureSignalOutcomes = `-- name: EnsureSignalOutcomes :many
 INSERT INTO signal_outcomes (signal_id)
 SELECT s.id
@@ -153,6 +185,75 @@ func (q *Queries) FetchSignalOutcome(ctx context.Context, signalID pgtype.UUID) 
 		&i.UpdatedAt,
 	)
 	return i, err
+}
+
+const listSignalOutcomes = `-- name: ListSignalOutcomes :many
+SELECT o.signal_id, o.status, o.resolved_at, o.resolved_price, o.mae, o.mfe, o.bars_held, o.backtest_would_have, o.divergence_note, o.created_at, o.updated_at
+FROM signal_outcomes o
+JOIN signals s ON s.id = o.signal_id
+WHERE s.symbol = $1
+  AND s.market_type = $2
+  AND ($3::text IS NULL OR o.status = $3::text)
+  AND s.signal_time >= $4
+  AND s.signal_time <= $5
+ORDER BY s.signal_time DESC, o.signal_id
+LIMIT $7 OFFSET $6
+`
+
+type ListSignalOutcomesParams struct {
+	Symbol     string
+	MarketType string
+	Status     pgtype.Text
+	FromTime   pgtype.Timestamptz
+	ToTime     pgtype.Timestamptz
+	RowOffset  int32
+	RowLimit   int32
+}
+
+// Outcomes with the signal they describe, newest first.
+//
+// The signals table is joined to filter and order, and nothing is selected
+// from it: the outcome service reads a signal through the signal service's
+// usecase rather than reaching into its rows. That costs one point lookup per
+// row of a page bounded at fifty.
+func (q *Queries) ListSignalOutcomes(ctx context.Context, arg ListSignalOutcomesParams) ([]SignalOutcome, error) {
+	rows, err := q.db.Query(ctx, listSignalOutcomes,
+		arg.Symbol,
+		arg.MarketType,
+		arg.Status,
+		arg.FromTime,
+		arg.ToTime,
+		arg.RowOffset,
+		arg.RowLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []SignalOutcome{}
+	for rows.Next() {
+		var i SignalOutcome
+		if err := rows.Scan(
+			&i.SignalID,
+			&i.Status,
+			&i.ResolvedAt,
+			&i.ResolvedPrice,
+			&i.Mae,
+			&i.Mfe,
+			&i.BarsHeld,
+			&i.BacktestWouldHave,
+			&i.DivergenceNote,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const updateSignalOutcome = `-- name: UpdateSignalOutcome :one

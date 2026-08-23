@@ -34,4 +34,8 @@ type SignalUsecase interface {
 	// question with one would silently change every comparison already drawn
 	// against the first.
 	SetEntryPrice(ctx context.Context, id uuid.UUID, entry decimal.Decimal) (models.Signal, error)
+
+	// ListSignals returns a page of the signal history, newest first, with
+	// the size of the collection it came from.
+	ListSignals(ctx context.Context, params ListParams) ([]models.Signal, int64, error)
 }

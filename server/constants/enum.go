@@ -173,6 +173,36 @@ func ParseDirection(s string) (Direction, error) {
 	return d, nil
 }
 
+// APIErrorCode is a stable identifier the mobile app may branch on.
+//
+// Stable is the whole point: the message is for a person and may be reworded,
+// the code is for the app and may not. Phase 09 is written against these.
+type APIErrorCode string
+
+// The API error codes.
+const (
+	// APIErrInvalidParameter is a malformed or out-of-range query parameter.
+	APIErrInvalidParameter APIErrorCode = "invalid_parameter"
+
+	// APIErrLimitExceeded is a request for more rows than the endpoint will
+	// serve. Distinct from invalid_parameter because the app's correct
+	// response is different: page, rather than fix the request.
+	APIErrLimitExceeded APIErrorCode = "limit_exceeded"
+
+	// APIErrNotFound is a resource that does not exist.
+	APIErrNotFound APIErrorCode = "not_found"
+
+	// APIErrUnavailable is a dependency the server needs and cannot reach.
+	APIErrUnavailable APIErrorCode = "unavailable"
+
+	// APIErrInternal is anything else. The message is deliberately vague; the
+	// detail is in the server log against the request id.
+	APIErrInternal APIErrorCode = "internal"
+)
+
+// String returns the wire representation of the code.
+func (c APIErrorCode) String() string { return string(c) }
+
 // OutcomeStatus is what became of a signal.
 type OutcomeStatus string
 

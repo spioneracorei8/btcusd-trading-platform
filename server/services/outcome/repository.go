@@ -15,6 +15,7 @@ package outcome
 
 import (
 	"context"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -48,4 +49,33 @@ type OutcomeRepository interface {
 
 	// FetchOutcome returns one outcome, or constants.ErrNotFound.
 	FetchOutcome(ctx context.Context, signalId uuid.UUID) (models.SignalOutcome, error)
+
+	// ListOutcomes returns a page of outcomes, newest signal first, and the
+	// size of the collection they came from.
+	//
+	// Outcomes only. The signal each one describes is read through the signal
+	// service's usecase, for the same reason FetchOpen returns outcomes:
+	// reaching past a usecase into another service's rows bypasses the rules
+	// that live in between.
+	ListOutcomes(ctx context.Context, params ListParams) ([]models.SignalOutcome, int64, error)
+}
+
+// ListParams bounds a page of outcomes.
+type ListParams struct {
+	Symbol     string
+	MarketType constants.MarketType
+
+	// Status filters to one outcome status. Empty means all of them.
+	Status constants.OutcomeStatus
+
+	From, To time.Time
+
+	Limit  int32
+	Offset int32
+}
+
+// Resolved is one outcome and the signal it describes.
+type Resolved struct {
+	Signal  models.Signal
+	Outcome models.SignalOutcome
 }

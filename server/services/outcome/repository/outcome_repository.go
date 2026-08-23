@@ -7,6 +7,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/spioneracorei8/btcusd-trading-platform/server/constants"
@@ -119,6 +120,50 @@ func (r *outcomeRepository) FetchOutcome(
 		return models.SignalOutcome{}, fmt.Errorf("fetch outcome %s: %w", signalId, err)
 	}
 	return toOutcomeModel(row)
+}
+
+// ListOutcomes returns a page of outcomes with their signals.
+func (r *outcomeRepository) ListOutcomes(
+	ctx context.Context, params outcome.ListParams,
+) ([]models.SignalOutcome, int64, error) {
+	status := pgtype.Text{}
+	if params.Status != "" {
+		status = pgtype.Text{String: params.Status.String(), Valid: true}
+	}
+
+	rows, err := r.queries.ListSignalOutcomes(ctx, db.ListSignalOutcomesParams{
+		Symbol:     params.Symbol,
+		MarketType: params.MarketType.String(),
+		Status:     status,
+		FromTime:   database.TimestamptzFromTime(params.From),
+		ToTime:     database.TimestamptzFromTime(params.To),
+		RowLimit:   params.Limit,
+		RowOffset:  params.Offset,
+	})
+	if err != nil {
+		return nil, 0, fmt.Errorf("list outcomes: %w", err)
+	}
+
+	total, err := r.queries.CountSignalOutcomes(ctx, db.CountSignalOutcomesParams{
+		Symbol:     params.Symbol,
+		MarketType: params.MarketType.String(),
+		Status:     status,
+		FromTime:   database.TimestamptzFromTime(params.From),
+		ToTime:     database.TimestamptzFromTime(params.To),
+	})
+	if err != nil {
+		return nil, 0, fmt.Errorf("count outcomes: %w", err)
+	}
+
+	out := make([]models.SignalOutcome, 0, len(rows))
+	for _, row := range rows {
+		o, err := toOutcomeModel(row)
+		if err != nil {
+			return nil, 0, err
+		}
+		out = append(out, o)
+	}
+	return out, total, nil
 }
 
 // toOutcomeModel converts one row, refusing a status the enum does not know

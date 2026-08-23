@@ -8,10 +8,16 @@ package routes
 import (
 	"github.com/go-chi/chi/v5"
 
+	"github.com/spioneracorei8/btcusd-trading-platform/server/constants"
 	"github.com/spioneracorei8/btcusd-trading-platform/server/middleware"
+	"github.com/spioneracorei8/btcusd-trading-platform/server/services/candle"
 	"github.com/spioneracorei8/btcusd-trading-platform/server/services/health"
+	"github.com/spioneracorei8/btcusd-trading-platform/server/services/indicator"
 	"github.com/spioneracorei8/btcusd-trading-platform/server/services/market"
 	"github.com/spioneracorei8/btcusd-trading-platform/server/services/outcome"
+	"github.com/spioneracorei8/btcusd-trading-platform/server/services/pipeline"
+	"github.com/spioneracorei8/btcusd-trading-platform/server/services/signal"
+	"github.com/spioneracorei8/btcusd-trading-platform/server/services/stream"
 )
 
 type route struct {
@@ -59,4 +65,46 @@ func (r *route) RegisterMarketHandler(handler market.MarketHandler) {
 // opens deliberately rather than something polled.
 func (r *route) RegisterOutcomeHandler(handler outcome.OutcomeHandler) {
 	r.router.Get("/internal/signals/reconciliation", handler.Reconciliation)
+}
+
+// RegisterAPI mounts everything the mobile app consumes.
+//
+// # Why the path is versioned
+//
+// A deployed phone cannot be redeployed with the server. Phase 09 is written
+// against this shape, and the first time it needs to change, an app in
+// somebody's pocket will still be asking for the old one.
+//
+// # Why there is no authentication
+//
+// The network is the boundary: the api listens on loopback and the tailnet
+// and is unreachable from the public internet. See ADR 0024, which also
+// records what would have to change before that stopped being true.
+func (r *route) RegisterAPI(api APIHandlers) {
+	r.router.Route("/api/"+constants.APIVersion, func(v chi.Router) {
+		v.Get("/candles", api.Candles.Candles)
+		v.Get("/indicators", api.Indicators.Indicators)
+
+		v.Get("/signals", api.Signals.Signals)
+		v.Get("/signals/{id}", api.Signals.Signal)
+
+		v.Get("/outcomes", api.Outcomes.Outcomes)
+		v.Get("/performance", api.Outcomes.Performance)
+
+		v.Get("/status", api.Status.Status)
+		v.Get("/stream", api.Stream.Stream)
+	})
+}
+
+// APIHandlers is everything the versioned API needs.
+//
+// Passed as a struct rather than eight arguments so adding an endpoint does
+// not silently reorder the existing ones at every call site.
+type APIHandlers struct {
+	Candles    candle.CandleHandler
+	Indicators indicator.IndicatorHandler
+	Signals    signal.SignalHandler
+	Outcomes   outcome.OutcomeHandler
+	Status     pipeline.StatusHandler
+	Stream     stream.StreamHandler
 }

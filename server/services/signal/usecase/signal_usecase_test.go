@@ -284,3 +284,21 @@ func TestDuplicateIsPassedThrough(t *testing.T) {
 		t.Fatalf("CreateSignal() returned %v, want ErrDuplicateSignal", err)
 	}
 }
+
+func (s *spyRepo) ListSignals(
+	_ context.Context, params signal.ListParams,
+) ([]models.Signal, int64, error) {
+	if s.err != nil {
+		return nil, 0, s.err
+	}
+
+	// Newest first, as the query returns them, so a test can assert order.
+	out := make([]models.Signal, 0, len(s.inserted))
+	for i := len(s.inserted) - 1; i >= 0; i-- {
+		out = append(out, s.inserted[i])
+	}
+	if int(params.Limit) < len(out) {
+		out = out[:params.Limit]
+	}
+	return out, int64(len(s.inserted)), nil
+}
