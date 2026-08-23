@@ -225,7 +225,15 @@ func SampleBanner(s SampleAdequacy) string {
 		s.Resolved, s.Required)
 
 	if !s.Known {
-		return banner + "\nNothing has resolved yet, so there is no rate to estimate a wait from."
+		// Two different reasons there is no wait to state, and they are not
+		// the same sentence. Nothing having resolved is the ordinary early
+		// case; resolutions that all landed at one instant — a single signal,
+		// or a batch backfilled together — is a group whose rate cannot be
+		// measured yet however many rows it has.
+		if s.Resolved == 0 {
+			return banner + "\nNothing has resolved yet, so there is no rate to estimate a wait from."
+		}
+		return banner + "\nThese resolved over no measurable span, so there is no rate to estimate a wait from."
 	}
 	return banner + fmt.Sprintf(
 		"\nAt the observed %.2f resolved signals a day, the remaining %d would take about %s.",

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"math"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -184,6 +185,61 @@ func TestTheBannerStatesTheExpectedWait(t *testing.T) {
 	}
 	if !strings.Contains(banner, "0.10") {
 		t.Errorf("the banner does not state the observed rate:\n%s", banner)
+	}
+}
+
+// TestTheBannerSaysWhyThereIsNoWaitRatherThanGuessing.
+//
+// # What this prevents
+//
+// There are two reasons a wait cannot be stated and they are different facts.
+// Nothing has resolved yet — the ordinary early case. Or things have resolved
+// but at one instant, so no rate can be measured from them: one signal, or a
+// batch that landed together.
+//
+// Both used to print "Nothing has resolved yet", which on a group showing
+// "signals resolved: 1" contradicted the line above it. A banner that
+// disagrees with its own numbers is worse than no banner: it is the line that
+// exists to stop somebody acting on a thin sample.
+func TestTheBannerSaysWhyThereIsNoWaitRatherThanGuessing(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		sample  outcome.SampleAdequacy
+		want    string
+		notWant string
+	}{
+		{
+			name:    "nothing resolved",
+			sample:  outcome.SampleAdequacy{Resolved: 0, Required: 100},
+			want:    "Nothing has resolved yet",
+			notWant: "no measurable span",
+		},
+		{
+			name:    "resolved at one instant",
+			sample:  outcome.SampleAdequacy{Resolved: 1, Required: 100},
+			want:    "no measurable span",
+			notWant: "Nothing has resolved yet",
+		},
+		{
+			name:    "several resolved at one instant",
+			sample:  outcome.SampleAdequacy{Resolved: 12, Required: 100},
+			want:    "no measurable span",
+			notWant: "Nothing has resolved yet",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			banner := outcome.SampleBanner(tc.sample)
+
+			if !strings.Contains(banner, tc.want) {
+				t.Errorf("the banner does not say %q:\n%s", tc.want, banner)
+			}
+			if strings.Contains(banner, tc.notWant) {
+				t.Errorf("the banner says %q, which is not what happened:\n%s", tc.notWant, banner)
+			}
+			if !strings.Contains(banner, "signals resolved: "+strconv.Itoa(tc.sample.Resolved)) {
+				t.Errorf("the banner does not carry its own count:\n%s", banner)
+			}
+		})
 	}
 }
 
