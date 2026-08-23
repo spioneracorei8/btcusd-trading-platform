@@ -8,13 +8,20 @@ behind it, and a notification. There is no order, trade or withdraw code path,
 and no API key with trading rights is used — Binance market data is public.
 
 Read [`CLAUDE.md`](CLAUDE.md) before writing any code. Phase prompts live in
-[`docs/prompts/`](docs/prompts/), decisions in [`docs/decisions/`](docs/decisions/).
+[`docs/prompts/`](docs/prompts/), decisions in [`docs/decisions/`](docs/decisions/),
+the HTTP and WebSocket contract in [`docs/api.md`](docs/api.md).
 
 ## Status
 
-Phases 01–06 of 09 are merged: skeleton and schema, market data ingestion,
+Phases 01–08 of 09 are merged: skeleton and schema, market data ingestion,
 the indicator engine, the backtest engine, the multi-timeframe trend filter,
-and the strategy engine.
+the strategy engine, live evaluation with outcome tracking and delivery, and
+the API the app will consume.
+
+The API has **no authentication**. It binds to loopback and the tailnet and
+nothing else, and that is the whole access control —
+[ADR 0024](docs/decisions/0024-the-api-has-no-authentication.md) records what
+would have to exist before it could be reachable from anywhere else.
 
 The backtest engine was deliberately built **before** any strategy, and the
 trend filter before that too. Without a measuring instrument there is no way to
@@ -141,6 +148,7 @@ server/
   main.go          API entry point
   collector/       Binance ingestion worker (phase 02)
   backtest/        backtest CLI (phase 04)
+  reconcile/       live-against-backtest CLI (phase 07)
   config/          environment-only configuration and validation
   constants/       enums, fixed values, sentinel errors
   helper/          small pure utilities
@@ -160,10 +168,14 @@ server/
     strategy/      strategy.go, params.go + usecase/ (phase 06)
     backtest/      backtest.go, outage.go, dataset.go + usecase/, report/ (phase 04)
     trend/         trend.go, config.go + usecase/ (phase 05)
+    outcome/       what became of each signal + reconciliation (phase 07)
+    notify/        FCM delivery queue (phase 07)
+    pipeline/      GET /api/v1/status: is the signal pipeline alive (phase 08)
+    stream/        GET /api/v1/stream: the websocket (phase 08)
   migrations/      goose migrations
   testhelper/      shared setup for repository integration tests
 deploy/            compose files, VPS runbook, provisioning and backup scripts
-docs/              decisions/, prompts/
+docs/              api.md, decisions/, prompts/, experiments.md
 mobile/            React Native app (phase 09)
 ```
 

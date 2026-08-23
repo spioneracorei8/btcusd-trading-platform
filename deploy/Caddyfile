@@ -1,8 +1,34 @@
 # Caddy runs on the VPS host and terminates TLS in front of the api container,
-# which only listens on 127.0.0.1:8080.
+# which only listens on 127.0.0.1:8080 and on the tailnet address.
+#
+# NOT USED BY THIS DEPLOYMENT. Access is over Tailscale (ADR 0017, ADR 0024);
+# this file is kept for the day a public hostname is genuinely needed.
 #
 # Replace the site address with the real hostname before deploying. Caddy
 # obtains and renews the certificate automatically.
+#
+# ---------------------------------------------------------------------------
+# Why this proxies almost nothing
+# ---------------------------------------------------------------------------
+#
+# The API has no authentication. That is a deliberate decision and the network
+# is what enforces it: the api binds to loopback and the tailnet, and ufw
+# denies everything that does not arrive on tailscale0.
+#
+# Publishing a hostname bypasses both. Everything under /api/v1 — every signal
+# with its entry, stop, target and full reason, the performance history, the
+# strategy names and parameters in use, and the pipeline's operational state —
+# would be readable by anyone who found the name, and nothing in the response
+# would indicate that.
+#
+# So the default here is deny. Only the two liveness endpoints are proxied,
+# because an uptime check has to reach them from outside and they say nothing:
+# /health is a literal, /ready is a database ping.
+#
+# ADR 0024 lists what has to exist before this file may carry anything else —
+# authentication in middleware ahead of the /api/v1 mount, a secret store,
+# rotation, rate limiting, origin checking on the websocket. Opening the block
+# below without that list done is the mistake this comment exists to prevent.
 
 btc.example.com {
 	encode zstd gzip
@@ -12,10 +38,6 @@ btc.example.com {
 		format json
 	}
 
-	# Single-owner system: nothing here is meant to be public. Keep the
-	# health endpoints reachable for uptime checks and put everything else
-	# behind the reverse proxy only after the API gains real endpoints in
-	# phase 08.
 	handle /health {
 		reverse_proxy 127.0.0.1:8080
 	}
@@ -24,8 +46,10 @@ btc.example.com {
 		reverse_proxy 127.0.0.1:8080
 	}
 
+	# Everything else, including all of /api/v1 and the websocket. 404 rather
+	# than 403: a 403 confirms there is something there.
 	handle {
-		reverse_proxy 127.0.0.1:8080
+		respond "Not Found" 404
 	}
 
 	header {

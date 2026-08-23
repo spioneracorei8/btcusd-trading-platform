@@ -143,15 +143,22 @@ Subscribable topics: `candles` (including the forming bar), `signals`, `outcomes
 - [ ] No fixes applied without describing them first
 
 **Part B**
-- [ ] `go build ./... && go vet ./... && go test ./...` passes
-- [ ] Every endpoint in B2 works, with pagination and limits enforced
-- [ ] WebSocket streams all four topics, forming candles flagged unclosed
-- [ ] Reconnect-with-delta works; a slow client cannot stall the server
-- [ ] Sample size accompanies every computed figure
-- [ ] Bound to loopback and tailnet only; unreachable from the public IP
-- [ ] `docs/api.md` complete, every example verified against a running server
-- [ ] ADR for the no-authentication decision
-- [ ] No code touches any order, trade, account, or withdrawal endpoint
+- [x] `go build ./... && go vet ./... && go test ./...` passes
+- [x] Every endpoint in B2 works, with pagination and limits enforced
+- [x] WebSocket streams all four topics, forming candles flagged unclosed
+- [x] Reconnect-with-delta works; a slow client cannot stall the server
+- [x] Sample size accompanies every computed figure
+- [x] Bound to loopback and tailnet only; unreachable from the public IP
+- [x] `docs/api.md` complete, every example verified against a running server
+- [x] ADR for the no-authentication decision
+- [x] No code touches any order, trade, account, or withdrawal endpoint
+
+One deviation from B2, deliberate and documented in `docs/api.md`:
+`/api/v1/signals` takes `direction` rather than `status`. A signal has no
+status of its own — what became of it lives in `signal_outcomes` — and
+`/api/v1/outcomes?status=` already answers that while carrying the signal's
+fields alongside. A second way to ask it would be a second thing to keep
+consistent.
 
 ---
 

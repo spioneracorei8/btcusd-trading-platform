@@ -637,9 +637,13 @@ Be certain. Two years of candles do not come back.
 
 ## 9. Deliberately not here
 
-- **Nginx, Caddy, TLS, a public domain.** Tailscale covers access. Revisit at
-  phase 08, when the mobile app needs a reachable API. `deploy/Caddyfile` is
-  kept for that day and is not used by this deployment.
+- **Nginx, Caddy, TLS, a public domain.** Tailscale covers access, and phase 08
+  did not change that: the app reaches the API over the tailnet.
+  `deploy/Caddyfile` is kept for the day a public hostname is genuinely needed
+  and is not used by this deployment. It proxies `/health` and `/ready` and
+  404s everything else — the API has no authentication, so publishing a
+  hostname would make every signal, its reason and the whole performance
+  history world-readable. ADR 0024 lists what would have to exist first.
 - **CI/CD.** Deployment is `git pull` and `systemctl restart`.
 - **Prometheus, Grafana, external alerting.** The disk check logs to journald;
   `/internal/market/status` is the health surface. Alerting arrives with the
