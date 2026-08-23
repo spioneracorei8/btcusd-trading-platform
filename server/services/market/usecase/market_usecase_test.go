@@ -273,10 +273,14 @@ func (s *stubStatusRepo) RegisterStart(_ context.Context, symbol string, marketT
 	return s.status, nil
 }
 
-func (s *stubStatusRepo) Heartbeat(_ context.Context, _ string, _ constants.MarketType, connected bool) error {
+func (s *stubStatusRepo) Heartbeat(
+	_ context.Context, _ string, _ constants.MarketType,
+	connected bool, evaluator models.EvaluatorState,
+) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.status.WSConnected = connected
+	s.status.Evaluator = evaluator
 	s.status.UpdatedAt = time.Now().UTC()
 	return nil
 }

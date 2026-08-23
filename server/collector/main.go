@@ -146,6 +146,11 @@ func run(cfg *config.Config, log *slog.Logger) error {
 			GapcheckInterval:  cfg.Market.GapcheckInterval,
 			HeartbeatInterval: cfg.Market.HeartbeatInterval,
 			OnClosedCandle:    closedCandleObserver(log, evaluator, notifyUs),
+			// Published on every heartbeat so /api/v1/status can say whether
+			// the signal path is deciding. The api is a different process
+			// and cannot see this any other way; the phase 07 audit found
+			// that nothing could answer it at all.
+			EvaluatorState: evaluatorProbe(cfg, evaluator),
 		},
 		log, marketDataRepo, collectorStatusRepo, candleUs, dataGapUs,
 	)
@@ -396,4 +401,25 @@ func timeframeNames(cfg *config.Config) []string {
 		names = append(names, tf.String())
 	}
 	return names
+}
+
+// evaluatorProbe reports what the live signal path is doing.
+//
+// Nothing configured is reported as nothing configured, not as "not ready": a
+// pipeline that was never switched on and one stuck warming up produce
+// identical silence, and only the second is a fault.
+func evaluatorProbe(cfg *config.Config, evaluator _signal.SignalEvaluator) func() models.EvaluatorState {
+	if evaluator == nil {
+		return func() models.EvaluatorState { return models.EvaluatorState{} }
+	}
+
+	return func() models.EvaluatorState {
+		ready, reason := evaluator.Ready()
+		return models.EvaluatorState{
+			Strategy:  cfg.Strategy.Name,
+			Timeframe: cfg.Strategy.Timeframe,
+			Ready:     ready,
+			Reason:    reason,
+		}
+	}
 }

@@ -23,9 +23,18 @@ RETURNING *;
 
 -- name: HeartbeatCollector :exec
 -- Called on every heartbeat tick. Deliberately leaves started_at untouched.
+--
+-- The evaluator's state rides along with it. The api is a separate process and
+-- cannot see the collector's memory, so readiness that is never written down
+-- is readiness nobody outside can observe — and "warming up", "refusing to
+-- evaluate" and "found no setup" are indistinguishable from a distance.
 UPDATE collector_status SET
-    ws_connected = sqlc.arg(ws_connected),
-    updated_at   = now()
+    ws_connected       = sqlc.arg(ws_connected),
+    strategy_name      = sqlc.arg(strategy_name),
+    strategy_timeframe = sqlc.arg(strategy_timeframe),
+    evaluator_ready    = sqlc.arg(evaluator_ready),
+    evaluator_reason   = sqlc.arg(evaluator_reason),
+    updated_at         = now()
 WHERE symbol = sqlc.arg(symbol)
   AND market_type = sqlc.arg(market_type);
 

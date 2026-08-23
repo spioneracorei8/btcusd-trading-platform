@@ -37,6 +37,11 @@ type CollectorStatus struct {
 	UpdatedAt          pgtype.Timestamptz
 	State              string
 	StateChangedAt     pgtype.Timestamptz
+	StrategyName       string
+	StrategyTimeframe  string
+	EvaluatorReady     bool
+	// Why the evaluator is not deciding, when it is not. Empty when it is, and when no strategy is configured at all — strategy_name distinguishes those.
+	EvaluatorReason string
 }
 
 type DataGap struct {

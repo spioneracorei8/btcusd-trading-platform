@@ -42,11 +42,18 @@ func (r *collectorStatusRepository) RegisterStart(ctx context.Context, symbol st
 	return status, nil
 }
 
-func (r *collectorStatusRepository) Heartbeat(ctx context.Context, symbol string, marketType constants.MarketType, wsConnected bool) error {
+func (r *collectorStatusRepository) Heartbeat(
+	ctx context.Context, symbol string, marketType constants.MarketType,
+	wsConnected bool, evaluator models.EvaluatorState,
+) error {
 	err := r.queries.HeartbeatCollector(ctx, db.HeartbeatCollectorParams{
-		Symbol:      symbol,
-		MarketType:  marketType.String(),
-		WsConnected: wsConnected,
+		Symbol:            symbol,
+		MarketType:        marketType.String(),
+		WsConnected:       wsConnected,
+		StrategyName:      evaluator.Strategy,
+		StrategyTimeframe: evaluator.Timeframe.String(),
+		EvaluatorReady:    evaluator.Ready,
+		EvaluatorReason:   evaluator.Reason,
 	})
 	if err != nil {
 		return fmt.Errorf("heartbeat collector: %w", err)
@@ -128,6 +135,15 @@ func toCollectorStatusModel(row db.CollectorStatus) (models.CollectorStatus, err
 		ReconnectCount:     row.ReconnectCount,
 		StartedAt:          database.TimeFromTimestamptz(row.StartedAt),
 		UpdatedAt:          database.TimeFromTimestamptz(row.UpdatedAt),
+
+		Evaluator: models.EvaluatorState{
+			Strategy: row.StrategyName,
+			// Empty when no strategy is configured, which is not a timeframe
+			// and must not be parsed as one.
+			Timeframe: constants.Timeframe(row.StrategyTimeframe),
+			Ready:     row.EvaluatorReady,
+			Reason:    row.EvaluatorReason,
+		},
 	}, nil
 }
 

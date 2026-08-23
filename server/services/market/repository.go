@@ -75,8 +75,14 @@ type CollectorStatusRepository interface {
 	// genuine uptime.
 	RegisterStart(ctx context.Context, symbol string, marketType constants.MarketType) (models.CollectorStatus, error)
 
-	// Heartbeat bumps updated_at, leaving started_at alone.
-	Heartbeat(ctx context.Context, symbol string, marketType constants.MarketType, wsConnected bool) error
+	// Heartbeat bumps updated_at, leaving started_at alone, and publishes
+	// what the live signal evaluator is doing.
+	//
+	// The evaluator's state rides on the heartbeat rather than having its own
+	// write because the two answer one question — is this pipeline alive —
+	// and two rows updated at different instants would invite the reader to
+	// reconcile them.
+	Heartbeat(ctx context.Context, symbol string, marketType constants.MarketType, wsConnected bool, evaluator models.EvaluatorState) error
 
 	// MarkConnected records the stream coming up. reconnect reports whether
 	// this was a reconnect rather than the first connection.

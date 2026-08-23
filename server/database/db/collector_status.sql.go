@@ -10,7 +10,7 @@ import (
 )
 
 const getCollectorStatus = `-- name: GetCollectorStatus :one
-SELECT symbol, market_type, ws_connected, last_connected_at, last_disconnected_at, last_disconnect_note, reconnect_count, started_at, updated_at, state, state_changed_at FROM collector_status
+SELECT symbol, market_type, ws_connected, last_connected_at, last_disconnected_at, last_disconnect_note, reconnect_count, started_at, updated_at, state, state_changed_at, strategy_name, strategy_timeframe, evaluator_ready, evaluator_reason FROM collector_status
 WHERE symbol = $1
   AND market_type = $2
 `
@@ -35,27 +35,52 @@ func (q *Queries) GetCollectorStatus(ctx context.Context, arg GetCollectorStatus
 		&i.UpdatedAt,
 		&i.State,
 		&i.StateChangedAt,
+		&i.StrategyName,
+		&i.StrategyTimeframe,
+		&i.EvaluatorReady,
+		&i.EvaluatorReason,
 	)
 	return i, err
 }
 
 const heartbeatCollector = `-- name: HeartbeatCollector :exec
 UPDATE collector_status SET
-    ws_connected = $1,
-    updated_at   = now()
-WHERE symbol = $2
-  AND market_type = $3
+    ws_connected       = $1,
+    strategy_name      = $2,
+    strategy_timeframe = $3,
+    evaluator_ready    = $4,
+    evaluator_reason   = $5,
+    updated_at         = now()
+WHERE symbol = $6
+  AND market_type = $7
 `
 
 type HeartbeatCollectorParams struct {
-	WsConnected bool
-	Symbol      string
-	MarketType  string
+	WsConnected       bool
+	StrategyName      string
+	StrategyTimeframe string
+	EvaluatorReady    bool
+	EvaluatorReason   string
+	Symbol            string
+	MarketType        string
 }
 
 // Called on every heartbeat tick. Deliberately leaves started_at untouched.
+//
+// The evaluator's state rides along with it. The api is a separate process and
+// cannot see the collector's memory, so readiness that is never written down
+// is readiness nobody outside can observe — and "warming up", "refusing to
+// evaluate" and "found no setup" are indistinguishable from a distance.
 func (q *Queries) HeartbeatCollector(ctx context.Context, arg HeartbeatCollectorParams) error {
-	_, err := q.db.Exec(ctx, heartbeatCollector, arg.WsConnected, arg.Symbol, arg.MarketType)
+	_, err := q.db.Exec(ctx, heartbeatCollector,
+		arg.WsConnected,
+		arg.StrategyName,
+		arg.StrategyTimeframe,
+		arg.EvaluatorReady,
+		arg.EvaluatorReason,
+		arg.Symbol,
+		arg.MarketType,
+	)
 	return err
 }
 
@@ -118,7 +143,7 @@ ON CONFLICT (symbol, market_type) DO UPDATE SET
     state_changed_at     = now(),
     started_at           = now(),
     updated_at           = now()
-RETURNING symbol, market_type, ws_connected, last_connected_at, last_disconnected_at, last_disconnect_note, reconnect_count, started_at, updated_at, state, state_changed_at
+RETURNING symbol, market_type, ws_connected, last_connected_at, last_disconnected_at, last_disconnect_note, reconnect_count, started_at, updated_at, state, state_changed_at, strategy_name, strategy_timeframe, evaluator_ready, evaluator_reason
 `
 
 type RegisterCollectorStartParams struct {
@@ -147,6 +172,10 @@ func (q *Queries) RegisterCollectorStart(ctx context.Context, arg RegisterCollec
 		&i.UpdatedAt,
 		&i.State,
 		&i.StateChangedAt,
+		&i.StrategyName,
+		&i.StrategyTimeframe,
+		&i.EvaluatorReady,
+		&i.EvaluatorReason,
 	)
 	return i, err
 }

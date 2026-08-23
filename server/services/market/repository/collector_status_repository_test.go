@@ -9,6 +9,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/spioneracorei8/btcusd-trading-platform/server/constants"
+	"github.com/spioneracorei8/btcusd-trading-platform/server/models"
 	_market_repo "github.com/spioneracorei8/btcusd-trading-platform/server/services/market/repository"
 	"github.com/spioneracorei8/btcusd-trading-platform/server/testhelper"
 )
@@ -50,7 +51,7 @@ func TestHeartbeatLeavesStartedAtAlone(t *testing.T) {
 
 	// A heartbeat later, only updated_at may have moved.
 	time.Sleep(10 * time.Millisecond)
-	if err := repo.Heartbeat(ctx, symbol, constants.MarketTypeSpot, true); err != nil {
+	if err := repo.Heartbeat(ctx, symbol, constants.MarketTypeSpot, true, models.EvaluatorState{}); err != nil {
 		t.Fatalf("Heartbeat() returned error: %v", err)
 	}
 
@@ -279,7 +280,7 @@ func TestUptimeAndHeartbeatAgeAreIndependent(t *testing.T) {
 		t.Fatalf("RegisterStart() returned error: %v", err)
 	}
 	time.Sleep(50 * time.Millisecond)
-	if err := repo.Heartbeat(ctx, symbol, constants.MarketTypeSpot, true); err != nil {
+	if err := repo.Heartbeat(ctx, symbol, constants.MarketTypeSpot, true, models.EvaluatorState{}); err != nil {
 		t.Fatalf("Heartbeat() returned error: %v", err)
 	}
 

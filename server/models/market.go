@@ -27,6 +27,13 @@ type CollectorStatus struct {
 	LastDisconnectNote string
 	ReconnectCount     int32
 
+	// Evaluator is what the live signal path is doing.
+	//
+	// It is published here because the api runs in a different process and
+	// cannot see the collector's memory. Readiness that is never written down
+	// is readiness nobody outside can observe.
+	Evaluator EvaluatorState
+
 	// StartedAt is when this collector process started. Together with
 	// UpdatedAt it separates "up for three days" from "restarting every ten
 	// seconds", which look identical from a single heartbeat.
@@ -87,3 +94,27 @@ type MarketStatus struct {
 	// result is nil rather than a false that looks like an all-clear.
 	Stale *bool
 }
+
+// EvaluatorState is the live signal path, as the collector last reported it.
+//
+// # Why silence needs three different explanations
+//
+// A strategy at a tenth of a signal a day is quiet for weeks by design. From
+// outside, "no strategy configured", "still warming up" and "warm and found
+// nothing" look identical — and the first two are faults while the third is
+// the system working. Nothing in phase 07 could tell them apart.
+type EvaluatorState struct {
+	// Strategy is empty when none is configured, which is the difference
+	// between a pipeline that is off and one that is stuck.
+	Strategy  string
+	Timeframe constants.Timeframe
+
+	// Ready is whether the strategy may decide, and Reason why not when it
+	// may not. Reason is empty when Ready, and when no strategy is
+	// configured at all.
+	Ready  bool
+	Reason string
+}
+
+// Configured reports whether a strategy is running at all.
+func (e EvaluatorState) Configured() bool { return e.Strategy != "" }

@@ -41,6 +41,14 @@ type Config struct {
 	// returns is its own business: the candle is the durable artefact and a
 	// failure downstream of it must not cost one.
 	OnClosedCandle func(ctx context.Context, bar models.Candle)
+
+	// EvaluatorState reports what the live signal path is doing, so the
+	// heartbeat can publish it where the api can read it. Nil when no
+	// evaluator is attached.
+	//
+	// A function rather than a value because it is asked on every tick: a
+	// snapshot taken at construction would report "warming up" forever.
+	EvaluatorState func() models.EvaluatorState
 }
 
 type marketUsecase struct {
@@ -365,7 +373,7 @@ func (u *marketUsecase) heartbeatLoop(ctx context.Context) error {
 			current, err := u.status.FetchStatus(ctx, u.cfg.Symbol, u.cfg.MarketType)
 			connected := err == nil && current.WSConnected
 
-			if err := u.status.Heartbeat(ctx, u.cfg.Symbol, u.cfg.MarketType, connected); err != nil {
+			if err := u.status.Heartbeat(ctx, u.cfg.Symbol, u.cfg.MarketType, connected, u.evaluatorState()); err != nil {
 				if ctx.Err() != nil {
 					return nil
 				}
@@ -448,4 +456,17 @@ func truncateNote(note string) string {
 		return note
 	}
 	return note[:limit]
+}
+
+// evaluatorState is what the live signal path is doing, for the heartbeat to
+// publish.
+//
+// Nothing configured is reported as nothing configured rather than as "not
+// ready": a pipeline that was never switched on and one that is stuck warming
+// up are different problems, and only the first is not a problem.
+func (u *marketUsecase) evaluatorState() models.EvaluatorState {
+	if u.cfg.EvaluatorState == nil {
+		return models.EvaluatorState{}
+	}
+	return u.cfg.EvaluatorState()
 }
