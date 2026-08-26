@@ -210,6 +210,19 @@ type Querier interface {
 	// Record progress or a resolution. The same statement serves both: an
 	// outcome still open carries its running excursions and bar count, and a
 	// resolved one adds when and where it ended.
+	//
+	// The status guard makes resolution one-way at the database rather than by
+	// convention. Every caller reaches this through FetchOpen, which already
+	// filters to open rows, so a single collector cannot tell the difference —
+	// but two collectors will run at once eventually, by accident, during a
+	// deploy. Without the guard the second one overwrites the first one's
+	// resolution using a row it read before that resolution existed, and the
+	// worst case is overwriting `invalidated` with a computed outcome: a
+	// measurement derived from data known to be incomplete, sitting in the table
+	// looking exactly like a sound one, with nothing in the row to say otherwise.
+	//
+	// Nothing anywhere writes to a resolved outcome on purpose. The reconciliation
+	// reads them; the accounting is written in the same statement that resolves.
 	UpdateSignalOutcome(ctx context.Context, arg UpdateSignalOutcomeParams) (SignalOutcome, error)
 	// Idempotent write of one closed candle. Re-delivering the same bar (after a
 	// reconnect or a REST backfill) updates it in place instead of duplicating it.

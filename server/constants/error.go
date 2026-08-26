@@ -14,6 +14,18 @@ var (
 	// ErrUnclosedCandle reports an attempt to store a candle that is still
 	// forming. Only closed candles may reach the strategies.
 	ErrUnclosedCandle = errors.New("candle is not closed")
+
+	// ErrOutcomeNotOpen reports a write to an outcome that something else
+	// already resolved.
+	//
+	// It is the status guard on UpdateSignalOutcome doing its job, not a
+	// fault: resolution is one-way, and a second follower holding a row it
+	// read before the resolution existed is refused rather than allowed to
+	// overwrite it. It is distinct from ErrNotFound because the two mean
+	// opposite things — this one says the row is there and is finished,
+	// ErrNotFound says the row this system believed it was updating does not
+	// exist, which is a real inconsistency.
+	ErrOutcomeNotOpen = errors.New("outcome is no longer open")
 )
 
 // Sentinel errors returned by the backtest engine.

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"strings"
@@ -33,6 +34,12 @@ type outcomeStore struct {
 	order    []uuid.UUID
 	saveErr  error
 	fetchErr error
+
+	// afterFetch runs once the working set has been handed out, so a test can
+	// change a row in the window between FetchOpen and SaveOutcome. That
+	// window is the whole of the two-collector race and cannot be reproduced
+	// by editing the map beforehand: the row would simply not be fetched.
+	afterFetch func()
 }
 
 func newStore() *outcomeStore {
@@ -63,17 +70,33 @@ func (s *outcomeStore) FetchOpen(
 			open = append(open, row)
 		}
 	}
+	if s.afterFetch != nil {
+		hook := s.afterFetch
+		s.afterFetch = nil
+		hook()
+	}
 	return open, nil
 }
 
+// SaveOutcome models the guarded update, including its refusal.
+//
+// The real statement carries `AND status = 'open'`, so a write to a resolved
+// row matches nothing. A fake that accepted it would let a usecase test pass
+// on behaviour the database does not have — which is the whole failure mode
+// the guard exists to close.
 func (s *outcomeStore) SaveOutcome(
 	_ context.Context, o models.SignalOutcome,
 ) (models.SignalOutcome, error) {
 	if s.saveErr != nil {
 		return models.SignalOutcome{}, s.saveErr
 	}
-	if _, ok := s.rows[o.SignalId]; !ok {
+	current, ok := s.rows[o.SignalId]
+	if !ok {
 		return models.SignalOutcome{}, errors.New("no outcome for that signal")
+	}
+	if current.Status != constants.OutcomeOpen {
+		return models.SignalOutcome{}, fmt.Errorf("save outcome %s: %w, it is %s",
+			o.SignalId, constants.ErrOutcomeNotOpen, current.Status)
 	}
 	s.rows[o.SignalId] = o
 	return o, nil
@@ -782,6 +805,101 @@ func TestOneUnreadableSignalDoesNotStopThePass(t *testing.T) {
 	}
 	if store.rows[good.Id].Status != constants.OutcomeTarget {
 		t.Errorf("the readable signal was left %q", store.rows[good.Id].Status)
+	}
+}
+
+// TestASignalResolvedByAnotherProcessIsContentionRatherThanFailure.
+//
+// # What this prevents
+//
+// Two collectors will run at once eventually, by accident, during a deploy.
+// Both followers fetch the same open rows; one resolves a signal and the other
+// then tries to write a row it read before that resolution existed. The
+// database refuses the second write, which is the guard working.
+//
+// Two things must follow from that refusal, and neither is automatic. It must
+// not be logged as a failure to follow the signal — nothing failed, and an
+// ERROR per contested row on every pass is how a real fault gets lost in
+// noise. And it must not be silent either: the only way to reach this state is
+// two collectors, whose other symptoms are subtle (duplicated work, two
+// exchange connections, both racing on every row). So it is counted.
+//
+// The store's fake refuses exactly as the statement does, so this is the
+// production path rather than an invented one.
+func TestASignalResolvedByAnotherProcessIsContentionRatherThanFailure(t *testing.T) {
+	contested := aLongSignal("95", "110")
+	behind := aLongSignal("95", "110")
+
+	store := newStore()
+	store.open(contested.Id)
+	store.open(behind.Id)
+
+	signals := &signalStore{rows: map[uuid.UUID]models.Signal{
+		contested.Id: contested, behind.Id: behind,
+	}}
+	usecase, err := _outcome_us.NewOutcomeUsecaseImpl(
+		store, silentLog(), signals,
+		&candleStore{series: []models.Candle{bar(0, "101", "111", "102", "110")}},
+		&gapStore{},
+		_outcome_us.Config{
+			Symbol: "BTCUSDT", MarketType: constants.MarketTypeSpot,
+			Costs: testCosts(), ExpiryBars: 48,
+		},
+	)
+	if err != nil {
+		t.Fatalf("NewOutcomeUsecaseImpl() returned error: %v", err)
+	}
+
+	// The other collector gets there first — after this pass has read the
+	// working set, which is the only window in which the race exists.
+	resolvedAt := followStart
+	store.afterFetch = func() {
+		store.rows[contested.Id] = models.SignalOutcome{
+			SignalId: contested.Id, Status: constants.OutcomeStop,
+			ResolvedAt: &resolvedAt, BarsHeld: 1,
+			ResolvedPrice: decimal.NullDecimal{Decimal: decimal.RequireFromString("95"), Valid: true},
+		}
+	}
+
+	report, err := usecase.FollowOpen(context.Background())
+	if err != nil {
+		t.Fatalf("FollowOpen() returned error: %v", err)
+	}
+
+	if report.Contended != 1 {
+		t.Errorf("Contended = %d, want 1: a lost race is counted so a second collector is visible",
+			report.Contended)
+	}
+	if report.Followed != 1 {
+		t.Errorf("Followed = %d, want 1: the uncontested signal behind it", report.Followed)
+	}
+	if report.Resolved != 1 {
+		t.Errorf("Resolved = %d, want 1: only the one this pass actually resolved", report.Resolved)
+	}
+
+	// The row the other process wrote is untouched.
+	if got := store.rows[contested.Id]; got.Status != constants.OutcomeStop || got.BarsHeld != 1 {
+		t.Errorf("the contested row is now %q after %d bars; it must not have moved",
+			got.Status, got.BarsHeld)
+	}
+	if store.rows[behind.Id].Status != constants.OutcomeTarget {
+		t.Errorf("the signal behind the contested one was left %q",
+			store.rows[behind.Id].Status)
+	}
+}
+
+// TestAPassThatOnlyLostRacesIsNotQuiet.
+//
+// Quiet() decides whether the pass says anything at all. A pass where every
+// row was taken by another process did no work by every other measure, so
+// without Contended in that test the one symptom of a double deploy would be
+// suppressed as an empty sweep.
+func TestAPassThatOnlyLostRacesIsNotQuiet(t *testing.T) {
+	if (outcome.FollowReport{Contended: 1}).Quiet() {
+		t.Error("a pass that lost a race reported itself as quiet")
+	}
+	if !(outcome.FollowReport{}).Quiet() {
+		t.Error("an empty pass did not report itself as quiet")
 	}
 }
 

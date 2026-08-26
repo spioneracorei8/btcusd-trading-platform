@@ -114,7 +114,8 @@ func (u *outcomeUsecase) Run(ctx context.Context) error {
 				"opened", report.Opened, "followed", report.Followed,
 				"resolved", report.Resolved, "target", report.Target,
 				"stop", report.Stop, "expired", report.Expired,
-				"invalidated", report.Invalidated, "ambiguous", report.Ambiguous)
+				"invalidated", report.Invalidated, "ambiguous", report.Ambiguous,
+				"contended", report.Contended)
 		}
 
 		select {
@@ -148,6 +149,18 @@ func (u *outcomeUsecase) FollowOpen(ctx context.Context) (outcome.FollowReport, 
 		}
 
 		resolved, err := u.follow(ctx, row)
+		if errors.Is(err, constants.ErrOutcomeNotOpen) {
+			// Another follower resolved this between FetchOpen and the write.
+			// The database refused the second write, which is the guard doing
+			// its job, so this is not a failure to follow the signal — but it
+			// is only reachable with two collectors running, so it is counted
+			// and said out loud.
+			report.Contended++
+			u.log.WarnContext(ctx, "a signal was resolved by another process mid-pass",
+				"signal_id", row.SignalId.String(),
+				"note", "two followers are running against this symbol; check for a second collector")
+			continue
+		}
 		if err != nil {
 			// One signal that cannot be followed is not a reason to abandon
 			// the ones behind it.

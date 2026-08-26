@@ -268,6 +268,7 @@ SET status = $1,
     divergence_note = $8,
     updated_at = now()
 WHERE signal_id = $9
+  AND status = 'open'
 RETURNING signal_id, status, resolved_at, resolved_price, mae, mfe, bars_held, backtest_would_have, divergence_note, created_at, updated_at
 `
 
@@ -286,6 +287,19 @@ type UpdateSignalOutcomeParams struct {
 // Record progress or a resolution. The same statement serves both: an
 // outcome still open carries its running excursions and bar count, and a
 // resolved one adds when and where it ended.
+//
+// The status guard makes resolution one-way at the database rather than by
+// convention. Every caller reaches this through FetchOpen, which already
+// filters to open rows, so a single collector cannot tell the difference —
+// but two collectors will run at once eventually, by accident, during a
+// deploy. Without the guard the second one overwrites the first one's
+// resolution using a row it read before that resolution existed, and the
+// worst case is overwriting `invalidated` with a computed outcome: a
+// measurement derived from data known to be incomplete, sitting in the table
+// looking exactly like a sound one, with nothing in the row to say otherwise.
+//
+// Nothing anywhere writes to a resolved outcome on purpose. The reconciliation
+// reads them; the accounting is written in the same statement that resolves.
 func (q *Queries) UpdateSignalOutcome(ctx context.Context, arg UpdateSignalOutcomeParams) (SignalOutcome, error) {
 	row := q.db.QueryRow(ctx, updateSignalOutcome,
 		arg.Status,

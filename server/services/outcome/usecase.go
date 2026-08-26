@@ -40,10 +40,21 @@ type FollowReport struct {
 	// stop was assumed. A win rate resting largely on these rests on an
 	// assumption rather than on evidence.
 	Ambiguous int
+
+	// Contended counts signals another process resolved while this pass was
+	// working on them. The database refuses the second write, so no data is
+	// lost — but the only way this is reachable is two followers running at
+	// once, which means two collectors, which means a deploy went wrong.
+	//
+	// It is counted rather than only logged because that is a fault whose
+	// other symptoms are subtle: duplicated work, doubled exchange
+	// connections, and two processes racing on every row. A non-zero count
+	// here names it directly.
+	Contended int
 }
 
 // Quiet reports whether the pass did nothing worth saying, so a follower
 // waking every minute does not narrate an empty sweep forever.
 func (r FollowReport) Quiet() bool {
-	return r.Opened == 0 && r.Followed == 0 && r.Resolved == 0
+	return r.Opened == 0 && r.Followed == 0 && r.Resolved == 0 && r.Contended == 0
 }

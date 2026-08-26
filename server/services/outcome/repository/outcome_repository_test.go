@@ -2,6 +2,8 @@ package repository_test
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -241,6 +243,188 @@ func TestAHalfWrittenResolutionIsRefusedByTheDatabase(t *testing.T) {
 		ResolvedAt: &at, ResolvedPrice: price,
 	}); err != nil {
 		t.Errorf("the control case failed: %v", err)
+	}
+}
+
+// TestResolutionIsOneWayAtTheDatabase.
+//
+// # What this prevents
+//
+// Two collectors will run at once eventually, by accident, during a deploy.
+// Both followers fetch the same open rows, one resolves a signal, and the
+// other then writes a row it read before that resolution existed.
+//
+// The worst case is the invalidated one. An invalidated outcome says the
+// window had missing data and what happened is not knowable; overwriting it
+// with a computed result puts a number derived from incomplete data into the
+// table, indistinguishable from a sound one, with nothing in the row to say
+// so. It would be counted in every win rate afterwards and there is no way to
+// find it later.
+//
+// The guard is `AND status = 'open'` on the update. Each case below writes a
+// second time to a row that is already finished and asserts the stored row did
+// not move.
+func TestResolutionIsOneWayAtTheDatabase(t *testing.T) {
+	pool := testhelper.NewTestPool(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	resolvedAt := time.Date(2026, 9, 6, 6, 0, 0, 0, time.UTC)
+
+	// first is how the row is finished; second is the write that must bounce.
+	tests := []struct {
+		name   string
+		symbol string
+		first  models.SignalOutcome
+		second models.SignalOutcome
+	}{
+		{
+			name:   "a computed outcome cannot overwrite an invalidated one",
+			symbol: "TESTONEWAYINVALID",
+			first: models.SignalOutcome{
+				Status: constants.OutcomeInvalidated, ResolvedAt: &resolvedAt, BarsHeld: 4,
+				DivergenceNote: "the window has missing data",
+			},
+			second: models.SignalOutcome{
+				Status: constants.OutcomeTarget, ResolvedAt: &resolvedAt, BarsHeld: 6,
+				ResolvedPrice:     decimal.NullDecimal{Decimal: decimal.RequireFromString("66000"), Valid: true},
+				BacktestWouldHave: []byte(`{"status":"target","net_return_pct":"3.0"}`),
+			},
+		},
+		{
+			name:   "a second resolution cannot replace the first",
+			symbol: "TESTONEWAYRESOLVED",
+			first: models.SignalOutcome{
+				Status: constants.OutcomeStop, ResolvedAt: &resolvedAt, BarsHeld: 2,
+				ResolvedPrice: decimal.NullDecimal{Decimal: decimal.RequireFromString("62999.99"), Valid: true},
+			},
+			second: models.SignalOutcome{
+				Status: constants.OutcomeTarget, ResolvedAt: &resolvedAt, BarsHeld: 9,
+				ResolvedPrice: decimal.NullDecimal{Decimal: decimal.RequireFromString("66000"), Valid: true},
+			},
+		},
+		{
+			name:   "progress cannot reopen a resolved outcome",
+			symbol: "TESTONEWAYREOPEN",
+			first: models.SignalOutcome{
+				Status: constants.OutcomeExpired, ResolvedAt: &resolvedAt, BarsHeld: 48,
+				ResolvedPrice: decimal.NullDecimal{Decimal: decimal.RequireFromString("64500"), Valid: true},
+			},
+			second: models.SignalOutcome{
+				Status: constants.OutcomeOpen, BarsHeld: 49,
+				MAE: decimal.NullDecimal{Decimal: decimal.RequireFromString("10"), Valid: true},
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			testhelper.CleanupSymbol(t, pool, tc.symbol)
+
+			repo := _outcome_repo.NewOutcomeRepoImpl(pool)
+			signal := storeSignal(t, pool, tc.symbol, time.Date(2026, 9, 6, 0, 0, 0, 0, time.UTC))
+			if _, err := repo.EnsureOutcomes(ctx, tc.symbol, constants.MarketTypeSpot, 10); err != nil {
+				t.Fatalf("EnsureOutcomes() returned error: %v", err)
+			}
+
+			tc.first.SignalId = signal.Id
+			settled, err := repo.SaveOutcome(ctx, tc.first)
+			if err != nil {
+				t.Fatalf("the first resolution was refused: %v", err)
+			}
+
+			tc.second.SignalId = signal.Id
+			if _, err := repo.SaveOutcome(ctx, tc.second); err == nil {
+				t.Fatal("the second write was accepted; resolution is not one-way")
+			} else if !errors.Is(err, constants.ErrOutcomeNotOpen) {
+				t.Errorf("the second write failed with %v, want ErrOutcomeNotOpen: a lost race "+
+					"and a missing row are different problems", err)
+			}
+
+			// The refusal is only worth anything if the row did not move.
+			after, err := repo.FetchOutcome(ctx, signal.Id)
+			if err != nil {
+				t.Fatalf("FetchOutcome() returned error: %v", err)
+			}
+			if after.Status != settled.Status {
+				t.Errorf("status is now %q, want %q", after.Status, settled.Status)
+			}
+			if after.BarsHeld != settled.BarsHeld {
+				t.Errorf("bars_held is now %d, want %d", after.BarsHeld, settled.BarsHeld)
+			}
+			if after.ResolvedPrice.Valid != settled.ResolvedPrice.Valid ||
+				(settled.ResolvedPrice.Valid &&
+					!after.ResolvedPrice.Decimal.Equal(settled.ResolvedPrice.Decimal)) {
+				t.Errorf("resolved_price is now %v, want %v", after.ResolvedPrice, settled.ResolvedPrice)
+			}
+			if string(after.BacktestWouldHave) != string(settled.BacktestWouldHave) {
+				t.Errorf("the accounting changed to %s, want %s",
+					after.BacktestWouldHave, settled.BacktestWouldHave)
+			}
+			if after.DivergenceNote != settled.DivergenceNote {
+				t.Errorf("the note changed to %q, want %q", after.DivergenceNote, settled.DivergenceNote)
+			}
+		})
+	}
+}
+
+// TestAMissingRowAndALostRaceAreDifferentErrors.
+//
+// The guard makes "the update matched nothing" ambiguous. A row that is gone
+// is an inconsistency somebody has to look at; a row that something else
+// finished first is the guard working. Reporting them as one would either send
+// somebody hunting for a row that is sitting there, or hide a real
+// inconsistency behind an expected one.
+func TestAMissingRowAndALostRaceAreDifferentErrors(t *testing.T) {
+	pool := testhelper.NewTestPool(t)
+	const symbol = "TESTONEWAYMISSING"
+	testhelper.CleanupSymbol(t, pool, symbol)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	repo := _outcome_repo.NewOutcomeRepoImpl(pool)
+
+	// No outcome row at all: nothing was ever opened for this id.
+	err := func() error {
+		_, err := repo.SaveOutcome(ctx, models.SignalOutcome{
+			SignalId: uuid.New(), Status: constants.OutcomeOpen, BarsHeld: 1,
+		})
+		return err
+	}()
+	if err == nil {
+		t.Fatal("writing to an outcome that does not exist was accepted")
+	}
+	if errors.Is(err, constants.ErrOutcomeNotOpen) {
+		t.Errorf("a missing row was reported as a lost race: %v", err)
+	}
+	if !strings.Contains(err.Error(), "no outcome for signal") {
+		t.Errorf("error = %v, want it to say the outcome does not exist", err)
+	}
+
+	// A row that exists and is finished.
+	signal := storeSignal(t, pool, symbol, time.Date(2026, 9, 7, 0, 0, 0, 0, time.UTC))
+	if _, err := repo.EnsureOutcomes(ctx, symbol, constants.MarketTypeSpot, 10); err != nil {
+		t.Fatalf("EnsureOutcomes() returned error: %v", err)
+	}
+	at := time.Date(2026, 9, 7, 3, 0, 0, 0, time.UTC)
+	if _, err := repo.SaveOutcome(ctx, models.SignalOutcome{
+		SignalId: signal.Id, Status: constants.OutcomeStop, ResolvedAt: &at,
+		ResolvedPrice: decimal.NullDecimal{Decimal: decimal.RequireFromString("62999.99"), Valid: true},
+	}); err != nil {
+		t.Fatalf("the resolution was refused: %v", err)
+	}
+
+	_, err = repo.SaveOutcome(ctx, models.SignalOutcome{
+		SignalId: signal.Id, Status: constants.OutcomeOpen, BarsHeld: 5,
+	})
+	if !errors.Is(err, constants.ErrOutcomeNotOpen) {
+		t.Fatalf("error = %v, want ErrOutcomeNotOpen", err)
+	}
+	// The status it was found in, so a log line says what won the race.
+	if !strings.Contains(err.Error(), "stop") {
+		t.Errorf("error = %v, want it to name the status the row is in", err)
 	}
 }
 

@@ -83,6 +83,12 @@ func (r *outcomeRepository) FetchOpen(
 }
 
 // SaveOutcome records progress or a resolution.
+//
+// The statement will only touch an open row. A miss therefore has two causes
+// that must not be reported as one: the row is gone, which is an inconsistency
+// somebody has to look at, or something else resolved it first, which is the
+// guard working. One extra lookup on the miss path tells them apart — a path
+// a single collector never takes.
 func (r *outcomeRepository) SaveOutcome(
 	ctx context.Context, o models.SignalOutcome,
 ) (models.SignalOutcome, error) {
@@ -100,12 +106,31 @@ func (r *outcomeRepository) SaveOutcome(
 	if errors.Is(err, pgx.ErrNoRows) {
 		// The UPDATE matched nothing, so the caller believes it just recorded
 		// an outcome that nothing recorded.
-		return models.SignalOutcome{}, fmt.Errorf("save outcome: no outcome for signal %s", o.SignalId)
+		return models.SignalOutcome{}, r.explainMiss(ctx, o.SignalId)
 	}
 	if err != nil {
 		return models.SignalOutcome{}, fmt.Errorf("save outcome %s: %w", o.SignalId, err)
 	}
 	return toOutcomeModel(row)
+}
+
+// explainMiss says why the guarded update matched nothing.
+//
+// A read-back rather than a guess. Reporting "no outcome for this signal" when
+// the row is sitting there resolved would send somebody looking for a missing
+// row that exists, and reporting a lost race when the row is genuinely absent
+// would hide a real inconsistency behind an expected one.
+func (r *outcomeRepository) explainMiss(ctx context.Context, signalId uuid.UUID) error {
+	current, err := r.FetchOutcome(ctx, signalId)
+	if errors.Is(err, constants.ErrNotFound) {
+		return fmt.Errorf("save outcome: no outcome for signal %s", signalId)
+	}
+	if err != nil {
+		return fmt.Errorf("save outcome %s: the update matched nothing and the row could not be read back: %w",
+			signalId, err)
+	}
+	return fmt.Errorf("save outcome %s: %w, it is %s",
+		signalId, constants.ErrOutcomeNotOpen, current.Status)
 }
 
 // FetchOutcome returns one outcome.

@@ -24,11 +24,17 @@ written. Four findings were triaged for repair and are now fixed — see
 | 3 | A2 | The follower's accounting hardcodes `taker × 2` regardless of cost model | bug | **high** | **fixed** |
 | 4 | A1 | Shutdown drain stores candles without evaluating them; signals lost silently | bug | medium | **fixed** |
 | 5 | A2/A4 | A missing bar immediately after a signal is not detected; the outcome is fabricated | bug | medium | **fixed** |
-| 6 | A3 | Nothing reports the health of the signal pipeline | gap | medium | phase 08 B2 |
+| 6 | A3 | Nothing reports the health of the signal pipeline | gap | medium | **fixed** (phase 08 B2) |
 | 7 | A1 | A signal can exist with no notification queued, forever | design | low | open |
-| 8 | A4 | `SaveOutcome` has no status guard; two collectors could overwrite a resolution | bug | low | open |
+| 8 | A4 | `SaveOutcome` has no status guard; two collectors could overwrite a resolution | bug | low | **fixed** |
 | 9 | A1 | Observer can run on a cancelled context; the signal is lost but logged | bug | low | open |
-| 10 | A2 | Resolution is one-way: a backfill that arrives later cannot correct an outcome | design | low | open |
+| 10 | A2 | Resolution is one-way: a backfill that arrives later cannot correct an outcome | design | low | open, accepted |
+
+7, 9 and 10 are left open deliberately, recorded rather than fixed. Note that
+8 and 10 pull in opposite directions and 8 won: making resolution one-way at
+the database is exactly what stops a later correction, and a correction path
+would have to be built as one — deliberate, audited, and not something a
+racing second process can do by accident.
 
 Clean, with nothing found: delivery/resolution contention, connection handling
 across the Firebase call, restart-safety of outcome resolution, `entry_price`
@@ -70,6 +76,10 @@ the signal write failing with `context.Canceled`.
 Unlike finding 4 this is logged — "could not record a signal; the candle is
 stored" — so it is visible in the log, though the signal is equally lost.
 
+**Left open, knowingly.** It needs a shutdown during the moment between storing
+a candle and evaluating it, and when it happens the log says so and the next
+start-up replays the bar as warm-up. Recorded rather than fixed.
+
 ### Finding 7 (design, low): a signal can exist with no notification queued
 
 The signal insert and the queue insert are two statements. A process dying
@@ -83,6 +93,11 @@ are different states and the commit message reads like the former.
 
 **Not a defect in the priority ordering**, which is right: the signal is the
 artefact and it survives.
+
+**Left open, knowingly.** The signal — the thing worth keeping — is recorded;
+what is lost is one alert about it. The recovery sweep the unique constraint
+was built for is still unwritten, and this entry is the record that it is
+missing rather than unnecessary.
 
 ### No issues found
 
@@ -242,6 +257,13 @@ filled the hole keeps the answer it got from incomplete data.
 Reasonable as built. Worth stating because a backfill reaching back years
 (added in Phase 06) can now change what the right answer would have been.
 
+**Left open, knowingly, and now enforced.** Finding 8's guard makes one-way
+resolution a property of the database rather than a convention, which is the
+opposite direction from this finding and the right trade: an outcome that a
+racing process can silently rewrite is worse than one that needs a deliberate
+correction path. If a correction is ever wanted it has to be built as one —
+explicit, audited, and distinguishable in the row from the original answer.
+
 ### No issues found
 
 - **Fill conventions, level rules, gap-past-level.** Shared through
@@ -303,7 +325,7 @@ for it.**
 
 ## A4 — Data integrity
 
-### Finding 8 (bug, low): `SaveOutcome` has no status guard
+### Finding 8 (bug, low): `SaveOutcome` has no status guard — FIXED
 
 The update matches on `signal_id` alone. A follower holding a row fetched
 before another process resolved it would overwrite that resolution — including
@@ -315,6 +337,35 @@ will happen by accident during a deploy.
 
 The cheap fix is `AND status = 'open'` in the WHERE clause, which makes the
 transition one-way at the database rather than by convention.
+
+**Fixed.** The guard is on `UpdateSignalOutcome`. Overwriting `invalidated`
+with a computed result was the case that decided it: a number derived from data
+known to be incomplete, sitting in the table looking exactly like a sound one,
+counted in every win rate afterwards, and not findable later.
+
+Two things came with it, because the guard alone would have been quieter than
+it should be:
+
+- **A miss now has two causes and they are told apart.** `ErrOutcomeNotOpen`
+  when the row is there and finished, the existing "no outcome for signal"
+  when it is genuinely absent. One read-back on the miss path — which a single
+  collector never takes — decides which. Reporting them as one would either
+  send somebody hunting for a row that is sitting there, or hide a real
+  inconsistency behind an expected one.
+- **`FollowReport.Contended` counts lost races,** and `Quiet()` accounts for
+  it so a pass where every row was taken still says so. The guard means no
+  data is lost, so this is not a failure to follow the signal and is not
+  logged as one; but the only way to reach it is two collectors, whose other
+  symptoms are subtle — duplicated work, two exchange connections, both racing
+  on every row. A non-zero count names the misdeploy directly.
+
+Recorded as ADR 0025. Pinned by `TestResolutionIsOneWayAtTheDatabase` (three cases, against the real
+database, each asserting the stored row did not move),
+`TestAMissingRowAndALostRaceAreDifferentErrors`, and
+`TestASignalResolvedByAnotherProcessIsContentionRatherThanFailure`. The usecase
+fake now refuses exactly as the statement does, so a test cannot pass on
+behaviour the database does not have. Fourteen mutations run against the guard,
+the classification and the counting; all killed.
 
 ### No issues found
 
