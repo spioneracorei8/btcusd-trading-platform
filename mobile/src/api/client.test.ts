@@ -267,6 +267,47 @@ describe('the write', () => {
   });
 });
 
+/**
+ * TestTheDefaultFetchIsCallable.
+ *
+ * # What this prevents
+ *
+ * Every other test here injects a fetch, which means none of them exercises
+ * the one line that decides what the shipped app calls. A client built the
+ * ordinary way used to capture the global as a bare reference — and
+ * `const f = fetch; f(url)` throws "Illegal invocation" in a browser, because
+ * fetch needs `this` to be the global.
+ *
+ * React Native tolerates a detached reference, so this would have shipped
+ * working on Android and broken on web, and the failure looks exactly like an
+ * unreachable server: the request never leaves.
+ */
+describe('the default fetch', () => {
+  it('is callable when nothing is injected', async () => {
+    const original = globalThis.fetch;
+    const seen: string[] = [];
+
+    // A global that records the call and, importantly, is only correct when
+    // invoked with the right receiver — which is what the real one requires.
+    globalThis.fetch = function boundOnly(this: unknown, input: RequestInfo | URL) {
+      if (this !== globalThis) {
+        throw new TypeError('Illegal invocation');
+      }
+      seen.push(String(input));
+      return Promise.resolve(
+        new Response('{}', { status: 200, headers: { 'Content-Type': 'application/json' } }),
+      );
+    } as unknown as typeof fetch;
+
+    try {
+      await new ApiClient({ baseUrl: BASE }).status();
+      expect(seen).toEqual([`${BASE}/api/v1/status`]);
+    } finally {
+      globalThis.fetch = original;
+    }
+  });
+});
+
 describe('cancellation', () => {
   it('lets the caller abort without it looking like an unreachable server', async () => {
     // A screen that navigates away aborts its request. Reporting that as

@@ -76,7 +76,12 @@ export class ApiClient {
 
   constructor({ baseUrl, fetchImpl, timeoutMs }: ClientOptions) {
     this.baseUrl = baseUrl.replace(/\/+$/, '');
-    this.fetchImpl = fetchImpl ?? fetch;
+    // Bound, not captured. `const f = fetch; f(url)` throws "Illegal
+    // invocation" in a browser, because fetch needs `this` to be the global.
+    // React Native happens to tolerate a detached reference, so this would
+    // have shipped and broken only on web — and only once somebody rendered
+    // it, which is how it was found.
+    this.fetchImpl = fetchImpl ?? ((input, init) => globalThis.fetch(input, init));
     this.timeoutMs = timeoutMs ?? REQUEST_TIMEOUT_MS;
   }
 
