@@ -53,9 +53,10 @@ func (r *pipelineRepository) DeliveryActivity(
 	}
 
 	return pipeline.DeliveryActivity{
-		Pending:    row.Pending,
-		Sent:       row.Sent,
-		Failed:     row.Failed,
-		LastSentAt: database.TimeFromTimestamptz(row.LastSentAt),
+		Pending:           row.Pending,
+		Sent:              row.Sent,
+		Failed:            row.Failed,
+		LastSentAt:        database.TimeFromTimestamptz(row.LastSentAt),
+		DevicesRegistered: row.DevicesRegistered,
 	}, nil
 }

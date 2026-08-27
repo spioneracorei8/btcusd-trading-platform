@@ -218,12 +218,23 @@ func buildNotify(
 	signalUs _signal.SignalUsecase,
 ) (notify.NotifyUsecase, error) {
 	notifyCfg := _notify_us.Config{
-		Mode:        cfg.Notify.SignalMode,
-		Signals:     signalUs,
-		DeviceToken: cfg.Notify.FCMDeviceToken,
+		Mode:    cfg.Notify.SignalMode,
+		Signals: signalUs,
 	}
 
 	if cfg.Notify.Delivers() {
+		// A way to look one up, not a device: the phone registers itself
+		// through the api after the app is installed, and a collector that
+		// refused to start without a registration could never reach the state
+		// where one exists. Whether anything is registered is reported by
+		// GET /api/v1/status, not enforced here. See ADR 0026.
+		devices, err := _notify_us.NewDeviceUsecaseImpl(
+			_notify_repo.NewDeviceRepoImpl(pool), log)
+		if err != nil {
+			return nil, err
+		}
+		notifyCfg.Devices = devices
+
 		// At start-up, so a missing or malformed service account key refuses
 		// to start rather than surfacing on the first signal — which could be
 		// days later and would look like the strategy being quiet.

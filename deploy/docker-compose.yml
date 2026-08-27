@@ -131,7 +131,6 @@ services:
       # A path INSIDE the container, which is why it is not the host path. The
       # collector mounts FCM_CREDENTIALS_HOST_FILE here read-only; see below.
       FCM_CREDENTIALS_FILE: ${FCM_CREDENTIALS_FILE:-/run/secrets/fcm-service-account.json}
-      FCM_DEVICE_TOKEN: ${FCM_DEVICE_TOKEN:-}
     depends_on:
       postgres:
         condition: service_healthy
@@ -184,7 +183,6 @@ services:
       # A path INSIDE the container, which is why it is not the host path. The
       # collector mounts FCM_CREDENTIALS_HOST_FILE here read-only; see below.
       FCM_CREDENTIALS_FILE: ${FCM_CREDENTIALS_FILE:-/run/secrets/fcm-service-account.json}
-      FCM_DEVICE_TOKEN: ${FCM_DEVICE_TOKEN:-}
     # No credentials are mounted here. SIGNAL_MODE=silent is the default and
     # never reads the key, and a bind mount whose source does not exist makes
     # Docker create a directory in its place — which would then fail the read

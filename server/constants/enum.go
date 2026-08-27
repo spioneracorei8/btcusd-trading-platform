@@ -312,6 +312,47 @@ func ParseSignalMode(s string) (SignalMode, error) {
 	return m, nil
 }
 
+// DevicePlatform is what kind of phone a registration came from.
+//
+// Recorded rather than used: the sender is the same either way. It is here
+// because a row that cannot say what it belongs to is harder to reason about
+// on the day the alerts stop.
+type DevicePlatform string
+
+// Supported device platforms.
+const (
+	DevicePlatformAndroid DevicePlatform = "android"
+
+	// DevicePlatformIOS is accepted by the schema and not built for. Phase 09
+	// is Android only — there is no Mac and no developer account — and a
+	// platform nobody can build for must not be silently rejected later by a
+	// check constraint if that changes.
+	DevicePlatformIOS DevicePlatform = "ios"
+)
+
+// Valid reports whether p is a known platform.
+func (p DevicePlatform) Valid() bool {
+	switch p {
+	case DevicePlatformAndroid, DevicePlatformIOS:
+		return true
+	default:
+		return false
+	}
+}
+
+// String returns the wire/database representation of the platform.
+func (p DevicePlatform) String() string { return string(p) }
+
+// ParseDevicePlatform converts s into a DevicePlatform, rejecting unknown
+// values rather than storing them.
+func ParseDevicePlatform(s string) (DevicePlatform, error) {
+	platform := DevicePlatform(s)
+	if !platform.Valid() {
+		return "", fmt.Errorf("%q is not a device platform; the platforms are android, ios", s)
+	}
+	return platform, nil
+}
+
 // NotificationChannel is a delivery target for a signal.
 type NotificationChannel string
 

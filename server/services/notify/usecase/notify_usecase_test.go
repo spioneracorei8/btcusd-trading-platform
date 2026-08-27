@@ -163,6 +163,103 @@ func aSignal() models.Signal {
 // silentLog keeps test output to what the test itself says.
 func silentLog() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
 
+// registeredDevices is the devices table, in a field. It stands in for
+// notify.DeviceRepository; the real usecase is layered on top of it by
+// deviceUsecaseOver, so the delivery tests run against the production rules
+// rather than a fake of them.
+//
+// It answers ErrNotFound rather than an empty device when nothing is
+// registered, because that distinction is what decides whether a queued alert
+// waits or burns its retry budget.
+type registeredDevices struct {
+	mu     sync.Mutex
+	device *models.Device
+	err    error
+
+	// lookups counts FetchDevice calls, so a test can assert the delivery
+	// pass asks once rather than once per row.
+	lookups int
+
+	// forgetAfter drops the registration once this many lookups have been
+	// served, which is the only way to reach the branch where a phone
+	// deregisters while a pass is already running. Zero disables it.
+	forgetAfter int
+}
+
+// mustDevices wraps a store in the real device usecase, for the call sites
+// that have no *testing.T to hand. The constructor only fails on a nil
+// argument, which is a programming error in the test rather than a case worth
+// reporting.
+func mustDevices(store *registeredDevices) notify.DeviceUsecase {
+	usecase, err := _notify_us.NewDeviceUsecaseImpl(store, silentLog())
+	if err != nil {
+		panic(err)
+	}
+	return usecase
+}
+
+// deviceUsecaseOver wraps a store in the real device usecase.
+func deviceUsecaseOver(t *testing.T, store *registeredDevices) notify.DeviceUsecase {
+	t.Helper()
+
+	usecase, err := _notify_us.NewDeviceUsecaseImpl(store, silentLog())
+	if err != nil {
+		t.Fatalf("NewDeviceUsecaseImpl() returned error: %v", err)
+	}
+	return usecase
+}
+
+func withDevice(token string) *registeredDevices {
+	return &registeredDevices{device: &models.Device{
+		Token: token, Platform: constants.DevicePlatformAndroid,
+	}}
+}
+
+func (d *registeredDevices) RegisterDevice(
+	_ context.Context, in models.Device,
+) (models.Device, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.device = &in
+	return in, nil
+}
+
+func (d *registeredDevices) FetchDevice(context.Context) (models.Device, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	d.lookups++
+	if d.err != nil {
+		return models.Device{}, d.err
+	}
+	if d.device == nil {
+		return models.Device{}, constants.ErrNotFound
+	}
+
+	found := *d.device
+	if d.forgetAfter > 0 && d.lookups >= d.forgetAfter {
+		d.device = nil
+	}
+	return found, nil
+}
+
+func (d *registeredDevices) DeleteDevice(context.Context) (bool, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	had := d.device != nil
+	d.device = nil
+	return had, nil
+}
+
+// forget removes the registration mid-test, which is the only way to reach
+// the "the phone deregistered while a pass was running" branch.
+func (d *registeredDevices) forget() {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.device = nil
+}
+
 // stubSender records what it was asked to send and answers however the test
 // needs. Nothing here reaches a network.
 type stubSender struct {
@@ -235,7 +332,7 @@ func buildUsecase(queue notify.NotifyRepository, mode constants.SignalMode) (not
 	if mode.Delivers() {
 		cfg.Sender = &stubSender{}
 		cfg.Signals = &storedSignals{}
-		cfg.DeviceToken = "device-token"
+		cfg.Devices = mustDevices(withDevice("device-token"))
 	}
 	return _notify_us.NewNotifyUsecaseImpl(queue, silentLog(), cfg)
 }
@@ -245,6 +342,7 @@ type deliveryFixture struct {
 	usecase notify.NotifyUsecase
 	queue   *recordingQueue
 	sender  *stubSender
+	devices *registeredDevices
 	signal  models.Signal
 	now     time.Time
 	id      int64
@@ -262,18 +360,19 @@ func newDelivery(t *testing.T, senderErrs ...error) *deliveryFixture {
 	stored.TakeProfit = decimal.NullDecimal{Decimal: decimal.RequireFromString("64600"), Valid: true}
 
 	fixture := &deliveryFixture{
-		queue:  &recordingQueue{},
-		sender: &stubSender{errs: senderErrs},
-		signal: stored,
-		now:    time.Date(2026, 8, 1, 8, 0, 0, 0, time.UTC),
+		queue:   &recordingQueue{},
+		sender:  &stubSender{errs: senderErrs},
+		devices: withDevice("device-token"),
+		signal:  stored,
+		now:     time.Date(2026, 8, 1, 8, 0, 0, 0, time.UTC),
 	}
 
 	usecase, err := _notify_us.NewNotifyUsecaseImpl(fixture.queue, silentLog(), _notify_us.Config{
-		Mode:        constants.SignalModeNotify,
-		Sender:      fixture.sender,
-		Signals:     &storedSignals{byId: map[uuid.UUID]models.Signal{stored.Id: stored}},
-		DeviceToken: "device-token",
-		Now:         func() time.Time { return fixture.now },
+		Mode:    constants.SignalModeNotify,
+		Sender:  fixture.sender,
+		Signals: &storedSignals{byId: map[uuid.UUID]models.Signal{stored.Id: stored}},
+		Devices: mustDevices(fixture.devices),
+		Now:     func() time.Time { return fixture.now },
 	})
 	if err != nil {
 		t.Fatalf("NewNotifyUsecaseImpl() returned error: %v", err)
@@ -289,6 +388,42 @@ func newDelivery(t *testing.T, senderErrs ...error) *deliveryFixture {
 }
 
 // deliver runs one pass and returns what it did.
+// newBacklog is newDelivery with n queued signals rather than one, for the
+// cases that are only visible across several rows in a single pass.
+func newBacklog(t *testing.T, n int) *deliveryFixture {
+	t.Helper()
+
+	f := newDelivery(t)
+	stored := map[uuid.UUID]models.Signal{f.signal.Id: f.signal}
+	for i := 1; i < n; i++ {
+		extra := aSignal()
+		stored[extra.Id] = extra
+	}
+
+	usecase, err := _notify_us.NewNotifyUsecaseImpl(f.queue, silentLog(), _notify_us.Config{
+		Mode: constants.SignalModeNotify, Sender: f.sender,
+		Signals: &storedSignals{byId: stored}, Devices: mustDevices(f.devices),
+		Now: func() time.Time { return f.now },
+	})
+	if err != nil {
+		t.Fatalf("NewNotifyUsecaseImpl() returned error: %v", err)
+	}
+	f.usecase = usecase
+
+	for id := range stored {
+		if id == f.signal.Id {
+			continue // already queued by newDelivery
+		}
+		if _, ok, err := usecase.QueueSignal(context.Background(), stored[id]); err != nil || !ok {
+			t.Fatalf("QueueSignal() = %v, %v", ok, err)
+		}
+	}
+	if got := len(f.queue.rows()); got != n {
+		t.Fatalf("queued %d rows, want %d", got, n)
+	}
+	return f
+}
+
 func (f *deliveryFixture) deliver(t *testing.T) notify.DeliveryReport {
 	t.Helper()
 
@@ -663,7 +798,7 @@ func TestOneBadNotificationDoesNotStopTheQueue(t *testing.T) {
 	}}
 	usecase, err := _notify_us.NewNotifyUsecaseImpl(f.queue, silentLog(), _notify_us.Config{
 		Mode: constants.SignalModeNotify, Sender: sender, Signals: signals,
-		DeviceToken: "device-token", Now: func() time.Time { return f.now },
+		Devices: mustDevices(withDevice("device-token")), Now: func() time.Time { return f.now },
 	})
 	if err != nil {
 		t.Fatalf("NewNotifyUsecaseImpl() returned error: %v", err)
@@ -694,8 +829,8 @@ func TestASignalThatNoLongerExistsIsNotRetriedForever(t *testing.T) {
 
 	usecase, err := _notify_us.NewNotifyUsecaseImpl(f.queue, silentLog(), _notify_us.Config{
 		Mode: constants.SignalModeNotify, Sender: f.sender,
-		Signals:     &storedSignals{byId: map[uuid.UUID]models.Signal{}},
-		DeviceToken: "device-token", Now: func() time.Time { return f.now },
+		Signals: &storedSignals{byId: map[uuid.UUID]models.Signal{}},
+		Devices: mustDevices(withDevice("device-token")), Now: func() time.Time { return f.now },
 	})
 	if err != nil {
 		t.Fatalf("NewNotifyUsecaseImpl() returned error: %v", err)
@@ -750,13 +885,13 @@ func TestSilentDeliversNothingEvenWithAQueueFullOfRows(t *testing.T) {
 func TestNotifyModeWithNothingToSendThroughIsRefused(t *testing.T) {
 	full := _notify_us.Config{
 		Mode: constants.SignalModeNotify, Sender: &stubSender{},
-		Signals: &storedSignals{}, DeviceToken: "device-token",
+		Signals: &storedSignals{}, Devices: mustDevices(withDevice("device-token")),
 	}
 
 	for name, damage := range map[string]func(*_notify_us.Config){
 		"no sender":  func(c *_notify_us.Config) { c.Sender = nil },
 		"no signals": func(c *_notify_us.Config) { c.Signals = nil },
-		"no token":   func(c *_notify_us.Config) { c.DeviceToken = "" },
+		"no devices": func(c *_notify_us.Config) { c.Devices = nil },
 	} {
 		t.Run(name, func(t *testing.T) {
 			cfg := full
@@ -766,6 +901,218 @@ func TestNotifyModeWithNothingToSendThroughIsRefused(t *testing.T) {
 				t.Error("it was accepted")
 			}
 		})
+	}
+}
+
+// TestAQueuedAlertWaitsWhenNoDeviceHasRegistered.
+//
+// # What this prevents
+//
+// The device token now comes from the phone, so every deployment is in the
+// "notify mode, nothing registered" state between switching the mode on and
+// opening the app for the first time. Signals produced in that window are
+// recorded and queued, which is right.
+//
+// What must not happen is that they are spent. The retry budget is five
+// attempts over about eight minutes; if a missing registration counted as a
+// failed attempt, every alert produced before the app was installed would be
+// marked failed long before anybody could install it — and the recorded
+// reason would read like a network problem rather than "there was nowhere to
+// send this". Nothing retries a failed row, so those alerts would be gone.
+//
+// The row must therefore come out of the pass exactly as it went in.
+func TestAQueuedAlertWaitsWhenNoDeviceHasRegistered(t *testing.T) {
+	f := newDelivery(t)
+	f.devices.forget()
+
+	before := f.queue.row(f.id)
+	report := f.deliver(t)
+
+	if report.Waiting != 1 {
+		t.Errorf("Waiting = %d, want 1", report.Waiting)
+	}
+	if report.Attempted != 0 {
+		t.Errorf("Attempted = %d, want 0: nothing was tried", report.Attempted)
+	}
+	if report.Sent+report.Retrying+report.GaveUp != 0 {
+		t.Errorf("report = %+v, want no outcomes at all", report)
+	}
+	if f.sender.count() != 0 {
+		t.Errorf("the sender was called %d times with nowhere to send", f.sender.count())
+	}
+
+	after := f.queue.row(f.id)
+	if after.Attempts != before.Attempts {
+		t.Errorf("attempts went from %d to %d; a missing device must not spend one",
+			before.Attempts, after.Attempts)
+	}
+	if after.Status != constants.NotificationStatusPending {
+		t.Errorf("status = %q, want pending", after.Status)
+	}
+	if after.LastError != "" {
+		t.Errorf("last_error = %q, want empty: nothing failed", after.LastError)
+	}
+	if !after.NextAttemptAt.Equal(before.NextAttemptAt) {
+		t.Errorf("next_attempt_at moved from %s to %s; the row must still be due",
+			before.NextAttemptAt, after.NextAttemptAt)
+	}
+}
+
+// TestAWaitingAlertDeliversOnceAPhoneRegisters.
+//
+// The other half: waiting is only the right answer if the alert still goes out
+// afterwards. This is the sequence a first install actually produces — mode
+// switched on, a signal recorded, then the app opened.
+func TestAWaitingAlertDeliversOnceAPhoneRegisters(t *testing.T) {
+	f := newDelivery(t)
+	f.devices.forget()
+
+	if report := f.deliver(t); report.Waiting != 1 {
+		t.Fatalf("Waiting = %d, want 1", report.Waiting)
+	}
+
+	if _, err := f.devices.RegisterDevice(context.Background(), models.Device{
+		Token: "registered-later", Platform: constants.DevicePlatformAndroid,
+	}); err != nil {
+		t.Fatalf("RegisterDevice() returned error: %v", err)
+	}
+
+	report := f.deliver(t)
+	if report.Sent != 1 {
+		t.Fatalf("Sent = %d, want 1 once a phone registered: %+v", report.Sent, report)
+	}
+	if f.queue.row(f.id).Status != constants.NotificationStatusSent {
+		t.Errorf("the row is %q, want sent", f.queue.row(f.id).Status)
+	}
+	if got := f.sender.sent[0].Token; got != "registered-later" {
+		t.Errorf("delivered to %q, want the token registered after the wait", got)
+	}
+}
+
+// TestTheTokenIsReadAtSendTimeRatherThanHeldFromStartUp.
+//
+// FCM rotates tokens and the app re-registers. A usecase that captured the
+// token when it was built would go on sending to the retired one — which
+// Firebase rejects as unregistered, which the worker correctly treats as
+// permanent, which means alerts stop for good after a rotation nobody saw.
+func TestTheTokenIsReadAtSendTimeRatherThanHeldFromStartUp(t *testing.T) {
+	f := newDelivery(t)
+
+	if _, err := f.devices.RegisterDevice(context.Background(), models.Device{
+		Token: "rotated-token", Platform: constants.DevicePlatformAndroid,
+	}); err != nil {
+		t.Fatalf("RegisterDevice() returned error: %v", err)
+	}
+
+	if report := f.deliver(t); report.Sent != 1 {
+		t.Fatalf("Sent = %d, want 1: %+v", report.Sent, report)
+	}
+	if got := f.sender.sent[0].Token; got != "rotated-token" {
+		t.Fatalf("delivered to %q, want the token registered after the usecase was built; "+
+			"the token must be read per delivery, not captured at start-up", got)
+	}
+}
+
+// TestTheRegistrationIsLookedUpOncePerPassRatherThanPerRow.
+//
+// Whether a phone is registered is a fact about the deployment, not about any
+// one queued row. A backlog with nothing registered must not make one lookup
+// per row to reach the same answer, so the pass asks before the loop rather
+// than inside it.
+//
+// Three rows, so removing that pre-check is visible: without it the count
+// tracks the backlog.
+func TestTheRegistrationIsLookedUpOncePerPassRatherThanPerRow(t *testing.T) {
+	f := newBacklog(t, 3)
+	f.devices.forget()
+	f.devices.lookups = 0
+
+	report := f.deliver(t)
+	if report.Waiting != 3 {
+		t.Fatalf("Waiting = %d, want all 3: %+v", report.Waiting, report)
+	}
+	if f.devices.lookups != 1 {
+		t.Errorf("the registration was looked up %d times for 3 rows, want 1",
+			f.devices.lookups)
+	}
+}
+
+// TestAPhoneThatDeregistersMidPassLeavesTheRestUntouched.
+//
+// The pre-check answers for the pass, but the registration can go away between
+// it and any given row — a DELETE /api/v1/device while a backlog is draining.
+// Everything from that point on is in the "nowhere to send" position and must
+// come out of the pass exactly as it went in, not marked failed because the
+// answer changed halfway through.
+func TestAPhoneThatDeregistersMidPassLeavesTheRestUntouched(t *testing.T) {
+	f := newBacklog(t, 3)
+
+	// The pre-check is lookup one and the first row's is lookup two; the
+	// registration disappears as that one is served.
+	f.devices.forgetAfter = 2
+
+	before := f.queue.rows()
+	report := f.deliver(t)
+
+	if report.Sent != 1 {
+		t.Errorf("Sent = %d, want the one row served before the registration went: %+v",
+			report.Sent, report)
+	}
+	if report.Waiting != 2 {
+		t.Errorf("Waiting = %d, want the 2 rows behind it: %+v", report.Waiting, report)
+	}
+	if report.GaveUp != 0 || report.Retrying != 0 {
+		t.Errorf("report = %+v, want nothing failed or rescheduled", report)
+	}
+
+	after := f.queue.rows()
+	for i := 1; i < len(after); i++ {
+		if after[i].Attempts != before[i].Attempts {
+			t.Errorf("row %d spent an attempt (%d to %d) with nowhere to send",
+				i, before[i].Attempts, after[i].Attempts)
+		}
+		if after[i].Status != constants.NotificationStatusPending {
+			t.Errorf("row %d is %q, want pending", i, after[i].Status)
+		}
+	}
+}
+
+// TestAPassThatOnlyWaitedIsNotQuiet.
+//
+// Quiet() decides whether the pass says anything. A pass that delivered
+// nothing because there is nowhere to deliver is exactly the state somebody
+// needs told about — it is the difference between a strategy that is silent
+// and a phone that was never registered.
+func TestAPassThatOnlyWaitedIsNotQuiet(t *testing.T) {
+	if (notify.DeliveryReport{Waiting: 1}).Quiet() {
+		t.Error("a pass with alerts waiting on a registration reported itself as quiet")
+	}
+	if !(notify.DeliveryReport{}).Quiet() {
+		t.Error("an empty pass did not report itself as quiet")
+	}
+}
+
+// TestNotifyModeStartsWithoutARegisteredDevice.
+//
+// The chicken-and-egg this design exists to avoid: the phone registers through
+// the api after the app is installed, so a collector that refused to start
+// without a registration could never reach the state where one exists. What is
+// required is the ability to look one up, not the presence of one.
+func TestNotifyModeStartsWithoutARegisteredDevice(t *testing.T) {
+	empty := &registeredDevices{}
+
+	usecase, err := _notify_us.NewNotifyUsecaseImpl(&recordingQueue{}, silentLog(),
+		_notify_us.Config{
+			Mode:    constants.SignalModeNotify,
+			Sender:  &stubSender{},
+			Signals: &storedSignals{},
+			Devices: mustDevices(empty),
+		})
+	if err != nil {
+		t.Fatalf("notify mode was refused with no device registered: %v", err)
+	}
+	if !usecase.Delivers() {
+		t.Error("the usecase reports that it does not deliver")
 	}
 }
 

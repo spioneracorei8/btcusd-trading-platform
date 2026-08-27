@@ -26,9 +26,12 @@ type Config struct {
 	// Signals turns a queued id back into the signal it points at.
 	Signals signal.SignalUsecase
 
-	// DeviceToken is the owner's phone. One device: this is a single-owner
-	// system.
-	DeviceToken string
+	// Devices is where to deliver. Read at send time rather than held as a
+	// string, because FCM rotates the token and the app re-registers: a value
+	// captured at start-up would be the previous one from the moment Firebase
+	// decided otherwise, and the collector would go on looking configured
+	// while delivering nothing. See ADR 0026.
+	Devices notify.DeviceUsecase
 
 	// Interval is how often Run sweeps the queue.
 	Interval time.Duration
@@ -74,8 +77,13 @@ func NewNotifyUsecaseImpl(
 		if cfg.Signals == nil {
 			return nil, fmt.Errorf("notify: %s mode with no way to read a queued signal", cfg.Mode)
 		}
-		if cfg.DeviceToken == "" {
-			return nil, fmt.Errorf("notify: %s mode with no device to send to", cfg.Mode)
+		// Deliberately not "and a device is registered". The phone registers
+		// itself after the app is installed, so requiring one at start-up
+		// makes the first deploy impossible: nothing can register against a
+		// process that refuses to run. What is required is the ability to
+		// look one up.
+		if cfg.Devices == nil {
+			return nil, fmt.Errorf("notify: %s mode with no way to look up a device", cfg.Mode)
 		}
 	}
 
@@ -165,7 +173,8 @@ func (u *notifyUsecase) Run(ctx context.Context) error {
 		case !report.Quiet():
 			u.log.InfoContext(ctx, "delivery pass",
 				"attempted", report.Attempted, "sent", report.Sent,
-				"retrying", report.Retrying, "gave_up", report.GaveUp)
+				"retrying", report.Retrying, "gave_up", report.GaveUp,
+				"waiting_for_a_device", report.Waiting)
 		}
 
 		select {
@@ -202,13 +211,30 @@ func (u *notifyUsecase) DeliverDue(ctx context.Context) (notify.DeliveryReport, 
 		return report, fmt.Errorf("notify: %w", err)
 	}
 
+	// Whether a phone is registered is a fact about the deployment, not about
+	// any one row, so it is asked once rather than per message. Without this
+	// a pass with fifty due rows and no device would make fifty identical
+	// lookups to reach the same answer.
+	if _, err := u.cfg.Devices.FetchDevice(ctx); errors.Is(err, constants.ErrNotFound) {
+		report.Waiting = len(due)
+		return report, nil
+	}
+
 	for _, queued := range due {
 		if ctx.Err() != nil {
 			return report, ctx.Err()
 		}
 
+		result := u.deliver(ctx, queued)
+		if result == outcomeNoDevice {
+			// The registration went away mid-pass. Everything behind this row
+			// is in the same position, and none of it has been touched.
+			report.Waiting += len(due) - report.Attempted
+			return report, nil
+		}
+
 		report.Attempted++
-		switch u.deliver(ctx, queued) {
+		switch result {
 		case outcomeSent:
 			report.Sent++
 		case outcomeRetrying:
@@ -228,6 +254,11 @@ const (
 	outcomeRetrying
 	outcomeGaveUp
 	outcomeUnrecorded
+
+	// outcomeNoDevice is a row left exactly as it was found: still pending,
+	// still due, no attempt spent. It is the only outcome that does not
+	// write to the queue.
+	outcomeNoDevice
 )
 
 // deliver attempts one notification and records what happened to it.
@@ -246,7 +277,25 @@ func (u *notifyUsecase) deliver(ctx context.Context, queued models.Notification)
 		return u.retryOrGiveUp(ctx, queued, err)
 	}
 
-	if err := u.cfg.Sender.Send(ctx, notify.BuildMessage(u.cfg.DeviceToken, signalRow)); err != nil {
+	device, err := u.cfg.Devices.FetchDevice(ctx)
+	if errors.Is(err, constants.ErrNotFound) {
+		// No phone has registered yet. The alert is not undeliverable, it is
+		// not yet deliverable, and the difference decides whether the signal
+		// is still waiting when the app is finally installed.
+		//
+		// Spending an attempt here would be wrong twice over: the retry
+		// budget is five attempts over about eight minutes, so the first
+		// signals after switching to notify mode would all be marked failed
+		// long before anyone opened the app, and the recorded reason would
+		// read like a network problem.
+		return outcomeNoDevice
+	}
+	if err != nil {
+		// The registration could not be read — the database, not the phone.
+		return u.retryOrGiveUp(ctx, queued, err)
+	}
+
+	if err := u.cfg.Sender.Send(ctx, notify.BuildMessage(device.Token, signalRow)); err != nil {
 		if errors.Is(err, notify.ErrUndeliverable) {
 			// Retrying will not fix it: an uninstalled token, a malformed
 			// payload. Spending the attempt budget on it would delay every

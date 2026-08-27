@@ -12,6 +12,31 @@ import (
 	"github.com/spioneracorei8/btcusd-trading-platform/server/models"
 )
 
+// DeviceRepository stores where alerts are delivered.
+//
+// Separate from NotifyRepository because they answer different questions and
+// have different lifetimes: the queue is written once per signal and drained,
+// the registration is written when the app launches and read on every
+// delivery. Splitting them also keeps the API handler that registers a device
+// away from the queue entirely — it can record a token and nothing else.
+type DeviceRepository interface {
+	// RegisterDevice records the phone to deliver to, replacing whatever was
+	// there. Re-registering the same token is not an error: the app does it
+	// on every refresh, and refusing would leave the deployment holding a
+	// token Firebase has already retired.
+	RegisterDevice(ctx context.Context, d models.Device) (models.Device, error)
+
+	// FetchDevice returns the registered device, or constants.ErrNotFound
+	// when the phone has never registered. Not-found is an ordinary state
+	// here — it is every deployment before the app is first opened — and the
+	// caller is expected to say so rather than treat it as a fault.
+	FetchDevice(ctx context.Context) (models.Device, error)
+
+	// DeleteDevice forgets the registration, so notify mode stops claiming it
+	// can deliver.
+	DeleteDevice(ctx context.Context) (bool, error)
+}
+
 // NotifyRepository stores the delivery queue.
 type NotifyRepository interface {
 	// InsertNotification queues one signal for delivery. Only SignalId and

@@ -57,6 +57,15 @@ type DataGap struct {
 	FillAttempts int32
 }
 
+type Device struct {
+	ID           int32
+	Token        string
+	Platform     string
+	Label        string
+	RegisteredAt pgtype.Timestamptz
+	RefreshedAt  pgtype.Timestamptz
+}
+
 type Notification struct {
 	ID        int64
 	SignalID  pgtype.UUID

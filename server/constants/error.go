@@ -26,6 +26,12 @@ var (
 	// ErrNotFound says the row this system believed it was updating does not
 	// exist, which is a real inconsistency.
 	ErrOutcomeNotOpen = errors.New("outcome is no longer open")
+
+	// ErrInvalidDevice reports a device registration that was refused before
+	// it reached the database — an empty or malformed token, an unknown
+	// platform. It is the caller's mistake, not a failure of this system, and
+	// is answered with 400 rather than 500.
+	ErrInvalidDevice = errors.New("invalid device registration")
 )
 
 // Sentinel errors returned by the backtest engine.

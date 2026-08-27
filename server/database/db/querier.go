@@ -29,6 +29,8 @@ type Querier interface {
 	// their retries: the status endpoint reports what is missing, not what is
 	// still being chased.
 	CountUnfilledGaps(ctx context.Context, arg CountUnfilledGapsParams) (int64, error)
+	// Forget the registered device, so notify mode stops claiming it can deliver.
+	DeleteDevice(ctx context.Context) (int64, error)
 	// Open an outcome row for every signal that has none yet.
 	//
 	// Done as a set rather than one at a time so a follower starting against a
@@ -46,6 +48,8 @@ type Querier interface {
 	// Given up on. last_error is the reason, and it is the last thing written
 	// about this row: nothing retries a failed notification.
 	FailNotification(ctx context.Context, arg FailNotificationParams) (Notification, error)
+	// The registered device, or no row when the phone has never registered.
+	FetchDevice(ctx context.Context) (Device, error)
 	// The delivery queue, oldest first, so a backlog drains in the order the
 	// signals happened rather than newest-first.
 	//
@@ -194,6 +198,18 @@ type Querier interface {
 	// moves started_at forward every time, while one that has been up for days
 	// leaves it alone.
 	RegisterCollectorStart(ctx context.Context, arg RegisterCollectorStartParams) (CollectorStatus, error)
+	// Record the phone this deployment delivers to, replacing whatever was there.
+	//
+	// Upsert on the singleton row rather than insert-if-absent: FCM rotates
+	// tokens, and the app re-registers on every refresh. A statement that
+	// refused the second registration would leave the deployment holding a token
+	// Firebase has already retired, which fails permanently on the next signal
+	// and looks like a broken strategy rather than a stale token.
+	//
+	// registered_at is kept when the token is unchanged and reset when it is not:
+	// a refresh of the same token is the same phone still there, a different
+	// token is a new registration.
+	RegisterDevice(ctx context.Context, arg RegisterDeviceParams) (Device, error)
 	// Failed, and worth trying again. The row stays pending and carries both what
 	// went wrong and when it may be retried.
 	RescheduleNotification(ctx context.Context, arg RescheduleNotificationParams) (Notification, error)

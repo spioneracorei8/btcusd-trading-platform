@@ -40,6 +40,9 @@ import (
 	_market_repo "github.com/spioneracorei8/btcusd-trading-platform/server/services/market/repository"
 	"github.com/spioneracorei8/btcusd-trading-platform/server/services/market/repository/binance"
 	_market_us "github.com/spioneracorei8/btcusd-trading-platform/server/services/market/usecase"
+	_notify_handler "github.com/spioneracorei8/btcusd-trading-platform/server/services/notify/handler"
+	_notify_repo "github.com/spioneracorei8/btcusd-trading-platform/server/services/notify/repository"
+	_notify_us "github.com/spioneracorei8/btcusd-trading-platform/server/services/notify/usecase"
 	_outcome_handler "github.com/spioneracorei8/btcusd-trading-platform/server/services/outcome/handler"
 	_outcome_repo "github.com/spioneracorei8/btcusd-trading-platform/server/services/outcome/repository"
 	_outcome_us "github.com/spioneracorei8/btcusd-trading-platform/server/services/outcome/usecase"
@@ -179,6 +182,14 @@ func (s *Server) Start() error {
 	// feed type holds a market data client and nothing else, so there is
 	// nothing there that could store a forming bar even by mistake.
 	hub := _stream_us.NewHub(s.Logger)
+	// The api registers devices and never delivers; the collector delivers and
+	// never registers. Each gets the interface it uses and not the other.
+	deviceUs, err := _notify_us.NewDeviceUsecaseImpl(
+		_notify_repo.NewDeviceRepoImpl(pool), s.Logger)
+	if err != nil {
+		return fmt.Errorf("build the device usecase: %w", err)
+	}
+
 	apiHandlers := routes.APIHandlers{
 		Candles: _candle_handler.NewCandleHandlerImpl(
 			candleUs, s.Logger, s.Config.Market.Symbol, s.Config.Market.Type,
@@ -191,6 +202,8 @@ func (s *Server) Start() error {
 		Outcomes: outcomeHandler,
 		Status:   _pipeline_handler.NewStatusHandlerImpl(pipelineUs, s.Logger),
 		Stream:   _stream_handler.NewStreamHandlerImpl(hub, s.Logger),
+		Devices: _notify_handler.NewDeviceHandlerImpl(
+			deviceUs, s.Logger, s.Config.Notify.SignalMode),
 	}
 
 	//==============================================================

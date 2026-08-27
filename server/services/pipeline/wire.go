@@ -17,6 +17,7 @@ type StatusResponse struct {
 
 	Collector StatusCollector `json:"collector"`
 	Evaluator StatusEvaluator `json:"evaluator"`
+	Ingestion StatusIngestion `json:"ingestion"`
 	Outcomes  StatusOutcomes  `json:"outcomes"`
 	Delivery  StatusDelivery  `json:"delivery"`
 
@@ -67,6 +68,21 @@ type StatusOutcomes struct {
 	Missing int64 `json:"missing_outcome_rows"`
 }
 
+// StatusIngestion is the state of the candle series everything is built from.
+type StatusIngestion struct {
+	// UnfilledGaps is the total awaiting backfill; Timeframes breaks it down.
+	// Both, because a total answers "is the data whole" and the breakdown
+	// answers "which series is stuck".
+	UnfilledGaps int64                 `json:"unfilled_gaps"`
+	Timeframes   []StatusTimeframeGaps `json:"timeframes"`
+}
+
+// StatusTimeframeGaps is one series' unfilled gap count.
+type StatusTimeframeGaps struct {
+	Timeframe    string `json:"timeframe"`
+	UnfilledGaps int64  `json:"unfilled_gaps"`
+}
+
 type StatusDelivery struct {
 	Mode    string `json:"mode"`
 	Pending int64  `json:"pending"`
@@ -74,6 +90,15 @@ type StatusDelivery struct {
 	Failed  int64  `json:"failed"`
 
 	LastSentAt *time.Time `json:"last_sent_at"`
+
+	// DevicesRegistered is how many phones can be delivered to: zero or one,
+	// since the devices table holds a single row.
+	//
+	// Zero while mode is notify is the case the concerns list spells out in
+	// words. It is not left as a bare number for the reader to interpret:
+	// everything looks configured in that state, and the signals are being
+	// recorded and queued and going nowhere.
+	DevicesRegistered int64 `json:"devices_registered"`
 }
 
 type StatusConcern struct {
@@ -102,6 +127,10 @@ func ToStatusResponse(s Status) StatusResponse {
 			ReconnectCount:     s.Collector.ReconnectCount,
 			LastDisconnect:     s.Collector.LastDisconnect,
 		},
+		Ingestion: StatusIngestion{
+			UnfilledGaps: s.Ingestion.UnfilledGaps,
+			Timeframes:   timeframeGaps(s.Ingestion.Timeframes),
+		},
 		Evaluator: StatusEvaluator{
 			Configured:          s.Evaluator.Configured,
 			Strategy:            s.Evaluator.Strategy,
@@ -119,11 +148,12 @@ func ToStatusResponse(s Status) StatusResponse {
 			Missing:             s.Outcomes.Missing,
 		},
 		Delivery: StatusDelivery{
-			Mode:       s.Delivery.Mode,
-			Pending:    s.Delivery.Pending,
-			Sent:       s.Delivery.Sent,
-			Failed:     s.Delivery.Failed,
-			LastSentAt: s.Delivery.LastSentAt,
+			Mode:              s.Delivery.Mode,
+			Pending:           s.Delivery.Pending,
+			Sent:              s.Delivery.Sent,
+			Failed:            s.Delivery.Failed,
+			LastSentAt:        s.Delivery.LastSentAt,
+			DevicesRegistered: s.Delivery.DevicesRegistered,
 		},
 		Concerns: concerns,
 		Note: "Silence is the normal output of this pipeline. A strategy at a tenth of a " +
@@ -133,7 +163,20 @@ func ToStatusResponse(s Status) StatusResponse {
 	}
 }
 
-// seconds renders a duration for a client that should not parse Go's format.
+// timeframeGaps renders the per-series breakdown, empty rather than null so a
+// client handles one shape.
+func timeframeGaps(in []TimeframeGaps) []StatusTimeframeGaps {
+	out := make([]StatusTimeframeGaps, 0, len(in))
+	for _, tf := range in {
+		out = append(out, StatusTimeframeGaps{
+			Timeframe: tf.Timeframe, UnfilledGaps: tf.UnfilledGaps,
+		})
+	}
+	return out
+}
+
+// statusSeconds renders a duration for a client that should not parse Go's
+// format.
 func statusSeconds(d *time.Duration) *float64 {
 	if d == nil {
 		return nil

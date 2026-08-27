@@ -37,6 +37,12 @@ type Status struct {
 	Outcomes  OutcomeHealth
 	Delivery  DeliveryHealth
 
+	// Ingestion is the state of the candle series each timeframe is built
+	// from. It is here rather than only on /internal/market/status because
+	// the app's status screen asks for data gaps, and docs/api.md tells
+	// clients not to depend on /internal.
+	Ingestion IngestionHealth
+
 	// Concerns are the specific things that look wrong, in the order they
 	// would be investigated. Empty is the healthy answer and is reported as
 	// an empty list rather than omitted — a missing field reads as a check
@@ -97,6 +103,26 @@ type OutcomeHealth struct {
 	Missing int64
 }
 
+// IngestionHealth is the candle series behind everything else.
+//
+// A gap is not a fault in itself — the collector records one, backfills it and
+// clears it, which is the mechanism working. A count that stays non-zero is
+// the finding, because every signal whose window overlaps an unfilled gap
+// resolves as invalidated and drops out of the statistics.
+type IngestionHealth struct {
+	// UnfilledGaps is the total still awaiting a successful backfill, and
+	// Timeframes breaks it down. The total is what a glance reads; the
+	// breakdown is what says whether one series is stuck or all of them are.
+	UnfilledGaps int64
+	Timeframes   []TimeframeGaps
+}
+
+// TimeframeGaps is one series' unfilled gap count.
+type TimeframeGaps struct {
+	Timeframe    string
+	UnfilledGaps int64
+}
+
 // DeliveryHealth is the notification queue.
 type DeliveryHealth struct {
 	// Mode is silent or notify. A queue that never drains is expected in
@@ -112,6 +138,16 @@ type DeliveryHealth struct {
 	Failed int64
 
 	LastSentAt *time.Time
+
+	// DevicesRegistered is how many phones have registered to receive alerts.
+	//
+	// It is zero or one — the devices table holds a single row by
+	// construction — and it is a count rather than a boolean because the
+	// number is what the status screen shows and a reader should not have to
+	// map true onto "one phone". Zero in notify mode is the case worth
+	// naming: everything is configured, signals are recorded and queued, and
+	// nothing is delivered.
+	DevicesRegistered int64
 }
 
 // Concern is one thing worth looking at, with what to look at first.
@@ -135,7 +171,8 @@ type PipelineRepository interface {
 	// still being followed.
 	SignalActivity(ctx context.Context, symbol string, marketType constants.MarketType) (SignalActivity, error)
 
-	// DeliveryActivity reports the delivery queue by state.
+	// DeliveryActivity reports the delivery queue by state, and how many
+	// devices are registered to receive from it.
 	DeliveryActivity(ctx context.Context, symbol string, marketType constants.MarketType) (DeliveryActivity, error)
 }
 
@@ -154,6 +191,11 @@ type DeliveryActivity struct {
 	Sent       int64
 	Failed     int64
 	LastSentAt time.Time
+
+	// DevicesRegistered is how many phones can be delivered to. Read here
+	// rather than through the notify service because this is a count across
+	// tables assembled for one page, which is what this repository is for.
+	DevicesRegistered int64
 }
 
 // StatusHandler serves the pipeline status.

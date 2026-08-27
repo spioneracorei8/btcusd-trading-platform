@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/spioneracorei8/btcusd-trading-platform/server/constants"
@@ -82,6 +83,7 @@ func (u *pipelineUsecase) Status(ctx context.Context) (pipeline.Status, error) {
 	if collectorErr == nil {
 		status.Collector = collectorHealth(market.Collector, now)
 		status.Evaluator = evaluatorHealth(market.Collector.Evaluator)
+		status.Ingestion = ingestionHealth(market.Timeframes)
 	}
 
 	signals, err := u.repo.SignalActivity(ctx, u.cfg.Symbol, u.cfg.MarketType)
@@ -103,11 +105,12 @@ func (u *pipelineUsecase) Status(ctx context.Context) (pipeline.Status, error) {
 	status.Outcomes.OldestOpenAt = age(signals.OldestOpenSignalAt, now, &status.Outcomes.OldestOpenAge)
 
 	status.Delivery = pipeline.DeliveryHealth{
-		Mode:       u.cfg.SignalMode.String(),
-		Pending:    delivery.Pending,
-		Sent:       delivery.Sent,
-		Failed:     delivery.Failed,
-		LastSentAt: nullable(delivery.LastSentAt),
+		Mode:              u.cfg.SignalMode.String(),
+		Pending:           delivery.Pending,
+		Sent:              delivery.Sent,
+		Failed:            delivery.Failed,
+		LastSentAt:        nullable(delivery.LastSentAt),
+		DevicesRegistered: delivery.DevicesRegistered,
 	}
 
 	status.Concerns = u.concerns(status, collectorErr)
@@ -159,10 +162,31 @@ func (u *pipelineUsecase) concerns(status pipeline.Status, collectorErr error) [
 				"count that persists means it is not running", status.Outcomes.Missing))
 	}
 
+	// Everything is configured, the queue is filling, and there is nowhere to
+	// send. Stated as a sentence rather than left as a zero beside a mode,
+	// because the reader would otherwise have to know that "notify" plus
+	// "0 devices" means "recorded but not delivered" — and the person reading
+	// this page is usually reading it because something is already confusing.
+	if u.cfg.SignalMode.Delivers() && status.Delivery.DevicesRegistered == 0 {
+		add("delivery", "no device is registered, so signals will be recorded and queued "+
+			"but not delivered; open the app to register this phone")
+	}
+
 	if status.Delivery.Failed > 0 {
 		add("delivery", fmt.Sprintf(
 			"%d notifications were given up on; nothing retries a failed row, so these "+
 				"were never delivered", status.Delivery.Failed))
+	}
+
+	// A gap is the collector noticing a hole and queueing a backfill, which is
+	// the mechanism working. A count that stays put is the finding: every
+	// signal whose window overlaps an unfilled gap resolves as invalidated and
+	// leaves the statistics.
+	if status.Ingestion.UnfilledGaps > 0 {
+		add("ingestion", fmt.Sprintf(
+			"%d candle gaps are unfilled (%s); signals whose window overlaps one resolve "+
+				"as invalidated and are excluded from every figure",
+			status.Ingestion.UnfilledGaps, gapBreakdown(status.Ingestion.Timeframes)))
 	}
 
 	// A queue that does not drain means something only in notify mode. In
@@ -180,6 +204,42 @@ func (u *pipelineUsecase) concerns(status pipeline.Status, collectorErr error) [
 	}
 
 	return found
+}
+
+// gapBreakdown names the timeframes actually holding gaps.
+//
+// Only the non-zero ones: a list reading "1m 3, 5m 0, 15m 0, 1h 0, 4h 0, 1d 0"
+// buries the one fact it contains.
+func gapBreakdown(timeframes []pipeline.TimeframeGaps) string {
+	parts := make([]string, 0, len(timeframes))
+	for _, tf := range timeframes {
+		if tf.UnfilledGaps > 0 {
+			parts = append(parts, fmt.Sprintf("%s: %d", tf.Timeframe, tf.UnfilledGaps))
+		}
+	}
+	if len(parts) == 0 {
+		return "timeframe unknown"
+	}
+	return strings.Join(parts, ", ")
+}
+
+// ingestionHealth summarises the unfilled gaps across every timeframe.
+//
+// The total and the breakdown are both carried. A total answers "is the data
+// whole"; the breakdown answers "which series is stuck", and one series stuck
+// while the rest advance is a different problem from all of them stalling.
+func ingestionHealth(timeframes []models.TimeframeStatus) pipeline.IngestionHealth {
+	health := pipeline.IngestionHealth{
+		Timeframes: make([]pipeline.TimeframeGaps, 0, len(timeframes)),
+	}
+	for _, tf := range timeframes {
+		health.UnfilledGaps += tf.UnfilledGaps
+		health.Timeframes = append(health.Timeframes, pipeline.TimeframeGaps{
+			Timeframe:    tf.Timeframe.String(),
+			UnfilledGaps: tf.UnfilledGaps,
+		})
+	}
+	return health
 }
 
 // collectorHealth converts the status row.

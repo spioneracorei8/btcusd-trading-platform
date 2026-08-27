@@ -119,7 +119,6 @@ func TestLoadFromOverrides(t *testing.T) {
 	e["SIGNAL_MODE"] = "notify"
 	e["FCM_PROJECT_ID"] = "btc-signals"
 	e["FCM_CREDENTIALS_FILE"] = "/run/secrets/fcm.json"
-	e["FCM_DEVICE_TOKEN"] = "device-token"
 	e["MARKET_GAPCHECK_INTERVAL"] = "30m"
 	e["BINANCE_REST_BASE_URL"] = "https://testnet.binance.vision/"
 
@@ -273,7 +272,7 @@ func TestNotifyModeRequiresSomewhereToSend(t *testing.T) {
 	if !errors.Is(err, constants.ErrMissingEnv) {
 		t.Errorf("error %v does not wrap ErrMissingEnv", err)
 	}
-	for _, key := range []string{"FCM_PROJECT_ID", "FCM_CREDENTIALS_FILE", "FCM_DEVICE_TOKEN"} {
+	for _, key := range []string{"FCM_PROJECT_ID", "FCM_CREDENTIALS_FILE"} {
 		if !strings.Contains(err.Error(), key) {
 			t.Errorf("error %q does not name %s", err, key)
 		}
@@ -317,6 +316,63 @@ func TestTheRetiredSwitchIsRefusedRatherThanIgnored(t *testing.T) {
 			}
 			if !strings.Contains(err.Error(), "SIGNAL_MODE") {
 				t.Errorf("error %q does not name what replaced it", err)
+			}
+		})
+	}
+}
+
+// TestNotifyModeDoesNotRequireADeviceToken.
+//
+// # Why this is a test rather than an absence
+//
+// It used to. FCM_DEVICE_TOKEN was required in notify mode, and that was the
+// wrong shape once the phone became the thing that registers: the app posts
+// its token to the api after being installed, so a process that refused to
+// start without one could never reach the state where one exists.
+//
+// The check that replaced it is not at start-up at all — /api/v1/status
+// reports whether a device is registered, and says in words that signals are
+// being recorded and not delivered while none is. See ADR 0026.
+func TestNotifyModeDoesNotRequireADeviceToken(t *testing.T) {
+	e := validEnv()
+	e["SIGNAL_MODE"] = "notify"
+	e["FCM_PROJECT_ID"] = "btc-signals"
+	e["FCM_CREDENTIALS_FILE"] = "/run/secrets/fcm.json"
+
+	cfg, err := config.LoadFrom(env(e))
+	if err != nil {
+		t.Fatalf("notify mode was refused with no device token: %v", err)
+	}
+	if !cfg.Notify.Delivers() {
+		t.Error("the configuration does not report that it delivers")
+	}
+}
+
+// TestTheRetiredDeviceTokenIsRefusedRatherThanIgnored.
+//
+// FCM_DEVICE_TOKEN used to be where alerts were sent. Left in a file where it
+// no longer does anything, somebody reads it and believes that is the token in
+// use — and the symptom they are usually investigating is alerts having
+// stopped, which is exactly what a stale token looks like. The variable that
+// would mislead them is the one that must fail.
+func TestTheRetiredDeviceTokenIsRefusedRatherThanIgnored(t *testing.T) {
+	for _, mode := range []string{"silent", "notify"} {
+		t.Run(mode, func(t *testing.T) {
+			e := validEnv()
+			e["SIGNAL_MODE"] = mode
+			e["FCM_PROJECT_ID"] = "btc-signals"
+			e["FCM_CREDENTIALS_FILE"] = "/run/secrets/fcm.json"
+			e["FCM_DEVICE_TOKEN"] = "a-token-nothing-reads"
+
+			_, err := config.LoadFrom(env(e))
+			if err == nil {
+				t.Fatal("LoadFrom() with FCM_DEVICE_TOKEN returned no error")
+			}
+			if !strings.Contains(err.Error(), "FCM_DEVICE_TOKEN") {
+				t.Errorf("error %q does not name the variable to remove", err)
+			}
+			if !strings.Contains(err.Error(), "/api/v1/device") {
+				t.Errorf("error %q does not say where the token comes from now", err)
 			}
 		})
 	}

@@ -21,6 +21,7 @@ anywhere else.
 - [GET /api/v1/outcomes](#get-apiv1outcomes)
 - [GET /api/v1/performance](#get-apiv1performance)
 - [GET /api/v1/status](#get-apiv1status)
+- [POST /api/v1/device](#post-apiv1device)
 - [GET /api/v1/stream](#get-apiv1stream-websocket) (websocket)
 - [Endpoints outside /api/v1](#endpoints-outside-apiv1)
 
@@ -35,6 +36,11 @@ anywhere else.
 redeployed with the server: phase 09 is written against this shape, and the
 first time it has to change there will be an app in somebody's pocket still
 asking for the old one.
+
+**Read-only, with one exception.** Every endpoint here reads except
+`POST /api/v1/device` and `DELETE /api/v1/device`, which write the one row that
+says where alerts go. Nothing in this API can create, amend or delete a signal,
+an outcome or a candle, and nothing anywhere in this system can place an order.
 
 **Symbol and market type** are not parameters. One deployment analyses one
 instrument (`MARKET_SYMBOL`, `MARKET_TYPE`) and every response says which,
@@ -545,6 +551,13 @@ $ curl -s "$B/status" | jq
     "last_signal_age_seconds": 77780603.5219971,
     "signals_total": 30
   },
+  "ingestion": {
+    "unfilled_gaps": 0,
+    "timeframes": [
+      { "timeframe": "1m", "unfilled_gaps": 0 },
+      { "timeframe": "4h", "unfilled_gaps": 0 }
+    ]
+  },
   "outcomes": {
     "open": 0,
     "oldest_open_at": null,
@@ -556,7 +569,8 @@ $ curl -s "$B/status" | jq
     "pending": 0,
     "sent": 0,
     "failed": 0,
-    "last_sent_at": null
+    "last_sent_at": null,
+    "devices_registered": 0
   },
   "concerns": [
     { "component": "collector", "detail": "the last heartbeat was 4m52s ago, more than three intervals of 5s — the collector process may be gone" },
@@ -586,11 +600,144 @@ Reading it:
   that does not drain is a broken worker; in `silent` nothing should be queued
   at all, so anything there was queued before delivery was switched off and
   will never be sent.
+- **`delivery.devices_registered`** is zero or one — the `devices` table holds
+  a single row. Zero while the mode is `notify` is the state where everything
+  looks configured and nothing is delivered, and the concerns list says so in
+  a sentence rather than leaving the two fields to be joined by the reader.
+- **`ingestion.unfilled_gaps`** is candle gaps still awaiting backfill, with a
+  per-timeframe breakdown. A gap appearing is the collector noticing a hole and
+  queueing a fill, which is the mechanism working; a count that stays put is
+  the finding. Every signal whose window overlaps an unfilled gap resolves as
+  `invalidated` and drops out of every figure on `/performance`, so a
+  performance screen quietly narrows without saying why.
 
 **`concerns` is a list, not a boolean.** "Healthy" is not answerable here, so
 every entry carries the number that produced it rather than a verdict. It is
 `[]` when there is nothing wrong — a missing field would read as a check that
 did not run.
+
+---
+
+## POST /api/v1/device
+
+Where alerts are delivered. **The only endpoint under `/api/v1` that writes.**
+
+| Field | Required | Notes |
+|---|---|---|
+| `token` | yes | The FCM registration token from the app. |
+| `platform` | no | `android` or `ios`; defaults to `android`. |
+| `label` | no | Free-form, for a person reading the table. Truncated at 128. |
+
+### Why this is not an environment variable
+
+FCM issues the token to the app on the phone and rotates it on its own
+schedule — on reinstall, on restore to a new device, and sometimes for no
+reason the app is told. A `.env` holding last month's token is not stale in a
+way anything notices: the process starts, the credentials validate, signals are
+recorded and queued, and every send is rejected as `UNREGISTERED`. The delivery
+worker correctly treats that as permanent and gives up. The symptom is alerts
+stopping and a config file that still looks fine.
+
+So the app posts its token on every launch and on every refresh. `re-registering
+the same token is a success`, not a conflict — that call is the mechanism that
+keeps a rotation from silently ending delivery. `FCM_DEVICE_TOKEN` is now
+**rejected** at start-up rather than ignored. See ADR 0026.
+
+```console
+$ curl -s -X POST "$B/device" -H 'Content-Type: application/json'     -d '{"token":"fMEP0vJqSk6:APA91bH...","platform":"android","label":"Pixel 7a"}' | jq
+{
+  "registered": true,
+  "token": "fMEP0v…",
+  "platform": "android",
+  "label": "Pixel 7a",
+  "registered_at": "2026-08-27T07:03:02.314015Z",
+  "refreshed_at": "2026-08-27T07:03:02.314015Z",
+  "delivery_mode": "notify",
+  "note": "Signals will be delivered to this device."
+}
+```
+
+**The token is never returned in full.** There is no authentication in front of
+this endpoint (ADR 0024), and the registration token is the one credential in
+this system that lets anything push to the owner's phone. Six characters is
+enough to tell two registrations apart and not enough to use. It is masked in
+logs and errors for the same reason.
+
+`registered_at` survives a re-registration of the same token; `refreshed_at`
+does not. The pair says both "this phone has been the registered one since
+March" and "the app checked in an hour ago".
+
+**One device.** The table holds a single row by constraint, because
+`notifications` is unique on `(signal_id, channel)` — it can record that a
+signal was delivered over FCM, not which of several devices received it. A
+second device is a schema change, not a second row.
+
+**`delivery_mode` and `note` say what will actually happen.** Registering
+against a deployment in `silent` mode succeeds and delivers nothing, and the
+app should not have to work that out by noticing an absence over the following
+fortnight:
+
+```console
+$ curl -s -X POST "$B/device" -d '{"token":"..."}' | jq -r .note
+This deployment is in silent mode: signals are recorded and nothing is sent. Registering does not change that; SIGNAL_MODE=notify does.
+```
+
+### GET /api/v1/device
+
+Whether a phone is registered, so the app can tell that from "the POST went
+nowhere" without waiting for a signal that may be ten days off. Nothing
+registered is a 200 with `registered: false`, not a 404 — a 404 would be
+ambiguous with the endpoint not existing on an older server, which is the case
+the app is trying to rule out.
+
+```console
+$ curl -s "$B/device" | jq
+{
+  "registered": false,
+  "delivery_mode": "notify",
+  "note": "No device is registered. Signals will be recorded and queued, and nothing will be delivered until one registers."
+}
+```
+
+### DELETE /api/v1/device
+
+Forgets the registration. Removing nothing is a success with `removed: false`,
+not a 404: the caller asked for a state that already held.
+
+```console
+$ curl -s -X DELETE "$B/device" | jq -c
+{"removed":true,"delivery_mode":"notify","note":"No device is registered. Signals will be recorded and queued, and nothing will be delivered until one registers."}
+```
+
+### Errors
+
+```console
+$ curl -s -X POST "$B/device" -d '{"token":""}' | jq -c
+{"error":{"code":"invalid_parameter","message":"invalid device registration: the registration token is empty"}}
+
+$ curl -s -X POST "$B/device" -d '{"token":"abc def"}' | jq -c
+{"error":{"code":"invalid_parameter","message":"invalid device registration: the registration token contains whitespace"}}
+
+$ curl -s -X POST "$B/device" -d '{"token":"x","platform":"blackberry"}' | jq -c
+{"error":{"code":"invalid_parameter","message":"\"blackberry\" is not a device platform; the platforms are android, ios"}}
+```
+
+Whitespace *around* the token is trimmed — a token pasted from a file arrives
+with a trailing newline every time. Whitespace *inside* it is refused: that is
+a value corrupted in transit, and storing it means Firebase rejects the send as
+`UNREGISTERED`, which reads as an uninstalled app rather than a mangled token.
+
+### What happens to alerts with nowhere to go
+
+They wait. A queued notification with no device registered comes out of a
+delivery pass untouched — same attempt count, still pending, still due — and
+delivers as soon as a phone registers.
+
+This is deliberate and it is the reason the state is not treated as a failure.
+The retry budget is five attempts over about eight minutes; counting a missing
+registration as an attempt would mark every alert produced before the app was
+installed as failed long before anyone could install it, and nothing retries a
+failed row.
 
 ---
 

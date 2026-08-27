@@ -44,7 +44,16 @@ SELECT
     count(*) FILTER (WHERE n.status = 'pending')::bigint AS pending,
     count(*) FILTER (WHERE n.status = 'sent')::bigint    AS sent,
     count(*) FILTER (WHERE n.status = 'failed')::bigint  AS failed,
-    (max(n.sent_at) FILTER (WHERE n.status = 'sent'))::timestamptz AS last_sent_at
+    (max(n.sent_at) FILTER (WHERE n.status = 'sent'))::timestamptz AS last_sent_at,
+
+    -- How many phones can be delivered to. Zero or one by construction — the
+    -- devices table holds a single row — and the case worth naming is zero
+    -- while the mode is notify: everything configured, nothing delivered.
+    --
+    -- A scalar subquery rather than a join: devices has no relationship to
+    -- this symbol's notifications, and joining an unrelated table would
+    -- multiply the counts above by whether a phone happens to be registered.
+    (SELECT count(*) FROM devices)::bigint AS devices_registered
 FROM notifications n
 JOIN signals s ON s.id = n.signal_id
 WHERE s.symbol = sqlc.arg(symbol)

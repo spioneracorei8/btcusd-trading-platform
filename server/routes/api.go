@@ -14,6 +14,7 @@ import (
 	"github.com/spioneracorei8/btcusd-trading-platform/server/services/health"
 	"github.com/spioneracorei8/btcusd-trading-platform/server/services/indicator"
 	"github.com/spioneracorei8/btcusd-trading-platform/server/services/market"
+	"github.com/spioneracorei8/btcusd-trading-platform/server/services/notify"
 	"github.com/spioneracorei8/btcusd-trading-platform/server/services/outcome"
 	"github.com/spioneracorei8/btcusd-trading-platform/server/services/pipeline"
 	"github.com/spioneracorei8/btcusd-trading-platform/server/services/signal"
@@ -93,6 +94,13 @@ func (r *route) RegisterAPI(api APIHandlers) {
 
 		v.Get("/status", api.Status.Status)
 		v.Get("/stream", api.Stream.Stream)
+
+		// The phone registers itself here. The token comes from FCM on the
+		// device and is rotated without asking, so it cannot be configuration
+		// — see ADR 0026.
+		v.Post("/device", api.Devices.RegisterDevice)
+		v.Get("/device", api.Devices.Device)
+		v.Delete("/device", api.Devices.ForgetDevice)
 	})
 }
 
@@ -107,4 +115,5 @@ type APIHandlers struct {
 	Outcomes   outcome.OutcomeHandler
 	Status     pipeline.StatusHandler
 	Stream     stream.StreamHandler
+	Devices    notify.DeviceHandler
 }

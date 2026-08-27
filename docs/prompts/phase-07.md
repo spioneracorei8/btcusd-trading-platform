@@ -151,10 +151,15 @@ At the 4h strategy's rate of 0.1 trades a day, 100 signals is nearly three years
 
 - [x] `go build ./... && go vet ./... && go test ./...` passes
 - [x] `SIGNAL_MODE=silent` is the default and writes signals without sending
-- [ ] `SIGNAL_MODE=notify` delivers to a real device — **not done, deliberately
-      deferred to phase 09.** There is no device token. The sender is complete
-      and tested against an `httptest` server, and the service account against
-      a key generated in the test; the last hop is untested.
+- [ ] `SIGNAL_MODE=notify` delivers to a real device — **still open.** Phase 09
+      built everything up to the last hop: the phone registers its own token
+      through `POST /api/v1/device` (ADR 0026), the queue waits rather than
+      failing while nothing is registered, and `GET /api/v1/status` reports
+      whether a device is there. What has not happened is a signal arriving on
+      a physical Android phone, because that needs hardware and a Firebase
+      project that the development environment does not have. The procedure to
+      close it is written down in `docs/mobile.md`; it is four checks and needs
+      a phone, a real FCM project, and about twenty minutes.
 - [x] Signals record the full resolved parameter set — on every signal, not
       once at start-up
 - [x] Outcomes resolve to target, stop, expired, or invalidated with MAE and MFE

@@ -177,10 +177,19 @@ type Notify struct {
 	FCMProjectId string
 	// FCMCredentialsFile is the path to the service account JSON file.
 	FCMCredentialsFile string
-	// FCMDeviceToken is the owner's phone. One device: this is a
-	// single-owner system.
-	FCMDeviceToken string
 }
+
+// Where the device token went
+//
+// It used to be FCM_DEVICE_TOKEN here. It is now a row in `devices`, written
+// by the phone through POST /api/v1/device, and FCM_DEVICE_TOKEN is rejected
+// at start-up rather than ignored — the same treatment NOTIFY_ENABLED gets,
+// for the same reason.
+//
+// FCM issues the token to the app and rotates it without asking. A value in
+// this file is the previous one from the moment Firebase decides otherwise,
+// and the deployment goes on looking configured while every delivery fails as
+// unregistered. See ADR 0026.
 
 // Delivers reports whether signals are pushed to the owner.
 func (n Notify) Delivers() bool { return n.SignalMode.Delivers() }
@@ -297,7 +306,6 @@ func LoadFrom(lookup helper.LookupFunc, opts ...Option) (*Config, error) {
 			SignalMode:         l.signalMode("SIGNAL_MODE"),
 			FCMProjectId:       l.optionalString("FCM_PROJECT_ID", ""),
 			FCMCredentialsFile: l.optionalString("FCM_CREDENTIALS_FILE", ""),
-			FCMDeviceToken:     l.optionalString("FCM_DEVICE_TOKEN", ""),
 		},
 	}
 
@@ -310,10 +318,14 @@ func LoadFrom(lookup helper.LookupFunc, opts ...Option) (*Config, error) {
 		if cfg.Notify.FCMCredentialsFile == "" {
 			l.missing = append(l.missing, "FCM_CREDENTIALS_FILE")
 		}
-		if cfg.Notify.FCMDeviceToken == "" {
-			l.missing = append(l.missing, "FCM_DEVICE_TOKEN")
-		}
 	}
+
+	// Deliberately not "and a device token". The phone registers itself after
+	// the app is installed, so a deployment that refused to start without one
+	// could never reach the state where one exists.
+	l.rejectRetired(retiredDeviceToken,
+		"the device token is now registered by the app through POST /api/v1/device "+
+			"and stored in the devices table; remove it")
 
 	if err := l.err(); err != nil {
 		return nil, err
@@ -330,6 +342,20 @@ func (c *Config) HTTPAddr() string { return fmt.Sprintf(":%d", c.App.HTTPPort) }
 // retiredNotifyEnabled is the switch SIGNAL_MODE replaced. It is named here so
 // a stale .env fails loudly instead of misleading whoever reads it next.
 const retiredNotifyEnabled = "NOTIFY_ENABLED"
+
+// retiredDeviceToken is the variable the devices table replaced. Named here
+// for the same reason: a stale .env should fail loudly rather than leave
+// somebody believing the token in it is the one being used.
+const retiredDeviceToken = "FCM_DEVICE_TOKEN"
+
+// rejectRetired reports a variable that no longer does anything, with what to
+// do instead. Ignoring it silently is what leaves an operator reading a value
+// in their .env that nothing has consulted for months.
+func (l *loader) rejectRetired(key, advice string) {
+	if _, ok := l.get(key); ok {
+		l.invalidf(key, "%s", advice)
+	}
+}
 
 // loader reads values and accumulates every problem instead of stopping at
 // the first one, so an operator sees the whole list in a single run.
@@ -432,11 +458,9 @@ func (l *loader) optionalInt(key string, def, min, max int) int {
 // spends an evening looking for the fault in Firebase when the answer is one
 // line in .env. Failing at start-up costs one edit and says which one.
 func (l *loader) signalMode(key string) constants.SignalMode {
-	if _, ok := l.get(retiredNotifyEnabled); ok {
-		l.invalidf(retiredNotifyEnabled,
-			"this has been replaced by %s (%s or %s); remove it",
-			key, constants.SignalModeSilent, constants.SignalModeNotify)
-	}
+	l.rejectRetired(retiredNotifyEnabled, fmt.Sprintf(
+		"this has been replaced by %s (%s or %s); remove it",
+		key, constants.SignalModeSilent, constants.SignalModeNotify))
 
 	mode, err := constants.ParseSignalMode(l.optionalString(key, constants.DefaultSignalMode))
 	if err != nil {

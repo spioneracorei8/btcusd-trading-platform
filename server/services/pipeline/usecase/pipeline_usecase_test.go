@@ -55,6 +55,10 @@ func (f *fakeActivity) DeliveryActivity(context.Context, string, constants.Marke
 func healthy() models.MarketStatus {
 	return models.MarketStatus{
 		Symbol: "BTCUSDT", MarketType: constants.MarketTypeSpot,
+		Timeframes: []models.TimeframeStatus{
+			{Timeframe: constants.Timeframe1m},
+			{Timeframe: constants.Timeframe4h},
+		},
 		Collector: models.CollectorStatus{
 			Symbol: "BTCUSDT", MarketType: constants.MarketTypeSpot,
 			State:       constants.CollectorLive,
@@ -292,6 +296,130 @@ func TestSignalsWithNoOutcomeRowAreReported(t *testing.T) {
 	}
 }
 
+// TestNotifyModeWithNoRegisteredDeviceSaysSoInWords.
+//
+// # What this prevents
+//
+// The device token is registered by the phone, so every deployment passes
+// through "notify mode, nothing registered" between switching the mode on and
+// opening the app. In that state everything looks configured: the mode says
+// notify, the credentials validated at start-up, signals are being recorded
+// and queued.
+//
+// A bare `devices_registered: 0` beside `mode: notify` leaves the reader to
+// join those two facts themselves — and the person reading this page is
+// usually reading it because something is already confusing. So it is a
+// sentence, and it says what will happen to the signals rather than only what
+// is missing.
+func TestNotifyModeWithNoRegisteredDeviceSaysSoInWords(t *testing.T) {
+	status := statusOf(t, &fakeMarket{status: healthy()}, &fakeActivity{
+		delivery: pipeline.DeliveryActivity{DevicesRegistered: 0},
+	}, Config{SignalMode: constants.SignalModeNotify})
+
+	if status.Delivery.DevicesRegistered != 0 {
+		t.Fatalf("devices registered = %d, want 0", status.Delivery.DevicesRegistered)
+	}
+
+	details := concernsFor(status, "delivery")
+	if len(details) != 1 {
+		t.Fatalf("delivery concerns = %v, want exactly one", details)
+	}
+	for _, want := range []string{"no device is registered", "recorded", "not delivered"} {
+		if !strings.Contains(details[0], want) {
+			t.Errorf("the concern does not say %q: %q", want, details[0])
+		}
+	}
+}
+
+// TestARegisteredDeviceInNotifyModeIsNotAConcern.
+func TestARegisteredDeviceInNotifyModeIsNotAConcern(t *testing.T) {
+	status := statusOf(t, &fakeMarket{status: healthy()}, &fakeActivity{
+		delivery: pipeline.DeliveryActivity{DevicesRegistered: 1},
+	}, Config{SignalMode: constants.SignalModeNotify})
+
+	if status.Delivery.DevicesRegistered != 1 {
+		t.Errorf("devices registered = %d, want 1", status.Delivery.DevicesRegistered)
+	}
+	if details := concernsFor(status, "delivery"); len(details) != 0 {
+		t.Fatalf("a registered device raised %v", details)
+	}
+}
+
+// TestNoRegisteredDeviceInSilentModeIsNotAConcern.
+//
+// Silent mode sends nothing to anywhere, so there is nothing for a
+// registration to be missing from. Reporting it would put a permanent entry on
+// the page of every deployment that has not switched alerts on — which is the
+// default — and a concerns list that is never empty is one nobody reads.
+func TestNoRegisteredDeviceInSilentModeIsNotAConcern(t *testing.T) {
+	status := statusOf(t, &fakeMarket{status: healthy()}, &fakeActivity{
+		delivery: pipeline.DeliveryActivity{DevicesRegistered: 0},
+	}, Config{SignalMode: constants.SignalModeSilent})
+
+	if details := concernsFor(status, "delivery"); len(details) != 0 {
+		t.Fatalf("silent mode with no device raised %v", details)
+	}
+}
+
+// TestUnfilledGapsAreReportedWithTheTimeframesHoldingThem.
+//
+// A gap is the collector noticing a hole and queueing a backfill, which is the
+// mechanism working. A count that stays put is the finding: every signal whose
+// window overlaps an unfilled gap resolves as invalidated and leaves the
+// statistics, so a performance screen quietly narrows without saying why.
+//
+// The breakdown names only the series actually holding gaps. A list reading
+// "1m: 3, 5m: 0, 15m: 0, 1h: 0, 4h: 0, 1d: 0" buries the one fact it contains.
+func TestUnfilledGapsAreReportedWithTheTimeframesHoldingThem(t *testing.T) {
+	holed := healthy()
+	holed.Timeframes = []models.TimeframeStatus{
+		{Timeframe: constants.Timeframe1m, UnfilledGaps: 3},
+		{Timeframe: constants.Timeframe5m, UnfilledGaps: 0},
+		{Timeframe: constants.Timeframe4h, UnfilledGaps: 1},
+	}
+
+	status := statusOf(t, &fakeMarket{status: holed}, &fakeActivity{}, Config{})
+
+	if status.Ingestion.UnfilledGaps != 4 {
+		t.Errorf("total unfilled gaps = %d, want 4", status.Ingestion.UnfilledGaps)
+	}
+	if len(status.Ingestion.Timeframes) != 3 {
+		t.Fatalf("breakdown covers %d timeframes, want all 3 collected",
+			len(status.Ingestion.Timeframes))
+	}
+
+	details := concernsFor(status, "ingestion")
+	if len(details) != 1 {
+		t.Fatalf("ingestion concerns = %v, want exactly one", details)
+	}
+	if !strings.Contains(details[0], "1m: 3") || !strings.Contains(details[0], "4h: 1") {
+		t.Errorf("the concern does not name the timeframes holding gaps: %q", details[0])
+	}
+	if strings.Contains(details[0], "5m") {
+		t.Errorf("the concern lists a timeframe with no gaps: %q", details[0])
+	}
+	if !strings.Contains(details[0], "invalidated") {
+		t.Errorf("the concern does not say what an unfilled gap costs: %q", details[0])
+	}
+}
+
+// TestAWholeSeriesRaisesNothing, so the concerns list stays empty on a healthy
+// deployment and means something when it is not.
+func TestAWholeSeriesRaisesNothing(t *testing.T) {
+	status := statusOf(t, &fakeMarket{status: healthy()}, &fakeActivity{}, Config{})
+
+	if status.Ingestion.UnfilledGaps != 0 {
+		t.Errorf("unfilled gaps = %d, want 0", status.Ingestion.UnfilledGaps)
+	}
+	if len(status.Ingestion.Timeframes) != 2 {
+		t.Errorf("breakdown covers %d timeframes, want the 2 collected",
+			len(status.Ingestion.Timeframes))
+	}
+	if details := concernsFor(status, "ingestion"); len(details) != 0 {
+		t.Fatalf("a whole series raised %v", details)
+	}
+}
+
 // TestAPendingQueueMeansDifferentThingsInEachMode.
 //
 // In notify mode a queue that does not drain is a broken worker. In silent
@@ -307,8 +435,10 @@ func TestAPendingQueueMeansDifferentThingsInEachMode(t *testing.T) {
 		{constants.SignalModeSilent, "nothing will send them"},
 	} {
 		t.Run(tc.mode.String(), func(t *testing.T) {
+			// A registered device, so the pending queue is the only thing
+			// this test is asking about.
 			status := statusOf(t, &fakeMarket{status: healthy()}, &fakeActivity{
-				delivery: pipeline.DeliveryActivity{Pending: 3},
+				delivery: pipeline.DeliveryActivity{Pending: 3, DevicesRegistered: 1},
 			}, Config{SignalMode: tc.mode})
 
 			details := concernsFor(status, "delivery")
@@ -328,7 +458,7 @@ func TestAPendingQueueMeansDifferentThingsInEachMode(t *testing.T) {
 // TestFailedNotificationsAreReportedBecauseNothingRetriesThem.
 func TestFailedNotificationsAreReportedBecauseNothingRetriesThem(t *testing.T) {
 	status := statusOf(t, &fakeMarket{status: healthy()}, &fakeActivity{
-		delivery: pipeline.DeliveryActivity{Failed: 2, Sent: 9},
+		delivery: pipeline.DeliveryActivity{Failed: 2, Sent: 9, DevicesRegistered: 1},
 	}, Config{SignalMode: constants.SignalModeNotify})
 
 	details := concernsFor(status, "delivery")
