@@ -240,20 +240,47 @@ Three places the palette bends to the content:
 
 ## Definition of Done
 
-- [ ] Builds to an installable APK
-- [ ] All five screens work against the live API over the tailnet
-- [ ] Unreachable API produces a clear message naming Tailscale
-- [ ] Forming candles are visibly marked as forming
-- [ ] Every performance figure shows its sample size, at 14pt
-- [ ] Insufficient-sample banner renders before the numbers
-- [ ] Chart pans and zooms without refetching per gesture
-- [ ] Push notifications verified end to end, all four cases in C3
-- [ ] Token refresh re-registers
-- [ ] Phase 07's unticked Definition of Done item closed and recorded
-- [ ] No order-placing code or UI, enforced by a test
-- [ ] No hex literal outside `src/theme/`, enforced by lint
-- [ ] Colour-blindness check passed for long versus short
-- [ ] `docs/mobile.md` covers building, installing, configuring, and the theme tokens
+Ticked means verified here, by something that keeps holding. Unticked items
+carry the reason, and four of them need hardware this environment does not
+have — see "What has not been done here" in `docs/mobile.md`.
+
+- [ ] **Builds to an installable APK** — `dl.google.com` is blocked by the
+      proxy policy in this environment, so there is no Android SDK and no
+      build. The Expo config and `eas.json` are in place; the command is in
+      `docs/mobile.md`
+- [ ] **All five screens work against the live API over the tailnet** — all
+      five were rendered against a live API and read, but on loopback. There
+      is no tailnet here, and the address is configuration rather than code
+- [x] Unreachable API produces a clear message naming Tailscale — and names it
+      only for `unreachable`, not for a 500, which would send somebody to
+      debug the wrong machine
+- [x] Forming candles are visibly marked as forming — drawn hollow at lower
+      opacity, and said in words underneath
+- [x] Every performance figure shows its sample size, at 14pt
+- [x] Insufficient-sample banner renders before the numbers
+- [x] Chart pans and zooms without refetching per gesture — the fetched window
+      is held while the view moves inside it; two steps cost nothing and the
+      third extends it, checked in jest and in a browser against the live API
+- [ ] **Push notifications verified end to end, all four cases in C3** — needs
+      a phone. The procedure is written out in `docs/mobile.md` so it can be
+      run against one rather than ticked against a simulation
+- [ ] **Token refresh re-registers** — the listener is wired to the post and
+      carries the new token, held by `useNotifications.test.tsx`. A real FCM
+      rotation has not happened, so this is not ticked
+- [ ] **Phase 07's unticked Definition of Done item closed and recorded** —
+      still open. It has been outstanding since that phase and stays open;
+      what is new is a written procedure that closes it
+- [x] No order-placing code or UI, enforced by a test — `src/__tests__/no-orders.test.ts`
+- [x] No hex literal outside `src/theme/`, enforced by lint
+- [x] Colour-blindness check passed for long versus short — computed rather
+      than eyeballed: Viénot–Brettel–Mollon simulation, CIE76 ΔE, held at a
+      minimum separation by `src/theme/colorblind.test.ts`
+- [x] `docs/mobile.md` covers building, installing, configuring, and the theme tokens
+
+Two of E6's three visual checks are also automated, in `mobile/tools/audit.mjs`:
+the largest gold area per screen, and whether anything outranks `text.primary`
+in luminance. The third — whether the eye lands on the right element first — is
+a judgement and is left to a person, with the screenshots to do it from.
 
 ---
 

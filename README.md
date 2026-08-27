@@ -9,14 +9,22 @@ and no API key with trading rights is used — Binance market data is public.
 
 Read [`CLAUDE.md`](CLAUDE.md) before writing any code. Phase prompts live in
 [`docs/prompts/`](docs/prompts/), decisions in [`docs/decisions/`](docs/decisions/),
-the HTTP and WebSocket contract in [`docs/api.md`](docs/api.md).
+the HTTP and WebSocket contract in [`docs/api.md`](docs/api.md), and the app in
+[`docs/mobile.md`](docs/mobile.md).
 
 ## Status
 
-Phases 01–08 of 09 are merged: skeleton and schema, market data ingestion,
-the indicator engine, the backtest engine, the multi-timeframe trend filter,
-the strategy engine, live evaluation with outcome tracking and delivery, and
-the API the app will consume.
+All nine phases are merged: skeleton and schema, market data ingestion, the
+indicator engine, the backtest engine, the multi-timeframe trend filter, the
+strategy engine, live evaluation with outcome tracking and delivery, the API,
+and the phone app that reads it.
+
+Four things phase 09 asks for are **not** done, all of them needing hardware
+this development environment does not have: no APK was built, nothing ran on a
+device, push was not verified end to end, and nothing was tested over an actual
+tailnet. `docs/mobile.md` says so in those words and carries the procedure for
+a phone to run. The end-to-end push check has been phase 07's one open item
+since that phase closed, and it is still open.
 
 The API has **no authentication**. It binds to loopback and the tailnet and
 nothing else, and that is the whole access control —
@@ -97,6 +105,35 @@ under podman does not fail, it quietly builds a second, empty stack beside the
 real one. Pin the choice in `.env` with `CONTAINER_ENGINE=podman` (or `docker`)
 if the guess is wrong for your machine.
 
+### The app
+
+```bash
+cd mobile
+npm install
+npm run check             # typecheck, lint, tests
+npm start                 # Expo dev server; scan the QR from Expo Go
+```
+
+Five screens — now, signals, chart, performance, status — over the same
+`/api/v1` the browser would use. It is a **reader**: the only request it makes
+that changes anything on the server is registering its own push token, and
+nothing on any screen computes a win rate, an indicator or a return. Two
+implementations of a number is two numbers, eventually.
+
+There is no execute button, no broker link and no position-size calculator,
+and a test asserts that no order-related string appears anywhere in the app
+source — the same check `architecture_test.go` runs on the server.
+
+The phone registers itself rather than having its token pasted into the
+deployment's environment ([ADR 0026](docs/decisions/0026-the-phone-registers-itself.md)),
+`/api/v1/status` reports how many devices are registered, and in notify mode
+with none it says plainly that signals will be recorded but not delivered.
+The chart is drawn rather than imported
+([ADR 0027](docs/decisions/0027-the-chart-is-drawn-rather-than-imported.md)).
+
+[`docs/mobile.md`](docs/mobile.md) is the rest: building, installing,
+configuring, the theme, and what has not been done here.
+
 ## Architecture
 
 Clean architecture: a service declares its interfaces at the package root and
@@ -175,8 +212,13 @@ server/
   migrations/      goose migrations
   testhelper/      shared setup for repository integration tests
 deploy/            compose files, VPS runbook, provisioning and backup scripts
-docs/              api.md, decisions/, prompts/, experiments.md
+docs/              api.md, mobile.md, decisions/, prompts/, experiments.md
 mobile/            React Native app (phase 09)
+  src/theme/       the only place a colour literal may appear
+  src/api/         client, queries, types — the wire shapes the server sends
+  src/features/    one directory per screen
+  src/notifications/  permission, registration, and what a tap opens
+  tools/           screenshot and theme-audit harnesses
 ```
 
 `health` is the one complete vertical slice (handler → usecase → repository)
