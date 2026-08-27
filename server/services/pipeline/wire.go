@@ -77,10 +77,16 @@ type StatusIngestion struct {
 	Timeframes   []StatusTimeframeGaps `json:"timeframes"`
 }
 
-// StatusTimeframeGaps is one series' unfilled gap count.
+// StatusTimeframeGaps is one series' unfilled gap count and how current it is.
 type StatusTimeframeGaps struct {
 	Timeframe    string `json:"timeframe"`
 	UnfilledGaps int64  `json:"unfilled_gaps"`
+
+	// LatestOpenTime says where the data ends. A client charting this series
+	// needs it: opening on wall-clock now is blank whenever the collector is
+	// behind, and blank looks identical to a market that stopped trading.
+	LatestOpenTime   *time.Time `json:"latest_open_time"`
+	LatestAgeSeconds *float64   `json:"latest_age_seconds"`
 }
 
 type StatusDelivery struct {
@@ -169,7 +175,10 @@ func timeframeGaps(in []TimeframeGaps) []StatusTimeframeGaps {
 	out := make([]StatusTimeframeGaps, 0, len(in))
 	for _, tf := range in {
 		out = append(out, StatusTimeframeGaps{
-			Timeframe: tf.Timeframe, UnfilledGaps: tf.UnfilledGaps,
+			Timeframe:        tf.Timeframe,
+			UnfilledGaps:     tf.UnfilledGaps,
+			LatestOpenTime:   tf.LatestOpenTime,
+			LatestAgeSeconds: statusSeconds(tf.LatestAge),
 		})
 	}
 	return out

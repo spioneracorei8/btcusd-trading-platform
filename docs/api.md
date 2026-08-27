@@ -554,8 +554,18 @@ $ curl -s "$B/status" | jq
   "ingestion": {
     "unfilled_gaps": 0,
     "timeframes": [
-      { "timeframe": "1m", "unfilled_gaps": 0 },
-      { "timeframe": "4h", "unfilled_gaps": 0 }
+      {
+        "timeframe": "1m",
+        "unfilled_gaps": 0,
+        "latest_open_time": "2024-12-31T23:59:00Z",
+        "latest_age_seconds": 52140549
+      },
+      {
+        "timeframe": "4h",
+        "unfilled_gaps": 0,
+        "latest_open_time": "2024-12-31T20:00:00Z",
+        "latest_age_seconds": 52154949
+      }
     ]
   },
   "outcomes": {
@@ -604,6 +614,10 @@ Reading it:
   a single row. Zero while the mode is `notify` is the state where everything
   looks configured and nothing is delivered, and the concerns list says so in
   a sentence rather than leaving the two fields to be joined by the reader.
+- **`ingestion.timeframes[].latest_open_time`** is where each series ends.
+  It is not only diagnostic: a chart that opens on wall-clock now is blank
+  whenever the collector is behind, and blank looks identical to a market that
+  stopped trading. A client anchors on this instead.
 - **`ingestion.unfilled_gaps`** is candle gaps still awaiting backfill, with a
   per-timeframe breakdown. A gap appearing is the collector noticing a hole and
   queueing a fill, which is the mechanism working; a count that stays put is

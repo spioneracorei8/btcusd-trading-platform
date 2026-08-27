@@ -26,7 +26,13 @@ import type { Concern, Status } from '../../api/types';
  * When it is unhealthy the aesthetic goes: `error`, high contrast, no
  * ornament. Someone reading this is troubleshooting.
  */
-export function StatusScreen() {
+export function StatusScreen({
+  alerts,
+}: {
+  /** Supplied by the navigator, which owns the notification hook so the tap
+   * handler survives a tab change. */
+  alerts?: React.ReactNode;
+} = {}) {
   const { baseUrl } = useApi();
   const { data, error, isFetching, refetch } = useStatus();
 
@@ -44,6 +50,7 @@ export function StatusScreen() {
     >
       {error ? <Failure error={error} baseUrl={baseUrl} /> : null}
       {data ? <StatusBody status={data} /> : null}
+      {alerts}
       {!data && !error ? (
         <Text tone="secondary">Reading the pipeline status…</Text>
       ) : null}

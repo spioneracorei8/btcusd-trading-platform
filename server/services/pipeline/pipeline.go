@@ -117,10 +117,20 @@ type IngestionHealth struct {
 	Timeframes   []TimeframeGaps
 }
 
-// TimeframeGaps is one series' unfilled gap count.
+// TimeframeGaps is one series' unfilled gap count and how current it is.
 type TimeframeGaps struct {
 	Timeframe    string
 	UnfilledGaps int64
+
+	// LatestOpenTime is the newest stored candle, nil when the series is
+	// empty.
+	//
+	// It answers "where does the data end", which nothing else on this page
+	// does and which a client needs for a reason beyond diagnostics: a chart
+	// opening on wall-clock now is blank whenever the collector is behind,
+	// and blank looks identical to a market that stopped trading.
+	LatestOpenTime *time.Time
+	LatestAge      *time.Duration
 }
 
 // DeliveryHealth is the notification queue.

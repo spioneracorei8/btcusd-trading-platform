@@ -128,6 +128,15 @@ export function Candles({
       })}
 
       {markers.map((marker) => {
+        // Only markers inside the drawn range.
+        //
+        // The two ends need different guards. Past the end, findIndex finds
+        // nothing and returns -1. Before the start it returns 0 — so every
+        // signal older than the window would land on the first bar, and with
+        // thirty of them that is a column of marks stacked on the left edge at
+        // a time and a price the chart is not showing.
+        if (marker.at < Date.parse(candles[0]!.open_time)) return null;
+
         const index = candles.findIndex((c) => Date.parse(c.open_time) >= marker.at);
         if (index < 0) return null;
 

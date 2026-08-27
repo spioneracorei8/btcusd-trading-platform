@@ -35,7 +35,9 @@ function statusFixture(overrides: Partial<Status> = {}): Status {
     },
     ingestion: {
       unfilled_gaps: 0,
-      timeframes: [{ timeframe: '1m', unfilled_gaps: 0 }],
+      timeframes: [
+        { timeframe: '1m', unfilled_gaps: 0, latest_open_time: null, latest_age_seconds: null },
+      ],
     },
     outcomes: {
       open: 0,
@@ -163,8 +165,18 @@ describe('the status screen', () => {
           ingestion: {
             unfilled_gaps: 4,
             timeframes: [
-              { timeframe: '1m', unfilled_gaps: 3 },
-              { timeframe: '4h', unfilled_gaps: 1 },
+              {
+                timeframe: '1m',
+                unfilled_gaps: 3,
+                latest_open_time: null,
+                latest_age_seconds: null,
+              },
+              {
+                timeframe: '4h',
+                unfilled_gaps: 1,
+                latest_open_time: '2026-08-27T08:00:00Z',
+                latest_age_seconds: 14400,
+              },
             ],
           },
         }),

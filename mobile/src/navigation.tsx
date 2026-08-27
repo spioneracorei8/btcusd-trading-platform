@@ -1,8 +1,16 @@
-import { NavigationContainer, DefaultTheme } from '@react-navigation/native';
+import {
+  NavigationContainer,
+  DefaultTheme,
+  type NavigationContainerRef,
+} from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 
+import { useRef } from 'react';
+
 import { colors, layout, type } from './theme';
+import { AlertsCard } from './notifications/AlertsCard';
+import { useNotifications } from './notifications/useNotifications';
 import { ChartScreen } from './features/chart/ChartScreen';
 import { DashboardScreen } from './features/dashboard/DashboardScreen';
 import { PerformanceScreen } from './features/performance/PerformanceScreen';
@@ -72,7 +80,14 @@ function SignalsTab() {
   );
 }
 
-export function AppTabs() {
+export function AppTabs({ onOpenSignal }: { onOpenSignal?: (id: string) => void } = {}) {
+  // The notification hook lives here, above the tabs, so a tap that arrives
+  // while the app is on any screen still opens the signal — and so the
+  // listener is subscribed once for the life of the process rather than
+  // re-subscribed on every tab change, which would drop anything arriving in
+  // the gap.
+  const alerts = useNotifications({ onOpenSignal });
+
   return (
     <Tabs.Navigator
       screenOptions={{
@@ -96,15 +111,43 @@ export function AppTabs() {
       <Tabs.Screen name="Signals" component={SignalsTab} options={{ headerShown: false }} />
       <Tabs.Screen name="Chart" component={ChartScreen} />
       <Tabs.Screen name="Performance" component={PerformanceScreen} />
-      <Tabs.Screen name="Status" component={StatusScreen} />
+      <Tabs.Screen name="Status">
+        {() => (
+          <StatusScreen
+            alerts={
+              <AlertsCard
+                state={alerts.state}
+                device={alerts.device.data}
+                token={alerts.token}
+                error={alerts.error}
+                onRequest={() => void alerts.request()}
+                onRegister={() => void alerts.register()}
+              />
+            }
+          />
+        )}
+      </Tabs.Screen>
     </Tabs.Navigator>
   );
 }
 
 export function Navigation({ children }: { children?: React.ReactNode }) {
+  const navigator = useRef<NavigationContainerRef<Record<string, object | undefined>>>(null);
+
   return (
-    <NavigationContainer theme={navigationTheme}>
-      {children ?? <AppTabs />}
+    <NavigationContainer ref={navigator} theme={navigationTheme}>
+      {children ?? (
+        <AppTabs
+          onOpenSignal={(id) =>
+            // Tapping an alert lands on that signal's detail view, wherever
+            // the app happened to be.
+            navigator.current?.navigate('Signals', {
+              screen: 'SignalDetail',
+              params: { id },
+            })
+          }
+        />
+      )}
     </NavigationContainer>
   );
 }

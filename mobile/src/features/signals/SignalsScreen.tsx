@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { FlatList, Pressable, RefreshControl, View } from 'react-native';
 
 import { useApi } from '../../api/provider';
@@ -21,10 +21,34 @@ export function SignalsScreen({ onOpen }: { onOpen: (id: string) => void }) {
   const [status, setStatus] = useState<OutcomeStatus | undefined>();
 
   const signals = useSignals({ limit: 50, direction });
+
   // Outcomes are fetched alongside rather than joined server-side: the list
   // endpoint deliberately carries no outcome, and asking for both is one
   // request each rather than a new shape on the server.
-  const outcomes = useOutcomes({ limit: 200, status });
+  //
+  // The window has to be derived from the signals rather than left to the
+  // API's default of one year. /signals is not windowed and /outcomes is, so
+  // a default would make every signal older than a year read "not followed
+  // yet" — including ones that resolved long ago.
+  // Memoised because the window is part of the query key: a Date built in the
+  // render body is a new key on every render, which is an infinite refetch
+  // rather than a stale window.
+  const oldest = signals.data?.signals.at(-1)?.signal_time;
+  const newest = signals.data?.signals[0]?.signal_time;
+  const window = useMemo(
+    () =>
+      oldest && newest
+        ? {
+            from: new Date(Date.parse(oldest) - DAY_MS),
+            to: new Date(Date.parse(newest) + YEAR_MS),
+          }
+        : undefined,
+    [oldest, newest],
+  );
+
+  // Held back until the window is known: a request against the API's default
+  // would be a round trip whose answer is discarded a moment later.
+  const outcomes = useOutcomes({ limit: 200, status, ...window }, window !== undefined);
 
   const byId = new Map((outcomes.data?.outcomes ?? []).map((o) => [o.signal_id, o]));
   const rows = (signals.data?.signals ?? []).filter(
@@ -172,6 +196,13 @@ function Chip({
     </Pressable>
   );
 }
+
+/** A day before the oldest signal on screen, so a boundary is never the
+ * reason a row looks unfollowed, and a year after the newest — longer than
+ * any outcome stays open, since SIGNAL_EXPIRY_BARS closes them well before
+ * that. */
+const DAY_MS = 24 * 60 * 60 * 1000;
+const YEAR_MS = 365 * DAY_MS;
 
 const STATUS_TONE: Record<OutcomeStatus, string> = {
   open: colors.text.secondary,

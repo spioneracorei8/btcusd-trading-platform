@@ -219,6 +219,81 @@ describe('markers', () => {
   });
 });
 
+/**
+ * TestMarkersOutsideTheWindowAreNotDrawn.
+ *
+ * # What this prevents
+ *
+ * findIndex returns 0 when nothing matches, so a marker for a signal older
+ * than the drawn range lands on the first bar. With thirty signals and a
+ * window that postdates all of them, that is a column of thirty marks stacked
+ * on the left edge — every one of them at a time and a price the chart is not
+ * showing.
+ *
+ * It is not a subtle wrong answer. It is marks that were never there, on the
+ * screen whose job is saying what the market did around a signal.
+ */
+describe('markers outside the drawn range', () => {
+  const window = [
+    bar({ open_time: '2026-08-27T00:00:00Z' }),
+    bar({ open_time: '2026-08-27T04:00:00Z' }),
+    bar({ open_time: '2026-08-27T08:00:00Z' }),
+  ];
+
+  function markerCount() {
+    return screen.UNSAFE_getAllByType(Rect).filter((node) => {
+      const { width, height } = node.props as { width?: number; height?: number };
+      return width === 6 && height === 6;
+    }).length;
+  }
+
+  it('are not drawn when the signal predates the window', () => {
+    render(
+      <Candles
+        candles={window}
+        markers={[
+          { at: Date.parse('2024-03-06T00:00:00Z'), price: 64100, direction: 'long', kind: 'entry' },
+          { at: Date.parse('2024-03-07T00:00:00Z'), price: 64200, direction: 'long', kind: 'entry' },
+        ]}
+        width={300}
+        height={100}
+      />,
+    );
+
+    expect(markerCount()).toBe(0);
+  });
+
+  it('are not drawn when the signal postdates the window', () => {
+    render(
+      <Candles
+        candles={window}
+        markers={[
+          { at: Date.parse('2027-01-01T00:00:00Z'), price: 64100, direction: 'long', kind: 'entry' },
+        ]}
+        width={300}
+        height={100}
+      />,
+    );
+
+    expect(markerCount()).toBe(0);
+  });
+
+  it('are drawn when the signal falls inside it', () => {
+    render(
+      <Candles
+        candles={window}
+        markers={[
+          { at: Date.parse('2026-08-27T04:00:00Z'), price: 64100, direction: 'long', kind: 'entry' },
+        ]}
+        width={300}
+        height={100}
+      />,
+    );
+
+    expect(markerCount()).toBe(1);
+  });
+});
+
 describe('an empty chart', () => {
   it('renders nothing rather than dividing by zero', () => {
     render(<Candles candles={[]} width={200} height={100} />);

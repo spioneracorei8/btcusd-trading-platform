@@ -234,10 +234,17 @@ func ingestionHealth(timeframes []models.TimeframeStatus) pipeline.IngestionHeal
 	}
 	for _, tf := range timeframes {
 		health.UnfilledGaps += tf.UnfilledGaps
-		health.Timeframes = append(health.Timeframes, pipeline.TimeframeGaps{
-			Timeframe:    tf.Timeframe.String(),
-			UnfilledGaps: tf.UnfilledGaps,
-		})
+
+		row := pipeline.TimeframeGaps{
+			Timeframe:      tf.Timeframe.String(),
+			UnfilledGaps:   tf.UnfilledGaps,
+			LatestOpenTime: tf.LatestOpenTime,
+		}
+		if tf.LatestAgeSeconds != nil {
+			age := time.Duration(*tf.LatestAgeSeconds) * time.Second
+			row.LatestAge = &age
+		}
+		health.Timeframes = append(health.Timeframes, row)
 	}
 	return health
 }

@@ -21,6 +21,9 @@ const OUT = process.env.OUT ?? 'screenshots';
 
 const SCREENS = [
   { name: 'dashboard', tab: 'Now' },
+  { name: 'signals', tab: 'Signals' },
+  { name: 'chart', tab: 'Chart' },
+  { name: 'performance', tab: 'Performance' },
   { name: 'status', tab: 'Status' },
 ];
 

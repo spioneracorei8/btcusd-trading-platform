@@ -57,12 +57,27 @@ export function useSignal(id: string | undefined) {
   });
 }
 
-export function useOutcomes(query: OutcomesQuery = {}) {
+/**
+ * @param enabled false while the caller is still working out what window to
+ * ask for. /outcomes is windowed and /signals is not, so a screen annotating
+ * a signal list has to derive the window from the signals — and firing a
+ * request against the API's default first is a round trip whose answer is
+ * thrown away.
+ */
+export function useOutcomes(query: OutcomesQuery = {}, enabled = true) {
   const { client, ready } = useApi();
   return useQuery({
-    queryKey: ['outcomes', client.baseUrl, query],
+    queryKey: [
+      'outcomes',
+      client.baseUrl,
+      query.status,
+      query.limit,
+      query.offset,
+      query.from?.toISOString(),
+      query.to?.toISOString(),
+    ],
     queryFn: ({ signal }) => client.outcomes(query, signal),
-    enabled: ready,
+    enabled: ready && enabled,
     refetchInterval: MINUTE,
   });
 }

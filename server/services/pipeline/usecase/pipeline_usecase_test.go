@@ -403,6 +403,46 @@ func TestUnfilledGapsAreReportedWithTheTimeframesHoldingThem(t *testing.T) {
 	}
 }
 
+// TestTheStatusSaysWhereTheDataEnds.
+//
+// # Why a client needs this and not only an operator
+//
+// A chart opening on wall-clock now is blank whenever the collector is behind
+// — and blank looks exactly like a market that stopped trading. Nothing else
+// on this page answers "where does the series end", so the app has no way to
+// anchor on the newest bar rather than on the current time.
+func TestTheStatusSaysWhereTheDataEnds(t *testing.T) {
+	latest := observedAt.Add(-8 * time.Hour)
+	age := int64(8 * 60 * 60)
+
+	current := healthy()
+	current.Timeframes = []models.TimeframeStatus{
+		{Timeframe: constants.Timeframe4h, LatestOpenTime: &latest, LatestAgeSeconds: &age},
+		{Timeframe: constants.Timeframe1m},
+	}
+
+	status := statusOf(t, &fakeMarket{status: current}, &fakeActivity{}, Config{})
+
+	if len(status.Ingestion.Timeframes) != 2 {
+		t.Fatalf("breakdown covers %d timeframes, want 2", len(status.Ingestion.Timeframes))
+	}
+
+	four := status.Ingestion.Timeframes[0]
+	if four.LatestOpenTime == nil || !four.LatestOpenTime.Equal(latest) {
+		t.Errorf("4h latest open time = %v, want %s", four.LatestOpenTime, latest)
+	}
+	if four.LatestAge == nil || *four.LatestAge != 8*time.Hour {
+		t.Errorf("4h latest age = %v, want 8h", four.LatestAge)
+	}
+
+	// An empty series says so with a nil rather than the zero instant, which
+	// would render as 0001-01-01 and read as a very old candle.
+	if status.Ingestion.Timeframes[1].LatestOpenTime != nil {
+		t.Errorf("an empty series reported %v, want nil",
+			status.Ingestion.Timeframes[1].LatestOpenTime)
+	}
+}
+
 // TestAWholeSeriesRaisesNothing, so the concerns list stays empty on a healthy
 // deployment and means something when it is not.
 func TestAWholeSeriesRaisesNothing(t *testing.T) {

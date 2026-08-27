@@ -1,3 +1,4 @@
+import { useMemo } from 'react';
 import { ScrollView, View } from 'react-native';
 
 import { useApi } from '../../api/provider';
@@ -8,6 +9,12 @@ import { Card, CardTitle, Row } from '../../components/Card';
 import { Text } from '../../components/Text';
 import { Failure } from '../../components/Unreachable';
 import type { Outcome, Signal, SignalReason } from '../../api/types';
+
+/** A day before the signal, so a boundary is never why an outcome looks
+ * missing, and a year after — longer than any outcome can stay open, since
+ * SIGNAL_EXPIRY_BARS closes them long before that. */
+const DAY_MS = 24 * 60 * 60 * 1000;
+const YEAR_MS = 365 * DAY_MS;
 
 /**
  * The detail view, and the reason it exists.
@@ -25,7 +32,20 @@ import type { Outcome, Signal, SignalReason } from '../../api/types';
 export function SignalDetailScreen({ id }: { id: string }) {
   const { baseUrl } = useApi();
   const { data: signal, error, isLoading } = useSignal(id);
-  const { data: outcomes } = useOutcomes({ limit: 200 });
+
+  // Windowed around this signal rather than left to the API's one-year
+  // default, which would show a signal older than that as never followed.
+  //
+  // Memoised because the window is part of the query key: a Date built in the
+  // render body is a new key on every render, which is an infinite refetch
+  // rather than a stale window.
+  const window = useMemo(() => {
+    if (!signal) return undefined;
+    const at = Date.parse(signal.signal_time);
+    return { limit: 200, from: new Date(at - DAY_MS), to: new Date(at + YEAR_MS) };
+  }, [signal]);
+
+  const { data: outcomes } = useOutcomes(window ?? {}, window !== undefined);
 
   const outcome = outcomes?.outcomes.find((o) => o.signal_id === id);
 

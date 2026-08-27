@@ -38,10 +38,26 @@ function aSignal(overrides: Partial<Signal> = {}): Signal {
 }
 
 function renderWith(signal: Signal, outcome?: Outcome) {
+  const urls: string[] = [];
+
   const fetchImpl = (async (input: RequestInfo | URL) => {
     const url = String(input);
+    urls.push(url);
+
+    // The fake honours the window, so a screen asking over the wrong one gets
+    // nothing back — which is what the real API would do.
+    const inWindow = (() => {
+      if (!outcome || !url.includes('/outcomes')) return false;
+      const params = new URL(url).searchParams;
+      const from = params.get('from');
+      const to = params.get('to');
+      if (!from || !to) return false;
+      const at = Date.parse(outcome.signal_time);
+      return Date.parse(from) <= at && Date.parse(to) >= at;
+    })();
+
     const body = url.includes('/outcomes')
-      ? { outcomes: outcome ? [outcome] : [], count: 0, total: 0, limit: 200, offset: 0 }
+      ? { outcomes: inWindow ? [outcome] : [], count: 0, total: 0, limit: 200, offset: 0 }
       : signal;
     return new Response(JSON.stringify(body), {
       status: 200,
@@ -52,13 +68,16 @@ function renderWith(signal: Signal, outcome?: Outcome) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   clients.push(queryClient);
 
-  return render(
-    <QueryClientProvider client={queryClient}>
-      <ApiProvider client={new ApiClient({ baseUrl: BASE, fetchImpl })}>
-        <SignalDetailScreen id={ID} />
-      </ApiProvider>
-    </QueryClientProvider>,
-  );
+  return {
+    ...render(
+      <QueryClientProvider client={queryClient}>
+        <ApiProvider client={new ApiClient({ baseUrl: BASE, fetchImpl })}>
+          <SignalDetailScreen id={ID} />
+        </ApiProvider>
+      </QueryClientProvider>,
+    ),
+    urls,
+  };
 }
 
 /**
@@ -154,6 +173,45 @@ describe('the prices', () => {
 
     await waitFor(() => expect(screen.getByText('64,000')).toBeTruthy());
     expect(screen.getAllByText('—').length).toBeGreaterThan(0);
+  });
+});
+
+/**
+ * TestTheOutcomeWindowCoversTheSignal.
+ *
+ * /outcomes is windowed and defaults to the last year; a signal older than
+ * that would show as never followed, on the screen whose whole job is saying
+ * what became of it. The fake above honours the window for that reason — one
+ * that ignored it would let this pass however wrong the request was.
+ */
+describe('the outcome window', () => {
+  it('is derived from the signal rather than left to the default', async () => {
+    const old = aSignal({ signal_time: '2024-03-06T00:00:00Z' });
+    const { urls } = renderWith(old, {
+      signal_id: ID,
+      signal_time: '2024-03-06T00:00:00Z',
+      direction: 'long',
+      timeframe: '4h',
+      strategy_name: 'ema_crossover',
+      strategy_version: 'v1',
+      status: 'stop',
+      bars_held: 2,
+      measurable: true,
+      resolved_at: '2024-03-06T08:00:00Z',
+      signal_price: '30800',
+      entry_price: '30200.01',
+      resolved_price: '29899.99',
+      mae: '625.01',
+      mfe: '24.99',
+      net_return_pct: '-1.0934',
+    });
+
+    await waitFor(() => expect(screen.getByText('What happened')).toBeTruthy());
+    expect(screen.getByText('-1.0934%')).toBeTruthy();
+
+    const call = urls.findLast((url) => url.includes('/outcomes'));
+    const from = new URL(call!).searchParams.get('from');
+    expect(Date.parse(from!)).toBeLessThan(Date.parse('2024-03-06T00:00:00Z'));
   });
 });
 

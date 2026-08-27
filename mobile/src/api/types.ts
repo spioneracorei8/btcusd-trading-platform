@@ -316,7 +316,15 @@ export type Status = {
 
   ingestion: {
     unfilled_gaps: number;
-    timeframes: { timeframe: string; unfilled_gaps: number }[];
+    timeframes: {
+      timeframe: string;
+      unfilled_gaps: number;
+      /** Where this series ends. A chart opening on wall-clock now is blank
+       * whenever the collector is behind, and blank looks identical to a
+       * market that stopped trading. */
+      latest_open_time: string | null;
+      latest_age_seconds: number | null;
+    }[];
   };
 
   outcomes: {

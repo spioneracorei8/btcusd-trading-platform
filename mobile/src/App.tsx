@@ -4,6 +4,7 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import { ApiProvider } from './api/provider';
 import { Navigation } from './navigation';
+import { configureForegroundBehaviour } from './notifications/useNotifications';
 import type { ApiClient } from './api/client';
 
 /**
@@ -13,6 +14,11 @@ import type { ApiClient } from './api/client';
  * actually see is that the VPN is off — which no number of retries fixes, and
  * which every retry delays telling the user about.
  */
+// A signal arriving while somebody is looking at the chart is exactly as
+// interesting as one arriving while the phone is locked. Set once, at module
+// scope, because the handler is global to the process.
+configureForegroundBehaviour();
+
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
