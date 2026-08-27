@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Pressable, ScrollView, View, useWindowDimensions } from 'react-native';
 
 import { useApi } from '../../api/provider';
@@ -9,7 +9,8 @@ import { Card, CardTitle } from '../../components/Card';
 import { Text } from '../../components/Text';
 import { Failure } from '../../components/Unreachable';
 import { Candles, markersFor } from './Candles';
-import { VISIBLE_BARS, windowFor } from './window';
+import { MINUTES, VISIBLE_BARS, covers, windowFor } from './window';
+import type { Window } from './window';
 import type { Timeframe } from '../../api/types';
 
 const TIMEFRAMES: Timeframe[] = ['1m', '5m', '15m', '1h', '4h', '1d'];
@@ -26,8 +27,9 @@ const TIMEFRAMES: Timeframe[] = ['1m', '5m', '15m', '1h', '4h', '1d'];
  * # Panning
  *
  * The window is one screen wider than the view in each direction, and moving
- * inside that costs nothing. Stepping past the edge fetches the next window —
- * see window.ts, where the arithmetic lives and is tested.
+ * inside that costs nothing: the fetched window is held in state, so a step
+ * that stays inside it never reaches the query key. Stepping past the edge is
+ * the only thing that fetches — see window.ts, where the arithmetic lives.
  */
 export function ChartScreen() {
   const { baseUrl } = useApi();
@@ -51,16 +53,51 @@ export function ChartScreen() {
   const end = pannedTo ?? seriesEnd ?? new Date();
   const setEnd = setPannedTo;
 
+  // Wall-clock now is the fallback, not the opening position. Fetching
+  // against it before the status reply lands asks for a window nowhere near
+  // the data and throws the answer away, so nothing is asked for until the
+  // anchor has settled one way or the other.
+  const anchored = status.isSuccess || status.isError;
+
   // The instant rather than the Date, so the memo compares by value: a new
   // Date with the same time is a different object and would rebuild the
   // window — and the window is part of the query key.
   const endAt = end.getTime();
-  const window = useMemo(() => windowFor(timeframe, new Date(endAt)), [timeframe, endAt]);
-  const candles = useCandles({ timeframe, ...window });
+  const visibleFrom = endAt - VISIBLE_BARS * MINUTES[timeframe] * 60_000;
+
+  // The window that was fetched, which is not the window being looked at.
+  // Holding it in state is what makes a pan free: `endAt` moves on every
+  // step, and if it fed the query key directly every step would be a round
+  // trip and the overscan would buy nothing.
+  const [loaded, setLoaded] = useState<{ timeframe: Timeframe; window: Window } | null>(null);
+
+  useEffect(() => {
+    if (!anchored) return;
+    const stale =
+      loaded === null ||
+      loaded.timeframe !== timeframe ||
+      !covers(loaded.window, new Date(visibleFrom), new Date(endAt));
+    if (stale) setLoaded({ timeframe, window: windowFor(timeframe, new Date(endAt)) });
+  }, [anchored, loaded, timeframe, endAt, visibleFrom]);
+
+  // A window left over from the previous timeframe would draw 4h bars on a
+  // 1m axis for one frame, so the query waits rather than showing them.
+  const ready = loaded !== null && loaded.timeframe === timeframe;
+  const request = ready ? loaded.window : undefined;
+  const candles = useCandles(
+    { timeframe, from: request?.from, to: request?.to, limit: request?.limit },
+    ready,
+  );
   const signals = useSignals({ limit: 50 });
   const outcomes = useOutcomes({ limit: 200 });
 
-  const visible = (candles.data?.candles ?? []).slice(-VISIBLE_BARS);
+  // Drawn from `end`, not from the tail of what arrived. The window runs a
+  // screen past the right edge on purpose, so the tail is the overscan —
+  // slicing it would draw the same bars wherever the chart was panned to.
+  const visible = useMemo(() => {
+    const all = candles.data?.candles ?? [];
+    return all.filter((candle) => Date.parse(candle.open_time) <= endAt).slice(-VISIBLE_BARS);
+  }, [candles.data, endAt]);
   const markers = markersFor(signals.data?.signals ?? [], outcomes.data?.outcomes ?? []);
   const forming = visible.filter((candle) => !candle.is_closed).length;
 
@@ -109,7 +146,7 @@ export function ChartScreen() {
         ) : (
           <Empty
             timeframe={timeframe}
-            loading={candles.isLoading || status.isLoading}
+            loading={candles.isFetching || status.isLoading}
             seriesEnd={seriesEnd}
             onJump={() => setEnd(null)}
           />
@@ -223,17 +260,14 @@ function Empty({
   );
 }
 
-/** Moves the right edge by half a screen, which is what a pan step is. */
+/**
+ * Moves the right edge by half a screen, which is what a pan step is.
+ *
+ * Half rather than a whole one so that something stays on screen across the
+ * step, and so that two steps in a row still land inside the overscan.
+ */
 function step(timeframe: Timeframe, from: Date, direction: -1 | 1): Date {
-  const minutes: Record<Timeframe, number> = {
-    '1m': 1,
-    '5m': 5,
-    '15m': 15,
-    '1h': 60,
-    '4h': 240,
-    '1d': 1440,
-  };
-  return new Date(from.getTime() + direction * (VISIBLE_BARS / 2) * minutes[timeframe] * 60_000);
+  return new Date(from.getTime() + direction * (VISIBLE_BARS / 2) * MINUTES[timeframe] * 60_000);
 }
 
 function Step({ label, onPress }: { label: string; onPress: () => void }) {

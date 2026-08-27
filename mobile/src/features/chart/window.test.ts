@@ -4,8 +4,6 @@ import {
   OVERSCAN_BARS,
   VISIBLE_BARS,
   covers,
-  tooWide,
-  tooWideMessage,
   windowFor,
 } from './window';
 
@@ -25,7 +23,22 @@ describe('the loaded window', () => {
     const spanBars = (loaded.to.getTime() - loaded.from.getTime()) / (60 * 60_000);
 
     expect(spanBars).toBe(VISIBLE_BARS + 2 * OVERSCAN_BARS);
-    expect(loaded.limit).toBe(VISIBLE_BARS + 2 * OVERSCAN_BARS);
+  });
+
+  /**
+   * The off-by-one that produced a false warning.
+   *
+   * A range with both ends inclusive holds one more bar than it spans. With
+   * the limit set to the span, every window with history on both sides came
+   * back one bar short and flagged `truncated` — and the chart dutifully
+   * said the window had held more bars than were returned. It had not; the
+   * request had asked for one too few.
+   */
+  it('asks for one more bar than it spans, because both ends are inclusive', () => {
+    const loaded = windowFor('1h', END);
+    const spanBars = (loaded.to.getTime() - loaded.from.getTime()) / (60 * 60_000);
+
+    expect(loaded.limit).toBe(spanBars + 1);
   });
 
   it('covers a drag that stays inside the overscan', () => {
@@ -62,44 +75,5 @@ describe('the loaded window', () => {
   it('never asks for more than the API returns', () => {
     const loaded = windowFor('1m', END, MAX_BARS * 2);
     expect(loaded.limit).toBeLessThanOrEqual(MAX_BARS);
-  });
-});
-
-/**
- * TestThreeYearsOfMinuteCandlesIsRefusedClientSide.
- *
- * The API caps the response, so the request would come back truncated and the
- * chart would draw the wrong range without either end saying so. On a chart
- * this is a pinch rather than a typo, so the refusal has to be something the
- * chart handles rather than an error somebody sees once.
- */
-describe('a range wider than the API can answer', () => {
-  it('is refused for 1m over three years', () => {
-    const from = new Date('2023-08-27T00:00:00Z');
-    expect(tooWide('1m', from, END)).toBe(true);
-  });
-
-  it('is allowed for 1d over the same three years', () => {
-    // Roughly 1,100 bars: well inside the cap. The refusal is about bars, not
-    // about wall-clock span.
-    const from = new Date('2023-08-27T00:00:00Z');
-    expect(tooWide('1d', from, END)).toBe(false);
-  });
-
-  it('is allowed at exactly the cap and refused one bar past it', () => {
-    const atCap = new Date(END.getTime() - MAX_BARS * 60_000);
-    const past = new Date(atCap.getTime() - 60_000);
-
-    expect(tooWide('1m', atCap, END)).toBe(false);
-    expect(tooWide('1m', past, END)).toBe(true);
-  });
-
-  it('says how many bars were asked for and what to do', () => {
-    const from = new Date('2023-08-27T00:00:00Z');
-    const message = tooWideMessage('1m', from, END);
-
-    expect(message).toMatch(/bars of 1m/);
-    expect(message).toMatch(/5,000/);
-    expect(message).toMatch(/zoom in|longer timeframe/i);
   });
 });

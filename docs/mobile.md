@@ -180,9 +180,12 @@ opacity**, and the chart says so in words. The websocket is the one place in
 this system permitted to send an unclosed bar, and a flag nothing renders is a
 flag nobody sees.
 
-Panning holds a window one screen wider than the view in each direction, so an
-ordinary drag costs no request. Asking for more bars than the API returns is
-refused before the request is sent.
+Panning holds a window one screen wider than the view in each direction, and
+the window that was fetched is held still while the view moves inside it. A
+step is half a screen, so two steps in a row cost nothing and the third
+extends the window. Asking for more bars than the API returns is refused
+before the request is sent, in the client rather than the chart, so there is
+one implementation of that rule rather than two.
 
 ### Performance — is it working
 

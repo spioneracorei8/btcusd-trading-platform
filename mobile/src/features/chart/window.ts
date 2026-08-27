@@ -36,12 +36,11 @@ export const VISIBLE_BARS = 60;
 export const OVERSCAN_BARS = VISIBLE_BARS;
 
 /**
- * The API's cap, mirrored here.
+ * The API's cap, mirrored here so `windowFor` cannot exceed it.
  *
- * The server refuses more than this and says so politely. The app refuses
- * first, because on a chart an oversized range is a gesture rather than a
- * typo — it happens while somebody is pinching — and a round trip that is
- * known to fail is worse than an axis that stops zooming out.
+ * The refusal itself lives in `ApiClient.candles`, which is the one place
+ * every request passes through. Repeating it here would be a second
+ * implementation of the same rule, and the two would drift.
  */
 export const MAX_BARS = 5000;
 
@@ -57,17 +56,23 @@ export type Window = { from: Date; to: Date; limit: number };
  */
 export function windowFor(timeframe: Timeframe, end: Date, barsVisible = VISIBLE_BARS): Window {
   const bar = MINUTES[timeframe] * 60_000;
-  const total = Math.min(barsVisible + 2 * OVERSCAN_BARS, MAX_BARS);
+
+  // How far the window reaches either side of `end`, in bars. One short of
+  // the cap, because the bar at `end` itself has to fit under it too.
+  const span = Math.min(barsVisible + 2 * OVERSCAN_BARS, MAX_BARS - 1);
 
   // Whatever the cap left, spent on the past first: dragging back is the
   // gesture, and bars in the future do not exist yet.
-  const ahead = Math.min(OVERSCAN_BARS, Math.floor(total / 3));
-  const behind = total - ahead;
+  const ahead = Math.min(OVERSCAN_BARS, Math.floor(span / 3));
+  const behind = span - ahead;
 
   return {
     from: new Date(end.getTime() - behind * bar),
     to: new Date(end.getTime() + ahead * bar),
-    limit: total,
+    // Both ends of the range are inclusive, so a window spanning `span` bars
+    // holds one more than that. Asking for `span` comes back truncated by
+    // exactly one, and the chart then reports an overflow that did not happen.
+    limit: span + 1,
   };
 }
 
@@ -80,29 +85,4 @@ export function windowFor(timeframe: Timeframe, end: Date, barsVisible = VISIBLE
 export function covers(loaded: Window | undefined, visibleFrom: Date, visibleTo: Date): boolean {
   if (!loaded) return false;
   return loaded.from.getTime() <= visibleFrom.getTime() && loaded.to.getTime() >= visibleTo.getTime();
-}
-
-/**
- * The largest range this timeframe may be asked for, in whole days.
- *
- * Three years of 1m candles is 1.5 million bars. The chart must refuse that
- * itself: the API caps the response, so the request would come back truncated
- * and the chart would silently draw the wrong range.
- */
-export function maxSpanMs(timeframe: Timeframe): number {
-  return MAX_BARS * MINUTES[timeframe] * 60_000;
-}
-
-/** True when the range asked for is more than this timeframe can answer. */
-export function tooWide(timeframe: Timeframe, from: Date, to: Date): boolean {
-  return to.getTime() - from.getTime() > maxSpanMs(timeframe);
-}
-
-/** What to tell somebody who asked for more than the API returns. */
-export function tooWideMessage(timeframe: Timeframe, from: Date, to: Date): string {
-  const bars = Math.round((to.getTime() - from.getTime()) / (MINUTES[timeframe] * 60_000));
-  return (
-    `${bars.toLocaleString('en-GB')} bars of ${timeframe} is more than the ` +
-    `${MAX_BARS.toLocaleString('en-GB')} this API returns. Zoom in, or choose a longer timeframe.`
-  );
 }
