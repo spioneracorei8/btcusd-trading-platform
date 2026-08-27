@@ -3,16 +3,25 @@ import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 
 import { colors, layout, type } from './theme';
+import { ChartScreen } from './features/chart/ChartScreen';
 import { DashboardScreen } from './features/dashboard/DashboardScreen';
+import { PerformanceScreen } from './features/performance/PerformanceScreen';
+import { SignalDetailScreen } from './features/signals/SignalDetailScreen';
+import { SignalsScreen } from './features/signals/SignalsScreen';
 import { StatusScreen } from './features/status/StatusScreen';
 
 /**
- * Five tabs, and no more. Each answers one question.
+ * Five tabs, and no more. Each answers one question:
  *
- * The signals tab carries a stack because a signal has a detail view; the
- * others are single screens. There is no drawer, no nested navigator and no
- * modal — a five-screen instrument does not need a navigation model somebody
- * has to learn.
+ *   Now          what is happening right now
+ *   Signals      what has it produced
+ *   Chart        what did the market do around it
+ *   Performance  is it working
+ *   Status       is anything broken
+ *
+ * The signals tab carries a stack, because a signal has a detail view and that
+ * view is the point of the tab. Nothing else is nested: a five-screen
+ * instrument does not need a navigation model somebody has to learn.
  */
 
 export type SignalsStackParams = {
@@ -21,10 +30,8 @@ export type SignalsStackParams = {
 };
 
 const Tabs = createBottomTabNavigator();
-const SignalsStack = createNativeStackNavigator<SignalsStackParams>();
+const Stack = createNativeStackNavigator<SignalsStackParams>();
 
-/** Navigation's own theme, so the frame matches the screens rather than
- * defaulting to a white background behind them. */
 const navigationTheme = {
   ...DefaultTheme,
   dark: true,
@@ -39,11 +46,29 @@ const navigationTheme = {
   },
 };
 
-export function Navigation({ children }: { children?: React.ReactNode }) {
+const headerOptions = {
+  headerStyle: { backgroundColor: colors.bg.base },
+  headerTitleStyle: {
+    color: colors.text.primary,
+    fontSize: type.size.body,
+    fontWeight: type.weight.medium,
+  },
+  headerTintColor: colors.text.secondary,
+  headerShadowVisible: false,
+} as const;
+
+function SignalsTab() {
   return (
-    <NavigationContainer theme={navigationTheme}>
-      {children ?? <AppTabs />}
-    </NavigationContainer>
+    <Stack.Navigator screenOptions={{ ...headerOptions, contentStyle: { backgroundColor: colors.bg.base } }}>
+      <Stack.Screen name="SignalsList" options={{ title: 'Signals' }}>
+        {({ navigation }) => (
+          <SignalsScreen onOpen={(id) => navigation.navigate('SignalDetail', { id })} />
+        )}
+      </Stack.Screen>
+      <Stack.Screen name="SignalDetail" options={{ title: 'Signal' }}>
+        {({ route }) => <SignalDetailScreen id={route.params.id} />}
+      </Stack.Screen>
+    </Stack.Navigator>
   );
 }
 
@@ -51,20 +76,14 @@ export function AppTabs() {
   return (
     <Tabs.Navigator
       screenOptions={{
-        headerStyle: { backgroundColor: colors.bg.base },
-        headerTitleStyle: {
-          color: colors.text.primary,
-          fontSize: type.size.body,
-          fontWeight: type.weight.medium,
-        },
-        headerShadowVisible: false,
+        ...headerOptions,
         tabBarStyle: {
           backgroundColor: colors.bg.base,
           borderTopColor: colors.border.subtle,
           borderTopWidth: layout.hairline,
         },
-        // Gold as an active indicator: a few points of text, which is what
-        // the accent budget is for.
+        // Gold as an active indicator: a few points of text, which is the
+        // whole accent budget.
         tabBarActiveTintColor: colors.gold.base,
         tabBarInactiveTintColor: colors.text.tertiary,
         tabBarLabelStyle: { fontSize: type.size.caption },
@@ -74,9 +93,18 @@ export function AppTabs() {
       }}
     >
       <Tabs.Screen name="Now" component={DashboardScreen} />
+      <Tabs.Screen name="Signals" component={SignalsTab} options={{ headerShown: false }} />
+      <Tabs.Screen name="Chart" component={ChartScreen} />
+      <Tabs.Screen name="Performance" component={PerformanceScreen} />
       <Tabs.Screen name="Status" component={StatusScreen} />
     </Tabs.Navigator>
   );
 }
 
-export { SignalsStack };
+export function Navigation({ children }: { children?: React.ReactNode }) {
+  return (
+    <NavigationContainer theme={navigationTheme}>
+      {children ?? <AppTabs />}
+    </NavigationContainer>
+  );
+}
