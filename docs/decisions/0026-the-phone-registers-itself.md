@@ -3,6 +3,7 @@
 Status: accepted
 Date: 2026-08-27
 Phase: 09 (part C1)
+Amended: 2026-08-28, phase 09b — the transport changed, the decision did not
 
 ## Context
 
@@ -80,6 +81,39 @@ from silently ending delivery. `registered_at` survives a refresh of the same
 token and resets when the token changes, so the row can say both "this phone
 has been the registered one since March" and "the app checked in an hour ago".
 
+## What phase 09b changed
+
+The transport. FCM became Web Push (ADR 0028), because the device is an iPhone
+running a PWA and cannot use FCM at all.
+
+Everything this ADR decided survives that, and the change is a fair test of it.
+What is registered is no longer one opaque token but three values — the
+endpoint the push service listens on, and the two keys the payload is encrypted
+against under RFC 8291. The database column became three columns, the request
+body became the browser's own `PushSubscription.toJSON()` shape, and the
+argument for why it is registered rather than configured did not move an inch:
+
+- **Still not a value anyone can set.** The browser issues it to the installed
+  app. Nobody knows it before the app is on a home screen.
+- **Still replaced without notice.** The push service expires subscriptions, a
+  reinstall produces a new one, and clearing site data destroys the old one
+  silently. A `.env` holding the previous one is stale from that moment, and
+  every send fails `410 Gone` while the file still looks right.
+- **Still worse to refuse to start.** A deployment that demanded a subscription
+  could never reach the state where one exists.
+
+One thing got weaker and is worth naming. FCM had a token-refresh event the app
+could listen for; the web's equivalent, `pushsubscriptionchange`, is in the
+specification and Safari does not fire it. So there is no event — only the
+app's own check on launch. That makes "the app re-registers unconditionally,
+and the server treats a repeat as a success" load-bearing rather than merely
+tidy: it is now the *whole* mechanism, not a backstop behind an event.
+
+The practical consequence is that a phone whose subscription is replaced while
+the app is closed will miss alerts until it is next opened. For a system
+producing roughly one signal every ten days that is acceptable; it is also not
+fixable from this side.
+
 ## Consequences
 
 - One `.env` variable fewer, and one that could be silently wrong.
@@ -119,6 +153,8 @@ phone. If it is ever wanted, the constraint is where the work starts.
 ## References
 
 - ADR 0024 — why there is no authentication in front of this endpoint
+- ADR 0028 — the PWA, which is why the transport changed
 - `server/migrations/00014_create_devices.sql` — the table and the constraint
+- `server/migrations/00015_devices_web_push.sql` — what a registration became
 - `docs/api.md` — the endpoint
 - `docs/prompts/phase-07.md` — the Definition of Done item this unblocks

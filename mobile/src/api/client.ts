@@ -170,11 +170,18 @@ export class ApiClient {
    * Registers this phone for alerts.
    *
    * The only request in this app that changes anything on the server, and it
-   * changes one row that says where notifications go. See ADR 0026 for why
-   * the token comes from here rather than from configuration.
+   * changes one row that says where notifications go. The body is the shape
+   * the browser's own PushSubscription.toJSON() produces, so what is posted is
+   * what was handed over rather than a reassembly of it. See ADR 0026 for why
+   * it comes from here rather than from configuration.
    */
   registerDevice(
-    body: { token: string; platform?: string; label?: string },
+    body: {
+      endpoint: string;
+      keys: { p256dh: string; auth: string };
+      platform?: string;
+      label?: string;
+    },
     signal?: AbortSignal,
   ): Promise<DeviceResponse> {
     return this.send('/device', 'POST', body, signal);

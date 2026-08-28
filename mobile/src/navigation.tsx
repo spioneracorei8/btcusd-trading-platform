@@ -180,7 +180,7 @@ export function AppTabs({ onOpenSignal }: { onOpenSignal?: (id: string) => void 
               <AlertsCard
                 state={alerts.state}
                 device={alerts.device.data}
-                token={alerts.token}
+                subscription={alerts.subscription}
                 error={alerts.error}
                 onRequest={() => void alerts.request()}
                 onRegister={() => void alerts.register()}

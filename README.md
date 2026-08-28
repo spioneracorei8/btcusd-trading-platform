@@ -19,12 +19,20 @@ indicator engine, the backtest engine, the multi-timeframe trend filter, the
 strategy engine, live evaluation with outcome tracking and delivery, the API,
 and the phone app that reads it.
 
-Four things phase 09 asks for are **not** done, all of them needing hardware
-this development environment does not have: no APK was built, nothing ran on a
-device, push was not verified end to end, and nothing was tested over an actual
-tailnet. `docs/mobile.md` says so in those words and carries the procedure for
-a phone to run. The end-to-end push check has been phase 07's one open item
-since that phase closed, and it is still open.
+Phase 09b then changed how the app is delivered: it is a **PWA**, installed to
+an iPhone home screen and served over HTTPS from the tailnet, with Web Push
+instead of FCM. Native iOS needs a Mac and $99 a year, which is not a good
+trade for a system that has not yet found a strategy worth being alerted about
+— [ADR 0028](docs/decisions/0028-the-app-is-a-pwa.md) records what that costs
+and when to revisit it.
+
+What is **not** done needs hardware or network this development environment
+does not have: nothing ran on a phone, nothing was tested over an actual
+tailnet or over real HTTPS, and **no push was ever sent** — subscribing needs a
+real push service. Everything either side of that hop is built and tested.
+`docs/mobile.md` says so in those words and carries the procedure for a phone
+to run. The end-to-end push check has been phase 07's one open item since that
+phase closed, and it is still open.
 
 The API has **no authentication**. It binds to loopback and the tailnet and
 nothing else, and that is the whole access control —
@@ -124,7 +132,7 @@ There is no execute button, no broker link and no position-size calculator,
 and a test asserts that no order-related string appears anywhere in the app
 source — the same check `architecture_test.go` runs on the server.
 
-The phone registers itself rather than having its token pasted into the
+The phone registers itself rather than having its subscription pasted into the
 deployment's environment ([ADR 0026](docs/decisions/0026-the-phone-registers-itself.md)),
 `/api/v1/status` reports how many devices are registered, and in notify mode
 with none it says plainly that signals will be recorded but not delivered.
@@ -186,6 +194,7 @@ server/
   collector/       Binance ingestion worker (phase 02)
   backtest/        backtest CLI (phase 04)
   reconcile/       live-against-backtest CLI (phase 07)
+  vapidkeys/       prints a VAPID key pair for notify mode (phase 09b)
   config/          environment-only configuration and validation
   constants/       enums, fixed values, sentinel errors
   helper/          small pure utilities
@@ -206,7 +215,7 @@ server/
     backtest/      backtest.go, outage.go, dataset.go + usecase/, report/ (phase 04)
     trend/         trend.go, config.go + usecase/ (phase 05)
     outcome/       what became of each signal + reconciliation (phase 07)
-    notify/        FCM delivery queue (phase 07)
+    notify/        Web Push delivery queue (phase 07, transport replaced in 09b)
     pipeline/      GET /api/v1/status: is the signal pipeline alive (phase 08)
     stream/        GET /api/v1/stream: the websocket (phase 08)
   migrations/      goose migrations

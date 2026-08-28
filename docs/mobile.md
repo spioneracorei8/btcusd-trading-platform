@@ -279,95 +279,144 @@ screenshot into a message. Severity is labelled in words as well as coloured.
 
 ## Push notifications
 
+Web Push, not FCM. The device is an iPhone and the app is a PWA, which cannot
+use FCM at all — ADR 0028 records the trade and what would make it worth
+revisiting.
+
 ### Three switches
 
 An alert reaches the phone only when all three are on, and the app reports all
 three because an app that checked only the one it controls would say "alerts
 are on" while the server sent nothing:
 
-1. **Android permits notifications** for this app.
-2. **The server knows this phone's token** — `POST /api/v1/device`.
+1. **iOS permits notifications** for this app.
+2. **The server knows this phone's subscription** — `POST /api/v1/device`.
 3. **The deployment is in notify mode** — `SIGNAL_MODE=notify`.
 
-### Registration
+There is a fourth, and on iOS it is the one that catches people: **the app must
+be installed to the home screen.** In a Safari tab there is no `PushManager` at
+all — permission cannot even be requested, and asking resolves to denied with
+no prompt shown. The app says so rather than looking broken.
 
-The app posts its FCM token on every launch and on every refresh event,
-unconditionally. The server treats a repeat as a success (ADR 0026) precisely
-so it can be.
+### What a registration is
 
-This is not belt-and-braces. **FCM rotates tokens whenever it likes** — on
-reinstall, on restore to a new device, sometimes for no reason the app is told
-— and a deployment holding the previous one fails every send as `UNREGISTERED`,
-which the delivery worker correctly treats as permanent and gives up on. Alerts
-then stop silently, and the symptom looks like a strategy that went quiet.
+Three values, not one token: the endpoint the push service listens on, and the
+two keys the payload is encrypted against (RFC 8291). The payload is sealed
+before it leaves the VPS, so the push service forwards ciphertext it cannot
+read — which is what makes it acceptable for a signal's entry, stop and target
+to travel through Apple's infrastructure at all.
 
-Signals recorded while no device is registered **wait rather than failing**.
-They deliver as soon as a phone registers.
+The app posts what the browser handed it, unchanged. Unpacking and reassembling
+it is a place for a key to go missing, and a missing key fails inside the
+server's encryption with a message about elliptic curves.
+
+### The keys, and generating them
+
+Web Push identifies the application server by a VAPID key pair. Generate one,
+once:
+
+```console
+$ make vapid-keys >> .env
+```
+
+Then set `VAPID_SUBJECT` to a real address. The **public** half is served to
+the app on `GET /api/v1/device` — it is not a secret, and serving it rather
+than building it in means rotating the pair does not need a rebuild. The
+**private** half is the one credential here that can push to the phone: never
+logged, never served, never in an image layer.
+
+The server checks at start-up that the two are actually a pair. Two keys that
+are each well-formed but not a pair decode, sign, and produce a well-formed
+request — and the push service answers 403, which reads as a permissions
+problem days after the deploy that caused it.
+
+Rotating the pair invalidates every existing subscription. The phone
+re-subscribes on its next launch, so the cost is one missed signal rather than
+a manual step — but there is no reason to rotate on a schedule.
+
+### Re-subscribing is the whole mechanism
+
+The app subscribes on every launch and posts the result, unconditionally. The
+server treats a repeat as a success (ADR 0026) precisely so it can be.
+
+This is not belt-and-braces. **A push subscription is not permanent**: the push
+service expires them, a reinstall produces a new one, and clearing site data
+destroys the old one without telling anybody. A deployment holding the previous
+one fails every send with `410 Gone`, which the delivery worker correctly
+treats as permanent and gives up on. Alerts then stop, silently, and the
+symptom looks like a strategy that went quiet — which is what this system looks
+like on a normal day.
+
+FCM had a token-refresh event to listen for. The web does not:
+`pushsubscriptionchange` is in the specification and Safari does not fire it.
+So a launch is the only reliable moment to check, and checking on every launch
+is what replaces the listener.
 
 ### The permission prompt
 
-The app explains before the OS asks, because the OS prompt cannot be re-asked
-once it is refused:
+Asked once, behind a button, after an explanation. Two reasons, and either
+alone would be enough:
 
-> **Alerts for signals only**
-> The strategy records a signal roughly once every ten days on 4h. An alert
-> carries the direction, the reference price, the stop and the target — the
-> same numbers the app shows. Nothing here places an order, and no alert ever
-> asks you to.
-
-Refusing is handled: everything else works, and the status screen offers a
-route into Android's settings.
+- **iOS silently rejects a prompt that does not follow a user gesture.** The
+  rejection is indistinguishable from a refusal, after which the prompt can
+  never be shown again.
+- The prompt cannot be re-asked once refused, so the one chance to say what
+  alerts are for comes before it. The primer is specific about the rate:
+  somebody expecting a live feed switches them off within a week; somebody told
+  to expect one message every ten days is not surprised by silence.
 
 ### Receiving
 
-Foreground, background and quit are all handled, and a notification arriving
-while the app is open is **shown, not swallowed** — a signal arriving while
-somebody is looking at the chart is exactly as interesting as one arriving on a
-locked phone.
+The service worker shows every push, including one whose payload will not
+decode. That is not politeness: the subscription is made with
+`userVisibleOnly`, which is a promise — a push that shows nothing has broken
+it, and browsers answer with their own "this site was updated in the
+background" notice or, after enough of them, by revoking the subscription.
+Revocation looks exactly like every other "subscription gone" failure and is
+fixed only by reinstalling.
 
-Tapping an alert opens that signal's detail view, from wherever the app was.
+Tapping an alert opens that signal. With the app running it is a message to the
+open window, because focusing does not navigate; with nothing running it is a
+cold load of `/signals/{id}`, which is why the app has URLs at all.
 
-The payload's `signal_price` is a **reference price, not the entry.** The
-server's own body text says `ref`. The UI does not relabel it.
-
----
+**The price in an alert is a reference price, not an entry.** Phase 07 made
+that distinction deliberately — a signal is decided on a bar's close and no
+position could have opened there — and the alert says `ref`, not `entry`.
 
 ## Closing phase 07's open item
 
 Phase 07's Definition of Done has carried one unticked line since it closed:
 `SIGNAL_MODE=notify` delivers to a real device. **It is still open.** Everything
 up to the last hop is built and tested; what has not happened is a signal
-arriving on a physical phone, which needs hardware the development environment
-does not have.
+arriving on a physical phone.
 
-Here is the procedure. It needs an Android phone, a real Firebase project, and
-about twenty minutes.
+Here is the procedure. It needs the iPhone, the VPS, and about twenty minutes.
 
 ### Before you start
 
-1. Create a Firebase project and add an Android app with the package name
-   `com.spioneracorei8.btcusdsignals`.
-2. Download `google-services.json` into `mobile/`.
-3. Generate a service account key (Project settings → Service accounts) and put
-   it on the VPS at the path `FCM_CREDENTIALS_HOST_FILE` points at. **Never
-   commit it** — `.gitignore` covers `fcm-service-account.json`.
-4. On the VPS, set `SIGNAL_MODE=notify` and `FCM_PROJECT_ID`, and restart with
-   the notify overlay:
+1. **HTTPS must be working** — `deploy/README.md` §2.6. Without it iOS gives
+   the page no service worker and no push, and none of what follows can happen.
+2. On the VPS, generate a key pair and switch delivery on:
    ```console
-   $ docker compose -f docker-compose.yml -f docker-compose.notify.yml up -d
+   $ make vapid-keys >> .env      # then set VAPID_SUBJECT to a real address
+   $ echo 'SIGNAL_MODE=notify' >> .env
+   $ sudo systemctl restart btcusd
    ```
-   There is no `FCM_DEVICE_TOKEN` any more, and the collector **refuses to
-   start** if one is set. See ADR 0026.
+   If the `.env` still carries `FCM_PROJECT_ID` or `FCM_CREDENTIALS_FILE`, the
+   process **refuses to start** and says what to set instead. Delete them, and
+   delete the service account key from the host.
+3. On the phone: open the app in Safari, Share → **Add to Home Screen**, and
+   launch it **from the icon**. This step is not optional and not cosmetic — in
+   a tab, push does not exist.
 
-### The four checks
+### The five checks
 
 **1. A signal produces an alert on a locked phone.**
 
-Install the APK, open it, allow notifications. Confirm the status screen says
-*Alerts are on* and `devices_registered` is 1.
+Open the app, go to Status, tap through the alerts card. Confirm it says
+*Alerts are on* and `GET /api/v1/status` shows `devices_registered: 1`.
 
-Then lock the phone and wait for a signal — or force one by inserting a row and
-letting the delivery worker pick it up:
+Then lock the phone and wait for a signal — or force one:
 
 ```console
 $ psql "$DATABASE_URL" -c "
@@ -383,12 +432,16 @@ $ psql "$DATABASE_URL" -c "
 **Expected:** an alert within a minute. Title `BTCUSDT 4h LONG`, body carrying
 `ref 64000 · stop 63500 · target 65000`.
 
+If nothing arrives, the first thing to check is that the app was launched from
+the icon rather than from Safari.
+
 **2. The alert's numbers match the stored signal exactly.**
 
-Compare the alert against `GET /api/v1/signals/{id}`. The body rounds for
-reading; the `data` payload is exact. Check specifically that the price on the
-alert is the **reference** price and not the entry — they differ by roughly the
-slippage.
+Compare against `GET /api/v1/signals/{id}`. The body rounds for reading; the
+`data` payload is exact. Check specifically that the price shown is the
+**reference** price and not the entry — they differ by roughly the slippage,
+and relabelling one as the other would tell somebody they are in at a price
+nothing traded at.
 
 **3. Delivery is recorded `sent`.**
 
@@ -398,34 +451,35 @@ $ psql "$DATABASE_URL" -c "
   ORDER BY created_at DESC LIMIT 3;"
 ```
 
-**Expected:** `sent`, `attempts` 1, `sent_at` populated, `last_error` empty.
-`GET /api/v1/status` should show `delivery.sent` incremented and
+**Expected:** `sent`, `attempts` 1, `sent_at` populated, `last_error` empty,
+`channel` `webpush`. `GET /api/v1/status` shows `delivery.sent` incremented and
 `delivery.failed` at 0.
 
-**4. An unreachable phone retries and then gives up.**
+**4. A subscription that is gone retries nothing and gives up at once.**
 
-Uninstall the app without deregistering, then insert another signal.
+Delete the app from the home screen without deregistering, then insert another
+signal.
 
-**Expected:** Firebase answers `UNREGISTERED`, the worker treats it as
-permanent and marks the row `failed` on the **first** attempt — not after five.
-`delivery.failed` becomes 1 and the status screen shows it. The queue does not
-grow without bound.
+**Expected:** the push service answers `410 Gone`, the worker treats it as
+permanent and marks the row `failed` on the **first** attempt — not after five
+— with a `last_error` that says to open the app. `delivery.failed` becomes 1.
+The queue does not grow without bound.
 
-**5. A reinstall produces a new token and alerts resume.**
+**5. Reinstalling produces a new subscription and alerts resume.**
 
-Reinstall, open the app, confirm the status screen shows a **different** masked
-token prefix and `registered_at` has moved. Insert another signal.
+Add to the home screen again, open it, allow notifications. Confirm the status
+screen shows a **different** masked endpoint and that `registered_at` has moved.
+Insert another signal.
 
-**Expected:** delivered. This is the rotation path, and it is the one that
-silently breaks a deployment holding a token in a config file.
+**Expected:** delivered. This is the replacement path, and it is the one that
+silently breaks a deployment holding a subscription in a config file.
 
 ### Recording the result
 
-Tick the line in `docs/prompts/phase-07.md` and note the date and the token
-prefix. If any check fails, the failure is more interesting than the pass —
-write down which and what the row said.
-
----
+Tick phase 07's Definition of Done, and note the date and the iOS version in
+this file. If any check fails, write down which and what happened rather than
+retrying until it passes — a delivery path that works on the third attempt is
+a delivery path with something wrong with it.
 
 ## The theme
 
@@ -569,10 +623,18 @@ Stated plainly rather than left to be discovered:
 - **The app has not been installed to a home screen.** That is the step that
   decides whether the `apple-mobile-web-app-*` tags did their job, and it is
   three taps on the phone.
-- **Push has not been touched yet.** Phase 09b part C replaces FCM with Web
-  Push; the section above still describes the FCM path, which is what exists
-  today and is about to be retired.
-- **Push was not verified end to end.** Still phase 07's open item.
+- **No push was ever sent.** Subscribing needs a real push service — Apple's or
+  Google's — which needs outbound network this environment does not have, and a
+  browser identity it cannot present. Chromium here refuses outright in a
+  private context and hangs in a persistent one.
+
+  What *was* verified: the app posts what the browser hands it (against a faked
+  `PushManager`), the server stores it and never echoes the keys back, the
+  encrypted request is well-formed — `aes128gcm`, VAPID-signed, with a TTL —
+  and the service worker turns a push into the right notification and a tap
+  into the right URL, by executing it rather than reading it.
+- **Push was not verified end to end.** Still phase 07's open item, and the
+  procedure above is what closes it.
 - **Nothing was tested over an actual tailnet**, and nothing over real HTTPS.
   The API was reached on loopback, which browsers treat as a secure context —
   which is why the service worker could be tested at all here.

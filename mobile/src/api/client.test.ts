@@ -236,14 +236,23 @@ describe('the write', () => {
   it('posts a device registration and nothing else', async () => {
     const { impl, calls } = fakeFetch(() => json({ registered: true }));
 
-    await client(impl).registerDevice({ token: 'abc', platform: 'android', label: 'Pixel' });
+    await client(impl).registerDevice({
+      endpoint: 'https://web.push.apple.com/Q123',
+      keys: { p256dh: 'a-key', auth: 'a-secret' },
+      platform: 'web',
+      label: 'iPhone 14',
+    });
 
     expect(calls[0]!.init.method).toBe('POST');
     expect(calls[0]!.url).toBe(`${BASE}/api/v1/device`);
+    // The browser's own PushSubscription.toJSON() shape, posted through
+    // unchanged. Unpacking and reassembling it is a place for a key to go
+    // missing, and a missing key fails inside the server's encryption.
     expect(JSON.parse(String(calls[0]!.init.body))).toEqual({
-      token: 'abc',
-      platform: 'android',
-      label: 'Pixel',
+      endpoint: 'https://web.push.apple.com/Q123',
+      keys: { p256dh: 'a-key', auth: 'a-secret' },
+      platform: 'web',
+      label: 'iPhone 14',
     });
   });
 

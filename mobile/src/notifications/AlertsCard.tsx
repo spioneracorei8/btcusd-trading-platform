@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Linking, Pressable, View } from 'react-native';
+import { Pressable, View } from 'react-native';
 
 import { colors, layout } from '../theme';
 import { Card, CardTitle, Row } from '../components/Card';
@@ -19,14 +19,14 @@ import type { DeviceResponse } from '../api/types';
 export function AlertsCard({
   state,
   device,
-  token,
+  subscription,
   error,
   onRequest,
   onRegister,
 }: {
   state: AlertState;
   device: DeviceResponse | undefined;
-  token: string | undefined;
+  subscription: { endpoint: string } | undefined;
   error: unknown;
   onRequest: () => void;
   onRegister: () => void;
@@ -74,12 +74,17 @@ export function AlertsCard({
       ) : null}
 
       {state.next === 'open-settings' ? (
-        <Action label="Open Android settings" onPress={() => void Linking.openSettings()} />
+        // No deep link to offer. iOS gives a web app no way to open its own
+        // notification settings, so saying where they are is the whole of what
+        // can be done — and a button that went nowhere would be worse.
+        <Text size="detail" tone="secondary">
+          Settings › Notifications › {'BTCUSD Signals'}
+        </Text>
       ) : null}
 
       {device?.registered ? (
         <View style={{ marginTop: layout.space.xs, gap: layout.space.xs }}>
-          <Row label="registered as" value={device.token ?? '—'} />
+          <Row label="registered at" value={device.endpoint ?? '—'} />
           <Row label="server mode" value={device.delivery_mode} />
           {device.refreshed_at ? (
             <Row label="last checked in" value={device.refreshed_at} />
@@ -87,9 +92,9 @@ export function AlertsCard({
         </View>
       ) : null}
 
-      {token && !device?.registered ? (
+      {subscription && !device?.registered ? (
         <Text size="caption" tone="tertiary">
-          This phone has a token and the server has not accepted it yet.
+          This phone has a subscription and the server has not accepted it yet.
         </Text>
       ) : null}
 

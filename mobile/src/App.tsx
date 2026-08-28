@@ -5,7 +5,6 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { ApiProvider } from './api/provider';
 import { Navigation } from './navigation';
 import { UpdateBanner } from './pwa/UpdateBanner';
-import { configureForegroundBehaviour } from './notifications/useNotifications';
 import type { ApiClient } from './api/client';
 
 /**
@@ -16,9 +15,9 @@ import type { ApiClient } from './api/client';
  * which every retry delays telling the user about.
  */
 // A signal arriving while somebody is looking at the chart is exactly as
-// interesting as one arriving while the phone is locked. Set once, at module
-// scope, because the handler is global to the process.
-configureForegroundBehaviour();
+// interesting as one arriving while the phone is locked, and the service
+// worker shows it either way — a foreground push on the web is displayed by
+// the worker like any other, with no handler to configure here.
 
 const queryClient = new QueryClient({
   defaultOptions: {

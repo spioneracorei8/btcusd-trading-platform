@@ -5,8 +5,9 @@ import type { DeviceResponse } from '../api/types';
 function device(overrides: Partial<DeviceResponse> = {}): DeviceResponse {
   return {
     registered: true,
-    token: 'fMEP0v…',
-    platform: 'android',
+    endpoint: 'web.push.apple.com/QCyaS…',
+    platform: 'web',
+    vapid_public_key: 'a-public-key',
     delivery_mode: 'notify',
     note: 'Signals will be delivered to this device.',
     ...overrides,
@@ -18,15 +19,15 @@ function device(overrides: Partial<DeviceResponse> = {}): DeviceResponse {
  *
  * # What this prevents
  *
- * Three switches have to be on before an alert reaches this phone: Android
- * must permit it, the server must know the token, and the deployment must be
+ * Three switches have to be on before an alert reaches this phone: iOS must
+ * permit it, the server must know the subscription, and the deployment must be
  * in notify mode. The app can see all three, and a screen that reported only
  * the one it controls would tell somebody "alerts are on" while the server
  * quietly sent nothing.
  *
  * That is the failure this phase exists to close: phase 07 could never deliver
- * because there was no token, and the way that would recur is an app that
- * believes registering was enough.
+ * because there was nowhere to send to, and the way that would recur is an app
+ * that believes registering was enough.
  */
 describe('whether an alert will actually arrive', () => {
   it('is false before the permission has been asked for', () => {
@@ -39,16 +40,19 @@ describe('whether an alert will actually arrive', () => {
     expect(state.detail).toMatch(/ten days/);
   });
 
-  it('is false when Android is blocking them, and says where to fix it', () => {
+  it('is false when iOS is blocking them, and says where to fix it', () => {
     const state = alertState('denied', device());
 
     expect(state.willArrive).toBe(false);
     expect(state.next).toBe('open-settings');
+    // The prompt cannot be shown twice, so saying where the setting is is the
+    // whole of what can be done about it.
+    expect(state.detail).toMatch(/settings/i);
     // And it must not read as a fault in the app or the server.
     expect(state.detail).toMatch(/everything else works/i);
   });
 
-  it('is false when permission is granted but the server has no token', () => {
+  it('is false when permission is granted but the server has no subscription', () => {
     const state = alertState('granted', device({ registered: false }));
 
     expect(state.willArrive).toBe(false);
@@ -76,12 +80,26 @@ describe('whether an alert will actually arrive', () => {
     expect(state.next).toBe('nothing');
   });
 
-  it('is false on an emulator, and says why rather than looking broken', () => {
+  /*
+   * The case that catches people, and the reason it is a state rather than an
+   * error.
+   *
+   * On iOS push exists only for a PWA added to the home screen and launched
+   * from its icon. In a Safari tab there is no PushManager at all — permission
+   * cannot even be requested, and asking resolves to denied with no prompt
+   * shown. Nothing about that announces itself: the app works, the button is
+   * there, and pressing it appears to do nothing.
+   *
+   * So the app says what to do instead, in the three words iOS uses for it.
+   */
+  it('is false in a browser tab, and says how to install rather than looking broken', () => {
     const state = alertState('granted', device(), false);
 
     expect(state.willArrive).toBe(false);
-    expect(state.detail).toMatch(/emulator/i);
+    expect(state.detail).toMatch(/add to home screen/i);
     expect(state.detail).toMatch(/everything else in the app works/i);
+    // Not an error state: there is nothing to retry and nothing is broken.
+    expect(state.next).toBe('nothing');
   });
 });
 

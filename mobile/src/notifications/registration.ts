@@ -5,10 +5,11 @@ import type { DeviceResponse } from '../api/types';
  *
  * # Why this is a pure function
  *
- * Registering a device touches three awkward things: the OS permission prompt,
- * Firebase, and the API. The decisions — whether to ask, what the screen should
- * say, whether anything is actually going to arrive — are separable from all
- * three, so they live here and the effects live in useNotifications.
+ * Registering touches three awkward things: the browser's permission prompt,
+ * the push service, and the API. The decisions — whether to ask, what the
+ * screen should say, whether anything is actually going to arrive — are
+ * separable from all three, so they live here and the effects live in
+ * useNotifications.
  */
 
 export type PermissionState = 'undetermined' | 'granted' | 'denied';
@@ -33,16 +34,25 @@ export type AlertState = {
 export function alertState(
   permission: PermissionState,
   device: DeviceResponse | undefined,
-  /** False on an emulator, where FCM issues no token. */
-  isPhysicalDevice = true,
+  /**
+   * False in a browser tab, where iOS grants no push at all.
+   *
+   * This is the case that catches people. On iOS, push exists only for a PWA
+   * that has been added to the home screen and launched from its icon —
+   * opened in Safari, permission cannot even be requested, and
+   * `Notification.requestPermission` resolves to denied without a prompt
+   * appearing. Nothing about that state announces itself, so it is named.
+   */
+  canReceivePush = true,
 ): AlertState {
-  if (!isPhysicalDevice) {
+  if (!canReceivePush) {
     return {
       willArrive: false,
-      headline: 'Alerts need a real phone',
+      headline: 'Add this app to your home screen',
       detail:
-        'Firebase does not issue a registration token to an emulator, so nothing can be ' +
-        'delivered here. Everything else in the app works.',
+        'iOS only delivers notifications to an installed app. In Safari, tap Share, then ' +
+        'Add to Home Screen, and open it from the icon — permission cannot even be asked ' +
+        'for from a browser tab. Everything else in the app works either way.',
       next: 'nothing',
     };
   }
@@ -63,8 +73,9 @@ export function alertState(
       willArrive: false,
       headline: 'Notifications are switched off',
       detail:
-        'Android is blocking alerts for this app. Everything else works; you will just ' +
-        'have to open it to see whether anything happened.',
+        'iOS is blocking alerts for this app. The prompt cannot be shown again, so this ' +
+        'has to be changed in Settings › Notifications. Everything else works; you will ' +
+        'just have to open the app to see whether anything happened.',
       next: 'open-settings',
     };
   }

@@ -357,8 +357,9 @@ export type Status = {
 
 export type DeviceResponse = {
   registered: boolean;
-  /** Masked to a prefix. The API never returns the token in full. */
-  token?: string;
+  /** The push service's host and a short prefix. The API never returns the
+   * subscription in full, and never returns its keys at all. */
+  endpoint?: string;
   platform?: string;
   label?: string;
   registered_at?: string;
@@ -366,5 +367,10 @@ export type DeviceResponse = {
   /** Whether this deployment sends anything at all. Registering against a
    * silent deployment succeeds and delivers nothing. */
   delivery_mode: SignalMode;
+
+  /** What the browser subscribes against. Served on every response including
+   * the unregistered one, because subscribing has to come before registering
+   * — and absent in silent mode, where there is nothing to subscribe to. */
+  vapid_public_key?: string;
   note: string;
 };

@@ -84,6 +84,94 @@ self.addEventListener('message', (event) => {
   if (event.data === 'apply-update') void self.skipWaiting();
 });
 
+// ---------------------------------------------------------------------------
+// Push
+// ---------------------------------------------------------------------------
+
+/**
+ * A signal arrived.
+ *
+ * The payload is what services/notify/repository/webpush/wire.go sent, already
+ * decrypted by the browser: { title, body, data }. There is a test on each side
+ * asserting that shape, because a renamed field here shows up as notifications
+ * that stop rendering rather than as anything that fails.
+ *
+ * # Why a notification is always shown
+ *
+ * The subscription was made with userVisibleOnly, which is not advisory: a push
+ * that ends without showing something has that promise broken, and browsers
+ * respond by showing their own "this site was updated in the background"
+ * notice — or, after enough of them, by revoking the subscription. So the catch
+ * below still shows something. An alert saying less than it should beats
+ * delivery being switched off by the browser.
+ */
+self.addEventListener('push', (event) => {
+  event.waitUntil(
+    (async () => {
+      let payload = {};
+      try {
+        payload = event.data ? event.data.json() : {};
+      } catch {
+        // Undecodable, which should not happen and must not be silent.
+      }
+
+      const title = payload.title || 'BTCUSDT signal';
+      const body = payload.body || 'Open the app to see it.';
+      const data = payload.data || {};
+
+      await self.registration.showNotification(title, {
+        body,
+        data,
+        icon: '/icon-192.png',
+        badge: '/icon-192.png',
+        // Collapses onto the previous one for the same signal rather than
+        // stacking, which matters because the delivery worker may retry.
+        tag: data.signal_id || 'signal',
+        // A market signal is worth a buzz. This is the only thing this app
+        // ever sends.
+        requireInteraction: false,
+      });
+    })(),
+  );
+});
+
+/**
+ * Tapping an alert opens that signal.
+ *
+ * Focus an open window if there is one and tell it where to go, rather than
+ * opening a second: an app that stacks windows every time an alert is tapped
+ * is an app somebody closes.
+ */
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+
+  const signalId = event.notification.data && event.notification.data.signal_id;
+  const url = signalId ? `/signals/${signalId}` : '/';
+
+  event.waitUntil(
+    (async () => {
+      const windows = await self.clients.matchAll({
+        type: 'window',
+        includeUncontrolled: true,
+      });
+
+      for (const client of windows) {
+        if ('focus' in client) {
+          await client.focus();
+          // The app is already running, so navigating it is a message rather
+          // than a page load — see useNotifications, which listens for this.
+          if (signalId) client.postMessage({ type: 'open-signal', signalId });
+          return;
+        }
+      }
+
+      // Nothing open: a cold start straight at the signal, which is why the
+      // app has URLs at all.
+      await self.clients.openWindow(url);
+    })(),
+  );
+});
+
 self.addEventListener('fetch', (event) => {
   const request = event.request;
   if (request.method !== 'GET') return;

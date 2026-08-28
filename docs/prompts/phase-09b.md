@@ -321,31 +321,53 @@ transition:
 
 ## Definition of Done
 
-- [ ] Installs to the iPhone home screen and launches without browser chrome
-- [ ] Served over HTTPS with a Tailscale certificate; renewal is automatic and
-      it is stated which mechanism renews it
-- [ ] Unreachable from outside the tailnet, verified as in Phase 08
-- [ ] The PWA and `/api/v1/*` are served, and the catch-all still 404s
-- [ ] Websocket origin checking replaces `InsecureSkipVerify`, and the comment
-      gives the new reason
-- [ ] ADR 0024 updated: what now exists, and which items on its list are still
-      outstanding
-- [ ] URLs exist per screen, and `/signals/:id` opens the detail directly
-- [ ] All five screens work on the phone against the live API
-- [ ] Service worker caches the shell and never caches API responses
-- [ ] Service worker updates cleanly to a new build
-- [ ] Web Push delivers to the locked phone; all five checks in C3 verified on
-      the device
-- [ ] **Phase 07's outstanding Definition of Done item closed and recorded**
-- [ ] Subscription refresh re-registers, with the Phase 09 tests still holding
-- [ ] FCM configuration retired at start-up rather than ignored
-- [ ] Dead Android configuration removed from `app.json`
-- [ ] Tabular figures confirmed in the web build
-- [ ] `docs/mobile.md` rewritten for PWA install, HTTPS setup, and the iOS
+Ticked means verified here, by something that keeps holding. Unticked items
+carry the reason. The ones that need a phone, a tailnet or a real push service
+stay open — see "What has not been done here" in `docs/mobile.md`.
+
+- [ ] **Installs to the iPhone home screen and launches without browser
+      chrome** — the manifest, the apple meta tags and `viewport-fit=cover` are
+      in place and tested against the built export; whether iOS honours them is
+      three taps on the phone
+- [ ] **Served over HTTPS with a Tailscale certificate** — the runbook step is
+      written (`deploy/README.md` §2.6) and there is no tailnet here. Renewal
+      is `tailscale serve`'s, not a timer
+- [ ] **Unreachable from outside the tailnet** — same reason; the checklist
+      item is in the runbook
+- [x] The api serves the PWA and `/api/v1/*` from one origin, and an unknown
+      path under `/api/v1` is a JSON 404 rather than the app's HTML
+- [x] ADR 0024 updated to describe the configuration that now exists, and which
+      items on its list are still outstanding
+- [x] Websocket origin checking replaces `InsecureSkipVerify`
+- [x] URLs exist per screen, and `/signals/:id` cold-loads that signal
+- [ ] **All five screens work on the phone against the live API** — all five
+      work in a browser against a live API, on loopback
+- [x] Service worker caches the shell and never caches API responses
+- [x] Service worker updates cleanly to a new build
+- [ ] **Web Push delivers to the locked phone; all five checks in C3** — no push
+      was ever sent. Subscribing needs a real push service, which needs network
+      and a browser identity this environment does not have. What was verified
+      is everything either side of it: the app posts what the browser hands it,
+      the server stores it without echoing the keys, the encrypted request is
+      well-formed, and the worker turns a push into the right notification and a
+      tap into the right URL
+- [ ] **Phase 07's outstanding Definition of Done item closed and recorded** —
+      still open. The procedure that closes it is in `docs/mobile.md`
+- [x] Subscription refresh re-registers — on every launch, which is what
+      replaces FCM's refresh event, because Safari does not fire
+      `pushsubscriptionchange`
+- [x] FCM configuration retired at start-up rather than ignored
+- [x] Dead Android configuration removed from `app.json`
+- [ ] **Tabular figures confirmed in the web build** — `type.tabular` is applied
+      through every numeric cell and the screens render correctly in Chromium;
+      Safari's font stack is its own and has not been looked at
+- [x] `docs/mobile.md` rewritten for PWA install, HTTPS setup, and the iOS
       constraints in C2
-- [ ] ADR recording the PWA trade-off and the condition to revisit it
-- [ ] No order-placing code or UI, still enforced
-- [ ] No hex literal outside `src/theme/`, still enforced
+- [x] ADR 0028 records the trade-off and the condition to revisit it
+- [x] No order-placing code or UI, still enforced
+- [x] No hex literal outside `src/theme/`, still enforced — and the colours that
+      escape into HTML and JSON, where the lint rule cannot see them, are pinned
+      to the token by a test
 
 ---
 

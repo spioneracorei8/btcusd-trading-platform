@@ -645,54 +645,76 @@ did not run.
 
 Where alerts are delivered. **The only endpoint under `/api/v1` that writes.**
 
+The body is the browser's own `PushSubscription.toJSON()`, posted through
+unchanged — unpacking and reassembling it is a place for a key to go missing,
+and a missing key fails inside the server's encryption with a message about
+elliptic curves.
+
 | Field | Required | Notes |
 |---|---|---|
-| `token` | yes | The FCM registration token from the app. |
-| `platform` | no | `android` or `ios`; defaults to `android`. |
+| `endpoint` | yes | Where the push service listens. Must be `https`. |
+| `keys.p256dh` | yes | The subscriber's public key, base64url. |
+| `keys.auth` | yes | The authentication secret, base64url. |
+| `platform` | no | `web`, `android` or `ios`; defaults to `web`. |
 | `label` | no | Free-form, for a person reading the table. Truncated at 128. |
 
 ### Why this is not an environment variable
 
-FCM issues the token to the app on the phone and rotates it on its own
-schedule — on reinstall, on restore to a new device, and sometimes for no
-reason the app is told. A `.env` holding last month's token is not stale in a
-way anything notices: the process starts, the credentials validate, signals are
-recorded and queued, and every send is rejected as `UNREGISTERED`. The delivery
-worker correctly treats that as permanent and gives up. The symptom is alerts
-stopping and a config file that still looks fine.
+The browser issues the subscription to the installed app and replaces it
+whenever it likes — on reinstall, when site data is cleared, on expiry. A
+`.env` holding last month's is not stale in a way anything notices: the process
+starts, the keys validate, signals are recorded and queued, and every send is
+rejected as `410 Gone`. The delivery worker correctly treats that as permanent
+and gives up. The symptom is alerts stopping and a config file that still looks
+fine.
 
-So the app posts its token on every launch and on every refresh. `re-registering
-the same token is a success`, not a conflict — that call is the mechanism that
-keeps a rotation from silently ending delivery. `FCM_DEVICE_TOKEN` is now
-**rejected** at start-up rather than ignored. See ADR 0026.
+So the app subscribes on every launch and posts the result. Re-registering the
+same subscription is a success, not a conflict — that call is the mechanism
+that keeps a replacement from silently ending delivery. There is no
+`pushsubscriptionchange` to rely on: the event is in the specification and
+Safari does not fire it, so a launch is the only reliable moment to check. See
+ADR 0026.
 
 ```console
-$ curl -s -X POST "$B/device" -H 'Content-Type: application/json'     -d '{"token":"fMEP0vJqSk6:APA91bH...","platform":"android","label":"Pixel 7a"}' | jq
+$ curl -s -X POST "$B/device" -H 'Content-Type: application/json' \
+    -d '{"endpoint":"https://web.push.apple.com/QCyaSPq...",
+         "keys":{"p256dh":"BHsyaeZ2...","auth":"Sq0g3ecL..."},
+         "platform":"web","label":"iPhone 14"}' | jq
 {
   "registered": true,
-  "token": "fMEP0v…",
-  "platform": "android",
-  "label": "Pixel 7a",
-  "registered_at": "2026-08-27T07:03:02.314015Z",
-  "refreshed_at": "2026-08-27T07:03:02.314015Z",
+  "endpoint": "web.push.apple.com/QCyaSP…",
+  "platform": "web",
+  "label": "iPhone 14",
+  "registered_at": "2026-08-28T18:10:31.630164Z",
+  "refreshed_at": "2026-08-28T18:10:31.630164Z",
   "delivery_mode": "notify",
+  "vapid_public_key": "BNvGkZa5fXofu8_QEx-lVmU8...",
   "note": "Signals will be delivered to this device."
 }
 ```
 
-**The token is never returned in full.** There is no authentication in front of
-this endpoint (ADR 0024), and the registration token is the one credential in
-this system that lets anything push to the owner's phone. Six characters is
-enough to tell two registrations apart and not enough to use. It is masked in
-logs and errors for the same reason.
+**The subscription is never returned whole, and the keys never at all.** There
+is no authentication in front of this endpoint (ADR 0024), and the subscription
+is what lets anything push to the owner's phone. The push service's host is
+public and useful — it says which service is involved when delivery starts
+failing — and the identifier after it is truncated. The keys have no useful
+half, so nothing renders them. The same masking applies in logs and errors.
 
-`registered_at` survives a re-registration of the same token; `refreshed_at`
-does not. The pair says both "this phone has been the registered one since
-March" and "the app checked in an hour ago".
+**`vapid_public_key` is served on every response, including the unregistered
+one.** The app cannot subscribe without it and cannot register before it has
+subscribed, so the first call it makes has to carry it. Serving it rather than
+building it into the app means rotating the pair does not need a rebuild. It is
+absent in `silent` mode, where no pair is configured — which the app reads as
+"there is nothing to subscribe to here".
+
+`registered_at` survives a re-registration of the same endpoint; `refreshed_at`
+does not. The endpoint is the identity — the keys rotate with it — so the pair
+says both "this phone has been the registered one since March" and "the app
+checked in an hour ago".
 
 **One device.** The table holds a single row by constraint, because
 `notifications` is unique on `(signal_id, channel)` — it can record that a
-signal was delivered over FCM, not which of several devices received it. A
+signal was delivered over Web Push, not which of several devices received it. A
 second device is a schema change, not a second row.
 
 **`delivery_mode` and `note` say what will actually happen.** Registering
@@ -701,7 +723,7 @@ app should not have to work that out by noticing an absence over the following
 fortnight:
 
 ```console
-$ curl -s -X POST "$B/device" -d '{"token":"..."}' | jq -r .note
+$ curl -s -X POST "$B/device" -d '{"endpoint":"https://...","keys":{...}}' | jq -r .note
 This deployment is in silent mode: signals are recorded and nothing is sent. Registering does not change that; SIGNAL_MODE=notify does.
 ```
 
@@ -718,9 +740,13 @@ $ curl -s "$B/device" | jq
 {
   "registered": false,
   "delivery_mode": "notify",
+  "vapid_public_key": "BNvGkZa5fXofu8_QEx-lVmU8...",
   "note": "No device is registered. Signals will be recorded and queued, and nothing will be delivered until one registers."
 }
 ```
+
+This is also the call that carries the key to subscribe with, which is why it
+answers usefully before anything is registered.
 
 ### DELETE /api/v1/device
 
@@ -735,20 +761,30 @@ $ curl -s -X DELETE "$B/device" | jq -c
 ### Errors
 
 ```console
-$ curl -s -X POST "$B/device" -d '{"token":""}' | jq -c
-{"error":{"code":"invalid_parameter","message":"invalid device registration: the registration token is empty"}}
+$ curl -s -X POST "$B/device" -d '{"endpoint":""}' | jq -c
+{"error":{"code":"invalid_parameter","message":"invalid device registration: the subscription has no endpoint"}}
 
-$ curl -s -X POST "$B/device" -d '{"token":"abc def"}' | jq -c
-{"error":{"code":"invalid_parameter","message":"invalid device registration: the registration token contains whitespace"}}
+$ curl -s -X POST "$B/device" -d '{"endpoint":"https://web.push.apple.com/Q"}' | jq -c
+{"error":{"code":"invalid_parameter","message":"invalid device registration: the subscription has no p256dh"}}
 
-$ curl -s -X POST "$B/device" -d '{"token":"x","platform":"blackberry"}' | jq -c
-{"error":{"code":"invalid_parameter","message":"\"blackberry\" is not a device platform; the platforms are android, ios"}}
+$ curl -s -X POST "$B/device" -d '{"endpoint":"http://web.push.apple.com/Q","keys":{"p256dh":"k","auth":"a"}}' | jq -c
+{"error":{"code":"invalid_parameter","message":"invalid device registration: \"http://web.push.apple.com/Q\" is not an https push endpoint"}}
+
+$ curl -s -X POST "$B/device" -d '{"endpoint":"https://web.push.apple.com/Q","keys":{"p256dh":"k","auth":"a"},"platform":"blackberry"}' | jq -c
+{"error":{"code":"invalid_parameter","message":"\"blackberry\" is not a device platform; the platforms are web, android, ios"}}
 ```
 
-Whitespace *around* the token is trimmed — a token pasted from a file arrives
-with a trailing newline every time. Whitespace *inside* it is refused: that is
-a value corrupted in transit, and storing it means Firebase rejects the send as
-`UNREGISTERED`, which reads as an uninstalled app rather than a mangled token.
+**Each part is checked here rather than at send time**, because each fails a
+long way from its cause otherwise. A missing key fails inside RFC 8291
+encryption with a message about elliptic curves; a plain-`http` endpoint fails
+as a transport error hours later, on a signal, in the delivery worker's log.
+Both are a long way from "the app sent half a registration", which is what
+happened and what the app can still be told while somebody is looking at it.
+
+Whitespace *around* a value is trimmed — one pasted from a file arrives with a
+trailing newline every time. Whitespace *inside* is refused: that is a value
+corrupted in transit, and storing it means the push service rejects the send as
+gone, which reads as an uninstalled app rather than a mangled subscription.
 
 ### What happens to alerts with nowhere to go
 
