@@ -200,15 +200,17 @@ type Querier interface {
 	RegisterCollectorStart(ctx context.Context, arg RegisterCollectorStartParams) (CollectorStatus, error)
 	// Record the phone this deployment delivers to, replacing whatever was there.
 	//
-	// Upsert on the singleton row rather than insert-if-absent: FCM rotates
-	// tokens, and the app re-registers on every refresh. A statement that
-	// refused the second registration would leave the deployment holding a token
-	// Firebase has already retired, which fails permanently on the next signal
-	// and looks like a broken strategy rather than a stale token.
+	// Upsert on the singleton row rather than insert-if-absent: a push
+	// subscription expires, and is replaced outright by a reinstall or a browser
+	// clearing site data. The app re-subscribes on every launch and posts the
+	// result. A statement that refused the second registration would leave the
+	// deployment holding a subscription the push service has already retired,
+	// which fails permanently on the next signal and looks like a broken strategy
+	// rather than a stale registration.
 	//
-	// registered_at is kept when the token is unchanged and reset when it is not:
-	// a refresh of the same token is the same phone still there, a different
-	// token is a new registration.
+	// registered_at is kept when the endpoint is unchanged and reset when it is
+	// not. The endpoint is the identity: the keys are rotated with it, so two
+	// registrations sharing an endpoint are the same phone still there.
 	RegisterDevice(ctx context.Context, arg RegisterDeviceParams) (Device, error)
 	// Failed, and worth trying again. The row stays pending and carries both what
 	// went wrong and when it may be retried.

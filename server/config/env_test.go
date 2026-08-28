@@ -119,8 +119,9 @@ func TestLoadFromOverrides(t *testing.T) {
 	e["FEE_TAKER_PCT"] = "0.04"
 	e["SLIPPAGE_TICKS"] = "3"
 	e["SIGNAL_MODE"] = "notify"
-	e["FCM_PROJECT_ID"] = "btc-signals"
-	e["FCM_CREDENTIALS_FILE"] = "/run/secrets/fcm.json"
+	e["VAPID_PUBLIC_KEY"] = "a-public-key"
+	e["VAPID_PRIVATE_KEY"] = "a-private-key"
+	e["VAPID_SUBJECT"] = "mailto:owner@example.com"
 	e["MARKET_GAPCHECK_INTERVAL"] = "30m"
 	e["BINANCE_REST_BASE_URL"] = "https://testnet.binance.vision/"
 
@@ -147,8 +148,8 @@ func TestLoadFromOverrides(t *testing.T) {
 	if cfg.Market.SlippageTicks != 3 {
 		t.Errorf("Market.SlippageTicks = %d, want 3", cfg.Market.SlippageTicks)
 	}
-	if !cfg.Notify.Delivers() || cfg.Notify.FCMProjectId != "btc-signals" {
-		t.Errorf("Notify = %+v, want delivering with a project id", cfg.Notify)
+	if !cfg.Notify.Delivers() || cfg.Notify.VAPIDPublicKey != "a-public-key" {
+		t.Errorf("Notify = %+v, want delivering with a VAPID key", cfg.Notify)
 	}
 	if cfg.Market.GapcheckInterval != 30*time.Minute {
 		t.Errorf("Market.GapcheckInterval = %s, want 30m", cfg.Market.GapcheckInterval)
@@ -274,7 +275,7 @@ func TestNotifyModeRequiresSomewhereToSend(t *testing.T) {
 	if !errors.Is(err, constants.ErrMissingEnv) {
 		t.Errorf("error %v does not wrap ErrMissingEnv", err)
 	}
-	for _, key := range []string{"FCM_PROJECT_ID", "FCM_CREDENTIALS_FILE"} {
+	for _, key := range []string{"VAPID_PUBLIC_KEY", "VAPID_PRIVATE_KEY", "VAPID_SUBJECT"} {
 		if !strings.Contains(err.Error(), key) {
 			t.Errorf("error %q does not name %s", err, key)
 		}
@@ -282,7 +283,7 @@ func TestNotifyModeRequiresSomewhereToSend(t *testing.T) {
 }
 
 // TestSilentModeNeedsNoCredentials, because the common case is a system that
-// records and says nothing, and demanding Firebase details to do that would
+// records and says nothing, and demanding a VAPID key pair to do that would
 // make silence the harder configuration to reach.
 func TestSilentModeNeedsNoCredentials(t *testing.T) {
 	e := validEnv()
@@ -338,8 +339,9 @@ func TestTheRetiredSwitchIsRefusedRatherThanIgnored(t *testing.T) {
 func TestNotifyModeDoesNotRequireADeviceToken(t *testing.T) {
 	e := validEnv()
 	e["SIGNAL_MODE"] = "notify"
-	e["FCM_PROJECT_ID"] = "btc-signals"
-	e["FCM_CREDENTIALS_FILE"] = "/run/secrets/fcm.json"
+	e["VAPID_PUBLIC_KEY"] = "a-public-key"
+	e["VAPID_PRIVATE_KEY"] = "a-private-key"
+	e["VAPID_SUBJECT"] = "mailto:owner@example.com"
 
 	cfg, err := config.LoadFrom(env(e))
 	if err != nil {
@@ -362,8 +364,9 @@ func TestTheRetiredDeviceTokenIsRefusedRatherThanIgnored(t *testing.T) {
 		t.Run(mode, func(t *testing.T) {
 			e := validEnv()
 			e["SIGNAL_MODE"] = mode
-			e["FCM_PROJECT_ID"] = "btc-signals"
-			e["FCM_CREDENTIALS_FILE"] = "/run/secrets/fcm.json"
+			e["VAPID_PUBLIC_KEY"] = "a-public-key"
+			e["VAPID_PRIVATE_KEY"] = "a-private-key"
+			e["VAPID_SUBJECT"] = "mailto:owner@example.com"
 			e["FCM_DEVICE_TOKEN"] = "a-token-nothing-reads"
 
 			_, err := config.LoadFrom(env(e))
@@ -585,4 +588,70 @@ func TestStreamOriginsAreHostsAndNeverAWildcard(t *testing.T) {
 			t.Fatalf("StreamOrigins = %v with nothing set; want none", cfg.App.StreamOrigins)
 		}
 	})
+}
+
+/*
+TestTheRetiredFCMVariablesAreRefusedRatherThanIgnored.
+
+# What this prevents
+
+Phase 09b replaced FCM with Web Push. The device is an iPhone running a PWA,
+which cannot use FCM at all, so keeping both transports would have left one
+exercised by nothing — and an untested delivery path is a broken one nobody has
+noticed.
+
+A .env still carrying FCM_PROJECT_ID and a service account path is the specific
+danger: the deployment starts, the file reads as configured for delivery, and
+the credentials it names are for a transport that no longer exists. Somebody
+debugging silent alerts would go and check Firebase.
+
+The same treatment NOTIFY_ENABLED and FCM_DEVICE_TOKEN already get, for the
+same reason: a variable that no longer does anything must not sit in a file
+looking like it does.
+*/
+func TestTheRetiredFCMVariablesAreRefusedRatherThanIgnored(t *testing.T) {
+	for _, key := range []string{"FCM_PROJECT_ID", "FCM_CREDENTIALS_FILE"} {
+		t.Run(key, func(t *testing.T) {
+			e := validEnv()
+			e[key] = "something-nothing-reads"
+
+			_, err := config.LoadFrom(env(e))
+			if err == nil {
+				t.Fatalf("LoadFrom() with %s returned no error", key)
+			}
+			if !strings.Contains(err.Error(), key) {
+				t.Errorf("error %q does not name %s", err, key)
+			}
+			// Naming the replacement is the difference between a refusal that
+			// costs one edit and one that costs an afternoon.
+			if !strings.Contains(err.Error(), "VAPID_PUBLIC_KEY") {
+				t.Errorf("error %q does not say what to set instead", err)
+			}
+		})
+	}
+}
+
+/*
+TestTheVAPIDPrivateKeyIsNeverInAnErrorMessage.
+
+It is the one credential in this configuration that can push to the owner's
+phone. Config errors are printed at start-up, land in journald, and get pasted
+into issues — a loader that quoted the offending value would put it in all
+three.
+*/
+func TestTheVAPIDPrivateKeyIsNeverInAnErrorMessage(t *testing.T) {
+	const secret = "a-private-key-that-must-not-be-quoted"
+
+	e := validEnv()
+	e["SIGNAL_MODE"] = "notify"
+	e["VAPID_PRIVATE_KEY"] = secret
+	// Missing public key and subject, so the loader definitely errors.
+
+	_, err := config.LoadFrom(env(e))
+	if err == nil {
+		t.Fatal("LoadFrom() with an incomplete VAPID configuration returned no error")
+	}
+	if strings.Contains(err.Error(), secret) {
+		t.Fatalf("the private key appears in the error: %v", err)
+	}
 }

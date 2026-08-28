@@ -42,7 +42,7 @@ import (
 	_market_us "github.com/spioneracorei8/btcusd-trading-platform/server/services/market/usecase"
 	"github.com/spioneracorei8/btcusd-trading-platform/server/services/notify"
 	_notify_repo "github.com/spioneracorei8/btcusd-trading-platform/server/services/notify/repository"
-	"github.com/spioneracorei8/btcusd-trading-platform/server/services/notify/repository/fcm"
+	"github.com/spioneracorei8/btcusd-trading-platform/server/services/notify/repository/webpush"
 	_notify_us "github.com/spioneracorei8/btcusd-trading-platform/server/services/notify/usecase"
 	_outcome_repo "github.com/spioneracorei8/btcusd-trading-platform/server/services/outcome/repository"
 	_outcome_us "github.com/spioneracorei8/btcusd-trading-platform/server/services/outcome/usecase"
@@ -235,13 +235,14 @@ func buildNotify(
 		}
 		notifyCfg.Devices = devices
 
-		// At start-up, so a missing or malformed service account key refuses
-		// to start rather than surfacing on the first signal — which could be
-		// days later and would look like the strategy being quiet.
-		sender, err := fcm.NewSenderImpl(ctx, fcm.Config{
-			ProjectId:       cfg.Notify.FCMProjectId,
-			CredentialsFile: cfg.Notify.FCMCredentialsFile,
-			Log:             log,
+		// At start-up, so a malformed VAPID key refuses to start rather than
+		// surfacing on the first signal — which could be days later and would
+		// look like the strategy being quiet.
+		sender, err := webpush.NewSenderImpl(webpush.Options{
+			PublicKey:  cfg.Notify.VAPIDPublicKey,
+			PrivateKey: cfg.Notify.VAPIDPrivateKey,
+			Subject:    cfg.Notify.VAPIDSubject,
+			Logger:     log,
 		})
 		if err != nil {
 			return nil, err

@@ -194,23 +194,35 @@ type Notify struct {
 	// than quietly ignored.
 	SignalMode constants.SignalMode
 
-	// FCMProjectId is the Firebase project that owns the device token.
-	FCMProjectId string
-	// FCMCredentialsFile is the path to the service account JSON file.
-	FCMCredentialsFile string
+	// VAPIDPublicKey identifies this application server to the push service,
+	// and is what the browser subscribes against. It reaches the app, so it is
+	// not a secret and is not treated as one.
+	VAPIDPublicKey string
+
+	// VAPIDPrivateKey signs the JWT that proves a push came from here. It is
+	// the one credential in this configuration that must never be logged,
+	// quoted in an error, or reach the browser.
+	VAPIDPrivateKey string
+
+	// VAPIDSubject says who to contact about this application server — a
+	// mailto: or https: URL, required by RFC 8292. Push services use it when
+	// something is wrong with the traffic, not for delivery.
+	VAPIDSubject string
 }
 
-// Where the device token went
+// Where the device token went, and then FCM with it
 //
-// It used to be FCM_DEVICE_TOKEN here. It is now a row in `devices`, written
-// by the phone through POST /api/v1/device, and FCM_DEVICE_TOKEN is rejected
-// at start-up rather than ignored — the same treatment NOTIFY_ENABLED gets,
-// for the same reason.
+// FCM_DEVICE_TOKEN used to be here. It became a row in `devices`, written by
+// the phone through POST /api/v1/device (ADR 0026), because a token in this
+// file is the previous one from the moment Firebase decides otherwise, and the
+// deployment goes on looking configured while every delivery fails.
 //
-// FCM issues the token to the app and rotates it without asking. A value in
-// this file is the previous one from the moment Firebase decides otherwise,
-// and the deployment goes on looking configured while every delivery fails as
-// unregistered. See ADR 0026.
+// Phase 09b retired the rest of it. The device is an iPhone and the app is a
+// PWA, which cannot use FCM at all; keeping both transports would leave one
+// exercised by nothing, and an untested delivery path is a broken one nobody
+// has noticed. FCM_PROJECT_ID and FCM_CREDENTIALS_FILE are rejected at
+// start-up rather than ignored — the same treatment NOTIFY_ENABLED and
+// FCM_DEVICE_TOKEN get, for the same reason. See ADR 0028.
 
 // Delivers reports whether signals are pushed to the owner.
 func (n Notify) Delivers() bool { return n.SignalMode.Delivers() }
@@ -326,29 +338,43 @@ func LoadFrom(lookup helper.LookupFunc, opts ...Option) (*Config, error) {
 		},
 
 		Notify: Notify{
-			SignalMode:         l.signalMode("SIGNAL_MODE"),
-			FCMProjectId:       l.optionalString("FCM_PROJECT_ID", ""),
-			FCMCredentialsFile: l.optionalString("FCM_CREDENTIALS_FILE", ""),
+			SignalMode:      l.signalMode("SIGNAL_MODE"),
+			VAPIDPublicKey:  l.optionalString("VAPID_PUBLIC_KEY", ""),
+			VAPIDPrivateKey: l.optionalString("VAPID_PRIVATE_KEY", ""),
+			VAPIDSubject:    l.optionalString("VAPID_SUBJECT", ""),
 		},
 	}
 
 	// A mode that claims to deliver and cannot is worse than one that says it
 	// will not: the first looks like it is working.
 	if cfg.Notify.Delivers() {
-		if cfg.Notify.FCMProjectId == "" {
-			l.missing = append(l.missing, "FCM_PROJECT_ID")
+		if cfg.Notify.VAPIDPublicKey == "" {
+			l.missing = append(l.missing, "VAPID_PUBLIC_KEY")
 		}
-		if cfg.Notify.FCMCredentialsFile == "" {
-			l.missing = append(l.missing, "FCM_CREDENTIALS_FILE")
+		if cfg.Notify.VAPIDPrivateKey == "" {
+			l.missing = append(l.missing, "VAPID_PRIVATE_KEY")
+		}
+		if cfg.Notify.VAPIDSubject == "" {
+			l.missing = append(l.missing, "VAPID_SUBJECT")
 		}
 	}
 
-	// Deliberately not "and a device token". The phone registers itself after
+	// Deliberately not "and a subscription". The phone registers itself after
 	// the app is installed, so a deployment that refused to start without one
 	// could never reach the state where one exists.
 	l.rejectRetired(retiredDeviceToken,
-		"the device token is now registered by the app through POST /api/v1/device "+
+		"the device is now registered by the app through POST /api/v1/device "+
 			"and stored in the devices table; remove it")
+
+	// FCM is gone. A deployment carrying its configuration would start, look
+	// configured for delivery, and deliver over something else entirely — or,
+	// in silent mode, look ready to deliver when nothing is.
+	for _, retired := range retiredFCM {
+		l.rejectRetired(retired,
+			"FCM was replaced by Web Push in phase 09b (ADR 0028); this does nothing. "+
+				"Set VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY and VAPID_SUBJECT instead, "+
+				"and delete the service account key from this host")
+	}
 
 	if err := l.err(); err != nil {
 		return nil, err
@@ -370,6 +396,12 @@ const retiredNotifyEnabled = "NOTIFY_ENABLED"
 // for the same reason: a stale .env should fail loudly rather than leave
 // somebody believing the token in it is the one being used.
 const retiredDeviceToken = "FCM_DEVICE_TOKEN"
+
+// retiredFCM are the variables Web Push replaced. Rejected rather than
+// ignored: a deployment holding them looks configured for a transport it no
+// longer has, which is exactly the state this system is built to make
+// impossible to be in without knowing.
+var retiredFCM = []string{"FCM_PROJECT_ID", "FCM_CREDENTIALS_FILE"}
 
 // rejectRetired reports a variable that no longer does anything, with what to
 // do instead. Ignoring it silently is what leaves an operator reading a value

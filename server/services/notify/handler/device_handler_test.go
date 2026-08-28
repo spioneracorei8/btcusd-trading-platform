@@ -18,7 +18,20 @@ import (
 	_notify_us "github.com/spioneracorei8/btcusd-trading-platform/server/services/notify/usecase"
 )
 
-const aToken = "fMEP0vJqSk6:APA91bHabcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOP"
+const (
+	anEndpoint = "https://web.push.apple.com/QCyaSPqNfMVEP0vJqSk6abcdefghijklmnop0123456789"
+	aP256dh    = "BFtx1cJ8xVQ7Zo3PZ5Vv0qKQpXqZ5RmH8t3wQ2sK9LmN4pR7yTvW1xYzA2bC3dE4fG5hI6jK7lM8nO9pQ0rS1tU"
+	anAuth     = "kZ8xQvN3mLp7RtY2wS5dFg"
+
+	// aVAPIDKey is what the app subscribes against. Public, and served.
+	aVAPIDKey = "BDLFBrIHg9mGNteU0m9p-FKeovhMbMUR4dBwQf3kd1P7LtzaQ4qtDFr66"
+)
+
+// aSubscription is the body a browser's PushSubscription.toJSON() produces.
+func aSubscription() string {
+	return `{"endpoint":"` + anEndpoint + `","keys":{"p256dh":"` + aP256dh +
+		`","auth":"` + anAuth + `"}}`
+}
 
 func quiet() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
 
@@ -62,11 +75,18 @@ func (d *deviceStore) DeleteDevice(context.Context) (bool, error) {
 }
 
 func handlerFor(store *deviceStore, mode constants.SignalMode) notify.DeviceHandler {
+	return _notify_handler.NewDeviceHandlerImpl(
+		mustDeviceUsecase(nil, store), quiet(), mode, aVAPIDKey)
+}
+
+// mustDeviceUsecase layers the real usecase over the fake store, so a handler
+// test cannot accept a registration production would refuse.
+func mustDeviceUsecase(_ *testing.T, store *deviceStore) notify.DeviceUsecase {
 	usecase, err := _notify_us.NewDeviceUsecaseImpl(store, quiet())
 	if err != nil {
 		panic(err)
 	}
-	return _notify_handler.NewDeviceHandlerImpl(usecase, quiet(), mode)
+	return usecase
 }
 
 func post(t *testing.T, h notify.DeviceHandler, body string) (*httptest.ResponseRecorder, map[string]json.RawMessage) {
@@ -88,39 +108,48 @@ func decode(t *testing.T, recorder *httptest.ResponseRecorder) map[string]json.R
 	return body
 }
 
-// TestTheTokenIsNeverEchoedBack.
+// carriesNothingSecret fails if a response body contains any part of the
+// registered subscription.
+func carriesNothingSecret(t *testing.T, what, body string) {
+	t.Helper()
+	for name, secret := range map[string]string{
+		"endpoint": anEndpoint, "p256dh": aP256dh, "auth": anAuth,
+	} {
+		if strings.Contains(body, secret) {
+			t.Errorf("%s carries the %s:\n%s", what, name, body)
+		}
+	}
+}
+
+// TestTheSubscriptionIsNeverEchoedBack.
 //
 // # What this prevents
 //
 // There is no authentication in front of this endpoint — the network is the
-// boundary (ADR 0024). The registration token is the one credential in this
+// boundary (ADR 0024). The subscription is the one thing in this
 // system that lets anything push to the owner's phone, and an endpoint that
 // returned it would hand it to anything that could reach the port. The app
-// already has the token; nothing needs it back.
-func TestTheTokenIsNeverEchoedBack(t *testing.T) {
+// already has it; nothing needs it back.
+func TestTheSubscriptionIsNeverEchoedBack(t *testing.T) {
 	store := &deviceStore{}
 	h := handlerFor(store, constants.SignalModeNotify)
 
-	recorder, _ := post(t, h, `{"token":"`+aToken+`","platform":"android","label":"Pixel 7a"}`)
+	recorder, _ := post(t, h,
+		`{"endpoint":"`+anEndpoint+`","keys":{"p256dh":"`+aP256dh+`","auth":"`+anAuth+
+			`"},"platform":"web","label":"iPhone 14"}`)
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("status %d, want 200: %s", recorder.Code, recorder.Body)
 	}
-	if strings.Contains(recorder.Body.String(), aToken) {
-		t.Errorf("the registration response carries the token:\n%s", recorder.Body)
-	}
+	carriesNothingSecret(t, "the registration response", recorder.Body.String())
 
 	// And the same on the read and the delete.
 	read := httptest.NewRecorder()
 	h.Device(read, httptest.NewRequest(http.MethodGet, "/api/v1/device", nil))
-	if strings.Contains(read.Body.String(), aToken) {
-		t.Errorf("GET carries the token:\n%s", read.Body)
-	}
+	carriesNothingSecret(t, "GET", read.Body.String())
 
 	removed := httptest.NewRecorder()
 	h.ForgetDevice(removed, httptest.NewRequest(http.MethodDelete, "/api/v1/device", nil))
-	if strings.Contains(removed.Body.String(), aToken) {
-		t.Errorf("DELETE carries the token:\n%s", removed.Body)
-	}
+	carriesNothingSecret(t, "DELETE", removed.Body.String())
 }
 
 // TestSilentModeSaysSoOnRegistration.
@@ -131,7 +160,7 @@ func TestTheTokenIsNeverEchoedBack(t *testing.T) {
 // following fortnight.
 func TestSilentModeSaysSoOnRegistration(t *testing.T) {
 	_, body := post(t, handlerFor(&deviceStore{}, constants.SignalModeSilent),
-		`{"token":"`+aToken+`"}`)
+		aSubscription())
 
 	var mode, note string
 	if err := json.Unmarshal(body["delivery_mode"], &mode); err != nil {
@@ -152,7 +181,7 @@ func TestSilentModeSaysSoOnRegistration(t *testing.T) {
 // TestNotifyModeWithARegistrationSaysAlertsWillArrive.
 func TestNotifyModeWithARegistrationSaysAlertsWillArrive(t *testing.T) {
 	_, body := post(t, handlerFor(&deviceStore{}, constants.SignalModeNotify),
-		`{"token":"`+aToken+`"}`)
+		aSubscription())
 
 	var note string
 	if err := json.Unmarshal(body["note"], &note); err != nil {
@@ -195,17 +224,73 @@ func TestNothingRegisteredIsAnAnswerRatherThanAFourOhFour(t *testing.T) {
 	}
 }
 
-// TestPlatformDefaultsToAndroid, which is the only one phase 09 builds for. An
-// app that omits the field must not be refused.
-func TestPlatformDefaultsToAndroid(t *testing.T) {
+// TestPlatformDefaultsToWeb, which is what an installed PWA is and the only
+// thing this deployment produces. An app that omits the field must not be
+// refused — the browser's PushSubscription.toJSON() does not include one, and
+// posting exactly what the browser handed over is the point.
+func TestPlatformDefaultsToWeb(t *testing.T) {
 	store := &deviceStore{}
-	post(t, handlerFor(store, constants.SignalModeNotify), `{"token":"`+aToken+`"}`)
+	post(t, handlerFor(store, constants.SignalModeNotify), aSubscription())
 
 	if len(store.registered) != 1 {
 		t.Fatalf("registered %d devices, want 1", len(store.registered))
 	}
-	if got := store.registered[0].Platform; got != constants.DevicePlatformAndroid {
-		t.Errorf("platform = %q, want android", got)
+	if got := store.registered[0].Platform; got != constants.DevicePlatformWeb {
+		t.Errorf("platform = %q, want web", got)
+	}
+}
+
+/*
+TestTheVAPIDKeyIsServedEvenWithNothingRegistered.
+
+# What this prevents
+
+The app cannot subscribe without the public key, and it cannot register before
+it has subscribed. So the one call it makes first — GET, with nothing
+registered yet — is the call that has to carry it. Serving it only alongside an
+existing registration would be a loop with no way in: no key, so no
+subscription, so no registration, so no key.
+
+It is served rather than built into the app so that rotating the pair does not
+need a rebuild.
+*/
+func TestTheVAPIDKeyIsServedEvenWithNothingRegistered(t *testing.T) {
+	h := handlerFor(&deviceStore{}, constants.SignalModeNotify)
+
+	read := httptest.NewRecorder()
+	h.Device(read, httptest.NewRequest(http.MethodGet, "/api/v1/device", nil))
+
+	var body map[string]json.RawMessage
+	if err := json.Unmarshal(read.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	var key string
+	if err := json.Unmarshal(body["vapid_public_key"], &key); err != nil {
+		t.Fatalf("nothing to subscribe against on an unregistered GET: %v\n%s", err, read.Body)
+	}
+	if key != aVAPIDKey {
+		t.Errorf("vapid_public_key = %q, want the configured key", key)
+	}
+}
+
+/*
+TestSilentModeServesNoKeyToSubscribeWith.
+
+A deployment that sends nothing has no VAPID pair configured, and the empty
+field is the honest answer: there is nothing to subscribe to here. The app
+reads that rather than subscribing against an empty string and getting an error
+from the browser about an invalid application server key.
+*/
+func TestSilentModeServesNoKeyToSubscribeWith(t *testing.T) {
+	h := _notify_handler.NewDeviceHandlerImpl(
+		mustDeviceUsecase(t, &deviceStore{}), quiet(), constants.SignalModeSilent, "")
+
+	read := httptest.NewRecorder()
+	h.Device(read, httptest.NewRequest(http.MethodGet, "/api/v1/device", nil))
+
+	if strings.Contains(read.Body.String(), "vapid_public_key") {
+		t.Errorf("silent mode offered a key to subscribe with:\n%s", read.Body)
 	}
 }
 
@@ -216,12 +301,15 @@ func TestPlatformDefaultsToAndroid(t *testing.T) {
 // again.
 func TestABadRequestIsFourHundredAndNotFiveHundred(t *testing.T) {
 	for name, body := range map[string]string{
-		"not json":           `{`,
-		"no token":           `{"platform":"android"}`,
-		"empty token":        `{"token":""}`,
-		"unknown platform":   `{"token":"` + aToken + `","platform":"blackberry"}`,
-		"token with a space": `{"token":"abc def"}`,
-		"an oversized body":  `{"token":"` + strings.Repeat("a", 9000) + `"}`,
+		"not json":              `{`,
+		"no subscription":       `{"platform":"web"}`,
+		"empty endpoint":        `{"endpoint":"","keys":{"p256dh":"k","auth":"a"}}`,
+		"no keys":               `{"endpoint":"` + anEndpoint + `"}`,
+		"only one key":          `{"endpoint":"` + anEndpoint + `","keys":{"p256dh":"k"}}`,
+		"unknown platform":      `{"endpoint":"` + anEndpoint + `","keys":{"p256dh":"k","auth":"a"},"platform":"blackberry"}`,
+		"endpoint with a space": `{"endpoint":"https://push/a b","keys":{"p256dh":"k","auth":"a"}}`,
+		"a plain http endpoint": `{"endpoint":"http://web.push.apple.com/Q","keys":{"p256dh":"k","auth":"a"}}`,
+		"an oversized body":     `{"endpoint":"` + strings.Repeat("a", 9000) + `"}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			store := &deviceStore{}
@@ -259,7 +347,8 @@ func TestABadRequestIsFourHundredAndNotFiveHundred(t *testing.T) {
 // app nothing about what they sent.
 func TestARejectedPlatformNamesWhatWasSent(t *testing.T) {
 	recorder, _ := post(t, handlerFor(&deviceStore{}, constants.SignalModeNotify),
-		`{"token":"`+aToken+`","platform":"blackberry"}`)
+		`{"endpoint":"`+anEndpoint+`","keys":{"p256dh":"`+aP256dh+`","auth":"`+anAuth+
+			`"},"platform":"blackberry"}`)
 
 	if recorder.Code != http.StatusBadRequest {
 		t.Fatalf("status %d, want 400", recorder.Code)
@@ -274,18 +363,19 @@ func TestARejectedPlatformNamesWhatWasSent(t *testing.T) {
 
 // TestAnOversizedBodyIsRefusedRatherThanRead.
 //
-// The token has its own length bound in the usecase, so a huge *token* is
+// The endpoint has its own length bound in the usecase, so a huge *endpoint* is
 // refused whether or not the body is capped. What the cap is for is everything
 // else: a body that is mostly label, or mostly fields nothing reads, would
 // otherwise be read into memory in full and then quietly truncated into a
 // successful registration.
 //
-// The label here is well over the body cap and the token is ordinary, so this
+// The label here is well over the body cap and the subscription is ordinary, so this
 // fails only if the body is bounded before it is parsed.
 func TestAnOversizedBodyIsRefusedRatherThanRead(t *testing.T) {
 	store := &deviceStore{}
 	recorder, _ := post(t, handlerFor(store, constants.SignalModeNotify),
-		`{"token":"`+aToken+`","label":"`+strings.Repeat("x", 9000)+`"}`)
+		`{"endpoint":"`+anEndpoint+`","keys":{"p256dh":"`+aP256dh+`","auth":"`+anAuth+
+			`"},"label":"`+strings.Repeat("x", 9000)+`"}`)
 
 	if recorder.Code != http.StatusBadRequest {
 		t.Fatalf("status %d, want 400: a 9KB body was accepted", recorder.Code)
@@ -301,7 +391,7 @@ func TestAnOversizedBodyIsRefusedRatherThanRead(t *testing.T) {
 // TestAStoreFailureIsFiveHundredAndSaysNothingElse.
 func TestAStoreFailureIsFiveHundredAndSaysNothingElse(t *testing.T) {
 	store := &deviceStore{err: context.DeadlineExceeded}
-	recorder, _ := post(t, handlerFor(store, constants.SignalModeNotify), `{"token":"`+aToken+`"}`)
+	recorder, _ := post(t, handlerFor(store, constants.SignalModeNotify), aSubscription())
 
 	if recorder.Code != http.StatusInternalServerError {
 		t.Fatalf("status %d, want 500", recorder.Code)

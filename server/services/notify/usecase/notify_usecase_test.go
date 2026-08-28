@@ -209,10 +209,23 @@ func deviceUsecaseOver(t *testing.T, store *registeredDevices) notify.DeviceUsec
 	return usecase
 }
 
-func withDevice(token string) *registeredDevices {
+func withDevice(endpoint string) *registeredDevices {
 	return &registeredDevices{device: &models.Device{
-		Token: token, Platform: constants.DevicePlatformAndroid,
+		Subscription: subscribedAt(endpoint),
+		Platform:     constants.DevicePlatformWeb,
 	}}
+}
+
+// deviceEndpoint is where the fixture's registered phone is subscribed.
+const deviceEndpoint = "https://web.push.apple.com/the-registered-phone"
+
+// subscribedAt is a usable subscription pointing at endpoint. The keys are
+// constant: nothing here encrypts, and two subscriptions are told apart by
+// where they point, which is also how the production code identifies them.
+func subscribedAt(endpoint string) models.PushSubscription {
+	return models.PushSubscription{
+		Endpoint: endpoint, P256dh: "a-public-key", Auth: "an-auth-secret",
+	}
 }
 
 func (d *registeredDevices) RegisterDevice(
@@ -269,7 +282,7 @@ type stubSender struct {
 }
 
 func (s *stubSender) Channel() constants.NotificationChannel {
-	return constants.NotificationChannelFCM
+	return constants.NotificationChannelWebPush
 }
 
 func (s *stubSender) Send(_ context.Context, m notify.Message) error {
@@ -332,7 +345,7 @@ func buildUsecase(queue notify.NotifyRepository, mode constants.SignalMode) (not
 	if mode.Delivers() {
 		cfg.Sender = &stubSender{}
 		cfg.Signals = &storedSignals{}
-		cfg.Devices = mustDevices(withDevice("device-token"))
+		cfg.Devices = mustDevices(withDevice(deviceEndpoint))
 	}
 	return _notify_us.NewNotifyUsecaseImpl(queue, silentLog(), cfg)
 }
@@ -362,7 +375,7 @@ func newDelivery(t *testing.T, senderErrs ...error) *deliveryFixture {
 	fixture := &deliveryFixture{
 		queue:   &recordingQueue{},
 		sender:  &stubSender{errs: senderErrs},
-		devices: withDevice("device-token"),
+		devices: withDevice(deviceEndpoint),
 		signal:  stored,
 		now:     time.Date(2026, 8, 1, 8, 0, 0, 0, time.UTC),
 	}
@@ -492,7 +505,7 @@ func TestNotifyQueuesTheSignalRatherThanSendingIt(t *testing.T) {
 	if rows[0].SignalId != signal.Id {
 		t.Errorf("the queued row points at %s, want %s", rows[0].SignalId, signal.Id)
 	}
-	if rows[0].Channel != constants.NotificationChannelFCM {
+	if rows[0].Channel != constants.NotificationChannelWebPush {
 		t.Errorf("Channel = %q, want fcm", rows[0].Channel)
 	}
 	if queued.Status != constants.NotificationStatusPending {
@@ -619,8 +632,8 @@ func TestTheAlertQuotesTheReferencePriceAndNotAnEntry(t *testing.T) {
 	}
 	message := f.sender.sent[0]
 
-	if message.Token != "device-token" {
-		t.Errorf("Token = %q, want the configured device", message.Token)
+	if message.To.Endpoint != deviceEndpoint {
+		t.Errorf("To.Endpoint = %q, want the configured device", message.To.Endpoint)
 	}
 	for _, want := range []string{"BTCUSDT", "4h", "LONG"} {
 		if !strings.Contains(message.Title, want) {
@@ -798,7 +811,7 @@ func TestOneBadNotificationDoesNotStopTheQueue(t *testing.T) {
 	}}
 	usecase, err := _notify_us.NewNotifyUsecaseImpl(f.queue, silentLog(), _notify_us.Config{
 		Mode: constants.SignalModeNotify, Sender: sender, Signals: signals,
-		Devices: mustDevices(withDevice("device-token")), Now: func() time.Time { return f.now },
+		Devices: mustDevices(withDevice(deviceEndpoint)), Now: func() time.Time { return f.now },
 	})
 	if err != nil {
 		t.Fatalf("NewNotifyUsecaseImpl() returned error: %v", err)
@@ -830,7 +843,7 @@ func TestASignalThatNoLongerExistsIsNotRetriedForever(t *testing.T) {
 	usecase, err := _notify_us.NewNotifyUsecaseImpl(f.queue, silentLog(), _notify_us.Config{
 		Mode: constants.SignalModeNotify, Sender: f.sender,
 		Signals: &storedSignals{byId: map[uuid.UUID]models.Signal{}},
-		Devices: mustDevices(withDevice("device-token")), Now: func() time.Time { return f.now },
+		Devices: mustDevices(withDevice(deviceEndpoint)), Now: func() time.Time { return f.now },
 	})
 	if err != nil {
 		t.Fatalf("NewNotifyUsecaseImpl() returned error: %v", err)
@@ -885,7 +898,7 @@ func TestSilentDeliversNothingEvenWithAQueueFullOfRows(t *testing.T) {
 func TestNotifyModeWithNothingToSendThroughIsRefused(t *testing.T) {
 	full := _notify_us.Config{
 		Mode: constants.SignalModeNotify, Sender: &stubSender{},
-		Signals: &storedSignals{}, Devices: mustDevices(withDevice("device-token")),
+		Signals: &storedSignals{}, Devices: mustDevices(withDevice(deviceEndpoint)),
 	}
 
 	for name, damage := range map[string]func(*_notify_us.Config){
@@ -972,7 +985,8 @@ func TestAWaitingAlertDeliversOnceAPhoneRegisters(t *testing.T) {
 	}
 
 	if _, err := f.devices.RegisterDevice(context.Background(), models.Device{
-		Token: "registered-later", Platform: constants.DevicePlatformAndroid,
+		Subscription: subscribedAt("https://web.push.apple.com/registered-later"),
+		Platform:     constants.DevicePlatformWeb,
 	}); err != nil {
 		t.Fatalf("RegisterDevice() returned error: %v", err)
 	}
@@ -984,22 +998,25 @@ func TestAWaitingAlertDeliversOnceAPhoneRegisters(t *testing.T) {
 	if f.queue.row(f.id).Status != constants.NotificationStatusSent {
 		t.Errorf("the row is %q, want sent", f.queue.row(f.id).Status)
 	}
-	if got := f.sender.sent[0].Token; got != "registered-later" {
-		t.Errorf("delivered to %q, want the token registered after the wait", got)
+	if got := f.sender.sent[0].To.Endpoint; got != "https://web.push.apple.com/registered-later" {
+		t.Errorf("delivered to %q, want the subscription registered after the wait", got)
 	}
 }
 
-// TestTheTokenIsReadAtSendTimeRatherThanHeldFromStartUp.
+// TestTheSubscriptionIsReadAtSendTimeRatherThanHeldFromStartUp.
 //
-// FCM rotates tokens and the app re-registers. A usecase that captured the
-// token when it was built would go on sending to the retired one — which
-// Firebase rejects as unregistered, which the worker correctly treats as
-// permanent, which means alerts stop for good after a rotation nobody saw.
-func TestTheTokenIsReadAtSendTimeRatherThanHeldFromStartUp(t *testing.T) {
+// A push service expires a subscription whenever it likes, and a reinstall or
+// cleared site data replaces it outright; the app re-registers on every launch.
+// A usecase that captured the subscription when it was built would go on
+// sending to the retired one — which the push service rejects as gone, which
+// the worker correctly treats as permanent, which means alerts stop for good
+// after a change nobody saw.
+func TestTheSubscriptionIsReadAtSendTimeRatherThanHeldFromStartUp(t *testing.T) {
 	f := newDelivery(t)
 
+	const rotated = "https://web.push.apple.com/rotated-subscription"
 	if _, err := f.devices.RegisterDevice(context.Background(), models.Device{
-		Token: "rotated-token", Platform: constants.DevicePlatformAndroid,
+		Subscription: subscribedAt(rotated), Platform: constants.DevicePlatformWeb,
 	}); err != nil {
 		t.Fatalf("RegisterDevice() returned error: %v", err)
 	}
@@ -1007,9 +1024,9 @@ func TestTheTokenIsReadAtSendTimeRatherThanHeldFromStartUp(t *testing.T) {
 	if report := f.deliver(t); report.Sent != 1 {
 		t.Fatalf("Sent = %d, want 1: %+v", report.Sent, report)
 	}
-	if got := f.sender.sent[0].Token; got != "rotated-token" {
-		t.Fatalf("delivered to %q, want the token registered after the usecase was built; "+
-			"the token must be read per delivery, not captured at start-up", got)
+	if got := f.sender.sent[0].To.Endpoint; got != rotated {
+		t.Fatalf("delivered to %q, want the subscription registered after the usecase was "+
+			"built; it must be read per delivery, not captured at start-up", got)
 	}
 }
 

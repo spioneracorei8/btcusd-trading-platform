@@ -79,6 +79,16 @@ const (
 	// arbitrary amount of somebody else's text into it.
 	NotifyErrorBodyLimit = 2048
 
+	// DefaultWebPushTTL is how long a push service holds a message for a phone
+	// that is off or out of range.
+	//
+	// Fifteen minutes, matched to what the alert is for. This is a scalping
+	// signal with a stop and a target; one delivered an hour after the bar
+	// closed is not news, it is a distraction that has to be checked against
+	// the chart before it can be dismissed. Letting the push service drop it
+	// is better than delivering it late.
+	DefaultWebPushTTL = 15 * time.Minute
+
 	// DefaultNotifyInterval is how often the delivery queue is swept.
 	DefaultNotifyInterval = 10 * time.Second
 

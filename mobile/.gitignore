@@ -43,7 +43,6 @@ yarn-error.*
 # The Firebase config the app is built against. It identifies the project and
 # is not a secret in the way the service account key is — but it is per
 # deployment, and a committed one is the wrong project's.
-google-services.json
 
 # Screenshot audit output (src/theme/audit).
 screenshots/

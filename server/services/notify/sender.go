@@ -18,11 +18,11 @@ import (
 //
 // # Why permanent and transient are told apart
 //
-// A device token that was uninstalled is gone, and a malformed payload will be
-// malformed on every attempt. Spending five tries and several minutes of
-// backoff on either one delays every alert queued behind it, and then records
-// "gave up after 5 attempts" — which reads like a network problem and sends
-// whoever investigates to the wrong place.
+// A subscription the push service has expired is gone, and a malformed payload
+// will be malformed on every attempt. Spending five tries and several minutes
+// of backoff on either one delays every alert queued behind it, and then
+// records "gave up after 5 attempts" — which reads like a network problem and
+// sends whoever investigates to the wrong place.
 var ErrUndeliverable = errors.New("notify: the message cannot be delivered")
 
 // Sender delivers one message to the owner's device.
@@ -41,8 +41,8 @@ type Sender interface {
 
 // Message is what the owner sees, built from a signal.
 type Message struct {
-	// Token is the device to deliver to.
-	Token string
+	// To is the subscription to deliver to.
+	To models.PushSubscription
 
 	Title string
 	Body  string
@@ -66,14 +66,14 @@ type Message struct {
 // A reason that will not parse does not stop the alert. The owner losing a
 // notification because a jsonb column disagreed with this struct would be the
 // wrong trade — the trigger line is dropped and the rest is sent.
-func BuildMessage(token string, s models.Signal) Message {
+func BuildMessage(to models.PushSubscription, s models.Signal) Message {
 	trigger := ""
 	if reason, err := signal.DecodeReason(s.Reason); err == nil {
 		trigger = reason.Trigger
 	}
 
 	return Message{
-		Token: token,
+		To: to,
 		Title: fmt.Sprintf("%s %s %s",
 			s.Symbol, s.Timeframe, strings.ToUpper(s.Direction.String())),
 		Body: messageBody(s, trigger),

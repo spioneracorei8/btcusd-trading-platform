@@ -57,7 +57,7 @@ func TestQueuingTheSameSignalTwiceQueuesItOnce(t *testing.T) {
 
 	signal := storeSignal(t, pool, symbol, time.Date(2026, 8, 1, 4, 0, 0, 0, time.UTC))
 	repo := _notify_repo.NewNotifyRepoImpl(pool)
-	row := models.Notification{SignalId: signal.Id, Channel: constants.NotificationChannelFCM}
+	row := models.Notification{SignalId: signal.Id, Channel: constants.NotificationChannelWebPush}
 
 	first, queued, err := repo.InsertNotification(ctx, row)
 	if err != nil {
@@ -119,7 +119,7 @@ func TestThePendingQueueDrainsOldestFirst(t *testing.T) {
 	for i := range 3 {
 		signal := storeSignal(t, pool, symbol, base.Add(time.Duration(i)*4*time.Hour))
 		queued, ok, err := repo.InsertNotification(ctx, models.Notification{
-			SignalId: signal.Id, Channel: constants.NotificationChannelFCM,
+			SignalId: signal.Id, Channel: constants.NotificationChannelWebPush,
 		})
 		if err != nil || !ok {
 			t.Fatalf("signal %d: InsertNotification() = %v, %v", i, ok, err)
@@ -184,7 +184,7 @@ func TestABackoffOutlivesTheProcessThatDecidedIt(t *testing.T) {
 	signal := storeSignal(t, pool, symbol, time.Date(2026, 8, 3, 4, 0, 0, 0, time.UTC))
 
 	queued, ok, err := repo.InsertNotification(ctx, models.Notification{
-		SignalId: signal.Id, Channel: constants.NotificationChannelFCM,
+		SignalId: signal.Id, Channel: constants.NotificationChannelWebPush,
 	})
 	if err != nil || !ok {
 		t.Fatalf("InsertNotification() = %v, %v", ok, err)
@@ -236,7 +236,7 @@ func TestASentNotificationLeavesTheQueue(t *testing.T) {
 		t.Helper()
 		signal := storeSignal(t, pool, symbol, base.Add(time.Duration(i)*4*time.Hour))
 		queued, ok, err := repo.InsertNotification(ctx, models.Notification{
-			SignalId: signal.Id, Channel: constants.NotificationChannelFCM,
+			SignalId: signal.Id, Channel: constants.NotificationChannelWebPush,
 		})
 		if err != nil || !ok {
 			t.Fatalf("InsertNotification() = %v, %v", ok, err)

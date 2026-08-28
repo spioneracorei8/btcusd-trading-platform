@@ -127,10 +127,10 @@ services:
       # the old name, so both services must carry the same value or one starts
       # and the other does not.
       SIGNAL_MODE: ${SIGNAL_MODE:-silent}
-      FCM_PROJECT_ID: ${FCM_PROJECT_ID:-}
-      # A path INSIDE the container, which is why it is not the host path. The
-      # collector mounts FCM_CREDENTIALS_HOST_FILE here read-only; see below.
-      FCM_CREDENTIALS_FILE: ${FCM_CREDENTIALS_FILE:-/run/secrets/fcm-service-account.json}
+      # The api serves the public half to the app, which cannot subscribe
+      # without it. It does not deliver, so it never needs the private half —
+      # and a process that cannot push is a process whose compromise cannot.
+      VAPID_PUBLIC_KEY: ${VAPID_PUBLIC_KEY:-}
     depends_on:
       postgres:
         condition: service_healthy
@@ -179,16 +179,17 @@ services:
       # the old name, so both services must carry the same value or one starts
       # and the other does not.
       SIGNAL_MODE: ${SIGNAL_MODE:-silent}
-      FCM_PROJECT_ID: ${FCM_PROJECT_ID:-}
-      # A path INSIDE the container, which is why it is not the host path. The
-      # collector mounts FCM_CREDENTIALS_HOST_FILE here read-only; see below.
-      FCM_CREDENTIALS_FILE: ${FCM_CREDENTIALS_FILE:-/run/secrets/fcm-service-account.json}
-    # No credentials are mounted here. SIGNAL_MODE=silent is the default and
-    # never reads the key, and a bind mount whose source does not exist makes
-    # Docker create a directory in its place — which would then fail the read
-    # as "is a directory" for everyone who never asked to deliver anything.
-    #
-    # A notify deployment adds docker-compose.notify.yml, which mounts it.
+      # The collector is the only process that delivers, so it is the only one
+      # that gets the private key.
+      #
+      # Nothing is mounted: Web Push needs two values and no file, which is why
+      # the notify compose overlay went with FCM. A bind mount whose source did
+      # not exist used to make Docker create a directory in its place, and the
+      # read then failed as "is a directory" for everyone who never asked to
+      # deliver anything.
+      VAPID_PUBLIC_KEY: ${VAPID_PUBLIC_KEY:-}
+      VAPID_PRIVATE_KEY: ${VAPID_PRIVATE_KEY:-}
+      VAPID_SUBJECT: ${VAPID_SUBJECT:-}
     depends_on:
       postgres:
         condition: service_healthy

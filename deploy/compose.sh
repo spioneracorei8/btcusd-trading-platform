@@ -14,8 +14,9 @@
 #   deploy/compose.sh up -d --remove-orphans
 #   deploy/compose.sh down
 #
-# The notify overlay is not handled here. It is applied by hand today, and
-# phase 09b part C replaces the transport it mounts a key for.
+# There is no notify overlay any more. It existed to mount an FCM service
+# account key; Web Push needs two environment variables and no file, so the
+# overlay went with the transport (phase 09b part C).
 set -euo pipefail
 
 APP_DIR=${APP_DIR:-/opt/btcusd}

@@ -17,8 +17,8 @@ import (
 )
 
 const (
-	firstToken  = "fMEP0vJqSk6:APA91bHfirst_registration_token_0123456789ABCDEFGH"
-	secondToken = "cXqR2mNpTz9:APA91bHsecond_registration_token_0123456789ABCDEFG"
+	firstEndpoint  = "https://web.push.apple.com/QFirstSubscription0123456789ABCDEFGH"
+	secondEndpoint = "https://web.push.apple.com/QSecondSubscription0123456789ABCDEF"
 )
 
 // deviceRepo returns a repository over an empty devices table.
@@ -60,12 +60,16 @@ func TestOnlyOneDeviceCanBeRegistered(t *testing.T) {
 	defer cancel()
 
 	if _, err := repo.RegisterDevice(ctx, models.Device{
-		Token: firstToken, Platform: constants.DevicePlatformAndroid, Label: "old phone",
+		Subscription: models.PushSubscription{
+			Endpoint: firstEndpoint, P256dh: "a-public-key", Auth: "an-auth-secret",
+		}, Platform: constants.DevicePlatformWeb, Label: "old phone",
 	}); err != nil {
 		t.Fatalf("the first registration failed: %v", err)
 	}
 	if _, err := repo.RegisterDevice(ctx, models.Device{
-		Token: secondToken, Platform: constants.DevicePlatformAndroid, Label: "new phone",
+		Subscription: models.PushSubscription{
+			Endpoint: secondEndpoint, P256dh: "a-public-key", Auth: "an-auth-secret",
+		}, Platform: constants.DevicePlatformWeb, Label: "new phone",
 	}); err != nil {
 		t.Fatalf("the second registration failed: %v", err)
 	}
@@ -82,8 +86,9 @@ func TestOnlyOneDeviceCanBeRegistered(t *testing.T) {
 	if err != nil {
 		t.Fatalf("FetchDevice() returned error: %v", err)
 	}
-	if current.Token != secondToken {
-		t.Errorf("the stored token is %q, want the second registration", current.MaskedToken())
+	if current.Subscription.Endpoint != secondEndpoint {
+		t.Errorf("the stored endpoint is %q, want the second registration",
+			current.MaskedEndpoint())
 	}
 	if current.Label != "new phone" {
 		t.Errorf("label = %q, want the second registration's", current.Label)
@@ -103,13 +108,16 @@ func TestASecondRowIsRefusedByTheDatabase(t *testing.T) {
 	defer cancel()
 
 	if _, err := repo.RegisterDevice(ctx, models.Device{
-		Token: firstToken, Platform: constants.DevicePlatformAndroid,
+		Subscription: models.PushSubscription{
+			Endpoint: firstEndpoint, P256dh: "a-public-key", Auth: "an-auth-secret",
+		}, Platform: constants.DevicePlatformWeb,
 	}); err != nil {
 		t.Fatalf("register: %v", err)
 	}
 
 	_, err := pool.Exec(ctx,
-		"INSERT INTO devices (id, token, platform) VALUES (2, $1, 'android')", secondToken)
+		"INSERT INTO devices (id, endpoint, p256dh, auth, platform) "+
+			"VALUES (2, $1, 'k', 'a', 'web')", secondEndpoint)
 	if err == nil {
 		t.Fatal("a second device row was accepted")
 	}
@@ -128,7 +136,9 @@ func TestReRegisteringTheSameTokenKeepsWhenItFirstArrived(t *testing.T) {
 	defer cancel()
 
 	first, err := repo.RegisterDevice(ctx, models.Device{
-		Token: firstToken, Platform: constants.DevicePlatformAndroid,
+		Subscription: models.PushSubscription{
+			Endpoint: firstEndpoint, P256dh: "a-public-key", Auth: "an-auth-secret",
+		}, Platform: constants.DevicePlatformWeb,
 	})
 	if err != nil {
 		t.Fatalf("register: %v", err)
@@ -140,14 +150,16 @@ func TestReRegisteringTheSameTokenKeepsWhenItFirstArrived(t *testing.T) {
 	time.Sleep(10 * time.Millisecond)
 
 	again, err := repo.RegisterDevice(ctx, models.Device{
-		Token: firstToken, Platform: constants.DevicePlatformAndroid,
+		Subscription: models.PushSubscription{
+			Endpoint: firstEndpoint, P256dh: "a-public-key", Auth: "an-auth-secret",
+		}, Platform: constants.DevicePlatformWeb,
 	})
 	if err != nil {
 		t.Fatalf("re-register: %v", err)
 	}
 
 	if !again.RegisteredAt.Equal(first.RegisteredAt) {
-		t.Errorf("registered_at moved from %s to %s on a refresh of the same token",
+		t.Errorf("registered_at moved from %s to %s on a refresh of the same subscription",
 			first.RegisteredAt, again.RegisteredAt)
 	}
 	if !again.RefreshedAt.After(first.RefreshedAt) {
@@ -167,7 +179,9 @@ func TestADifferentTokenIsANewRegistration(t *testing.T) {
 	defer cancel()
 
 	first, err := repo.RegisterDevice(ctx, models.Device{
-		Token: firstToken, Platform: constants.DevicePlatformAndroid,
+		Subscription: models.PushSubscription{
+			Endpoint: firstEndpoint, P256dh: "a-public-key", Auth: "an-auth-secret",
+		}, Platform: constants.DevicePlatformWeb,
 	})
 	if err != nil {
 		t.Fatalf("register: %v", err)
@@ -176,14 +190,16 @@ func TestADifferentTokenIsANewRegistration(t *testing.T) {
 	time.Sleep(10 * time.Millisecond)
 
 	rotated, err := repo.RegisterDevice(ctx, models.Device{
-		Token: secondToken, Platform: constants.DevicePlatformAndroid,
+		Subscription: models.PushSubscription{
+			Endpoint: secondEndpoint, P256dh: "a-public-key", Auth: "an-auth-secret",
+		}, Platform: constants.DevicePlatformWeb,
 	})
 	if err != nil {
 		t.Fatalf("re-register: %v", err)
 	}
 
 	if !rotated.RegisteredAt.After(first.RegisteredAt) {
-		t.Errorf("registered_at did not move for a different token: %s then %s",
+		t.Errorf("registered_at did not move for a different subscription: %s then %s",
 			first.RegisteredAt, rotated.RegisteredAt)
 	}
 }
@@ -214,7 +230,9 @@ func TestDeletingReportsWhetherThereWasAnything(t *testing.T) {
 	}
 
 	if _, err := repo.RegisterDevice(ctx, models.Device{
-		Token: firstToken, Platform: constants.DevicePlatformAndroid,
+		Subscription: models.PushSubscription{
+			Endpoint: firstEndpoint, P256dh: "a-public-key", Auth: "an-auth-secret",
+		}, Platform: constants.DevicePlatformWeb,
 	}); err != nil {
 		t.Fatalf("register: %v", err)
 	}
@@ -235,7 +253,9 @@ func TestTheStoredTimestampsAreUTC(t *testing.T) {
 	defer cancel()
 
 	registered, err := repo.RegisterDevice(ctx, models.Device{
-		Token: firstToken, Platform: constants.DevicePlatformAndroid,
+		Subscription: models.PushSubscription{
+			Endpoint: firstEndpoint, P256dh: "a-public-key", Auth: "an-auth-secret",
+		}, Platform: constants.DevicePlatformWeb,
 	})
 	if err != nil {
 		t.Fatalf("register: %v", err)
@@ -263,7 +283,9 @@ func TestAnEmptyTokenIsRefusedByTheDatabase(t *testing.T) {
 	defer cancel()
 
 	if _, err := repo.RegisterDevice(ctx, models.Device{
-		Token: "", Platform: constants.DevicePlatformAndroid,
+		Subscription: models.PushSubscription{
+			Endpoint: "", P256dh: "a-public-key", Auth: "an-auth-secret",
+		}, Platform: constants.DevicePlatformWeb,
 	}); err == nil {
 		t.Fatal("an empty token was stored")
 	}
@@ -277,7 +299,9 @@ func TestAnUnknownPlatformIsRefusedByTheDatabase(t *testing.T) {
 	defer cancel()
 
 	if _, err := repo.RegisterDevice(ctx, models.Device{
-		Token: firstToken, Platform: constants.DevicePlatform("blackberry"),
+		Subscription: models.PushSubscription{
+			Endpoint: firstEndpoint, P256dh: "a-public-key", Auth: "an-auth-secret",
+		}, Platform: constants.DevicePlatform("blackberry"),
 	}); err == nil {
 		t.Fatal("an unknown platform was stored")
 	}
@@ -295,12 +319,14 @@ func TestAFailedRegistrationDoesNotQuoteTheToken(t *testing.T) {
 	defer cancel()
 
 	_, err := repo.RegisterDevice(ctx, models.Device{
-		Token: firstToken, Platform: constants.DevicePlatform("blackberry"),
+		Subscription: models.PushSubscription{
+			Endpoint: firstEndpoint, P256dh: "a-public-key", Auth: "an-auth-secret",
+		}, Platform: constants.DevicePlatform("blackberry"),
 	})
 	if err == nil {
 		t.Fatal("it was accepted")
 	}
-	if got := err.Error(); strings.Contains(got, firstToken) {
+	if got := err.Error(); strings.Contains(got, firstEndpoint) {
 		t.Errorf("the error quotes the token:\n%s", got)
 	}
 }

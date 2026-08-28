@@ -29,15 +29,18 @@ func (r *deviceRepository) RegisterDevice(
 	ctx context.Context, d models.Device,
 ) (models.Device, error) {
 	row, err := r.queries.RegisterDevice(ctx, db.RegisterDeviceParams{
-		Token:    d.Token,
+		Endpoint: d.Subscription.Endpoint,
+		P256dh:   d.Subscription.P256dh,
+		Auth:     d.Subscription.Auth,
 		Platform: d.Platform.String(),
 		Label:    d.Label,
 	})
 	if err != nil {
-		// The token itself must not reach the message. A failed insert is
-		// usually a constraint, and a constraint error from pgx quotes the
-		// row it refused.
-		return models.Device{}, fmt.Errorf("register device %s: %w", d.MaskedToken(), err)
+		// The subscription itself must not reach the message. A failed insert
+		// is usually a constraint, and a constraint error from pgx quotes the
+		// row it refused — which here would be the keys anything could push
+		// to this phone with.
+		return models.Device{}, fmt.Errorf("register device %s: %w", d.MaskedEndpoint(), err)
 	}
 	return toDeviceModel(row)
 }
@@ -78,7 +81,11 @@ func toDeviceModel(row db.Device) (models.Device, error) {
 	}
 
 	return models.Device{
-		Token:        row.Token,
+		Subscription: models.PushSubscription{
+			Endpoint: row.Endpoint,
+			P256dh:   row.P256dh,
+			Auth:     row.Auth,
+		},
 		Platform:     platform,
 		Label:        row.Label,
 		RegisteredAt: database.TimeFromTimestamptz(row.RegisteredAt),

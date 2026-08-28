@@ -205,7 +205,8 @@ func (s *Server) Start() error {
 		Stream: _stream_handler.NewStreamHandlerImpl(
 			hub, s.Logger, s.Config.App.StreamOrigins),
 		Devices: _notify_handler.NewDeviceHandlerImpl(
-			deviceUs, s.Logger, s.Config.Notify.SignalMode),
+			deviceUs, s.Logger, s.Config.Notify.SignalMode,
+			s.Config.Notify.VAPIDPublicKey),
 	}
 
 	//==============================================================

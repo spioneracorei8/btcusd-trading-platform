@@ -59,11 +59,13 @@ type DataGap struct {
 
 type Device struct {
 	ID           int32
-	Token        string
 	Platform     string
 	Label        string
 	RegisteredAt pgtype.Timestamptz
 	RefreshedAt  pgtype.Timestamptz
+	Endpoint     string
+	P256dh       string
+	Auth         string
 }
 
 type Notification struct {

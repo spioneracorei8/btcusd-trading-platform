@@ -188,6 +188,13 @@ verify-hypertable: require-db-url ## Prove that candles really is a hypertable
 sqlc: ## Regenerate the sqlc query layer from the migrations
 	cd $(SERVER) && $(SQLC) generate
 
+# Printed as .env lines so the output can be appended rather than transcribed.
+# A key copied by hand is a key with a missing character, and the symptom is a
+# 403 from the push service that reads like a server problem.
+.PHONY: vapid-keys
+vapid-keys: ## Print a fresh VAPID key pair for SIGNAL_MODE=notify
+	@cd $(SERVER) && go run ./vapidkeys
+
 # ---------------------------------------------------------------------------
 # Containers
 # ---------------------------------------------------------------------------

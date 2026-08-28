@@ -94,7 +94,7 @@ func NewNotifyUsecaseImpl(
 		cfg.Now = func() time.Time { return time.Now().UTC() }
 	}
 
-	channel := constants.NotificationChannelFCM
+	channel := constants.NotificationChannelWebPush
 	if cfg.Sender != nil {
 		// The queue row records which sender owns it, so it comes from the
 		// sender rather than from an assumption made here.
@@ -295,7 +295,7 @@ func (u *notifyUsecase) deliver(ctx context.Context, queued models.Notification)
 		return u.retryOrGiveUp(ctx, queued, err)
 	}
 
-	if err := u.cfg.Sender.Send(ctx, notify.BuildMessage(device.Token, signalRow)); err != nil {
+	if err := u.cfg.Sender.Send(ctx, notify.BuildMessage(device.Subscription, signalRow)); err != nil {
 		if errors.Is(err, notify.ErrUndeliverable) {
 			// Retrying will not fix it: an uninstalled token, a malformed
 			// payload. Spending the attempt budget on it would delay every

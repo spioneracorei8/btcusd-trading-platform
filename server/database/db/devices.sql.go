@@ -23,7 +23,7 @@ func (q *Queries) DeleteDevice(ctx context.Context) (int64, error) {
 }
 
 const fetchDevice = `-- name: FetchDevice :one
-SELECT id, token, platform, label, registered_at, refreshed_at FROM devices WHERE id = 1
+SELECT id, platform, label, registered_at, refreshed_at, endpoint, p256dh, auth FROM devices WHERE id = 1
 `
 
 // The registered device, or no row when the phone has never registered.
@@ -32,57 +32,74 @@ func (q *Queries) FetchDevice(ctx context.Context) (Device, error) {
 	var i Device
 	err := row.Scan(
 		&i.ID,
-		&i.Token,
 		&i.Platform,
 		&i.Label,
 		&i.RegisteredAt,
 		&i.RefreshedAt,
+		&i.Endpoint,
+		&i.P256dh,
+		&i.Auth,
 	)
 	return i, err
 }
 
 const registerDevice = `-- name: RegisterDevice :one
-INSERT INTO devices (id, token, platform, label)
-VALUES (1, $1, $2, $3)
+INSERT INTO devices (id, endpoint, p256dh, auth, platform, label)
+VALUES (1, $1, $2, $3,
+        $4, $5)
 ON CONFLICT (id) DO UPDATE
-SET token    = EXCLUDED.token,
+SET endpoint = EXCLUDED.endpoint,
+    p256dh   = EXCLUDED.p256dh,
+    auth     = EXCLUDED.auth,
     platform = EXCLUDED.platform,
     label    = EXCLUDED.label,
     registered_at = CASE
-        WHEN devices.token = EXCLUDED.token THEN devices.registered_at
+        WHEN devices.endpoint = EXCLUDED.endpoint THEN devices.registered_at
         ELSE now()
     END,
     refreshed_at = now()
-RETURNING id, token, platform, label, registered_at, refreshed_at
+RETURNING id, platform, label, registered_at, refreshed_at, endpoint, p256dh, auth
 `
 
 type RegisterDeviceParams struct {
-	Token    string
+	Endpoint string
+	P256dh   string
+	Auth     string
 	Platform string
 	Label    string
 }
 
 // Record the phone this deployment delivers to, replacing whatever was there.
 //
-// Upsert on the singleton row rather than insert-if-absent: FCM rotates
-// tokens, and the app re-registers on every refresh. A statement that
-// refused the second registration would leave the deployment holding a token
-// Firebase has already retired, which fails permanently on the next signal
-// and looks like a broken strategy rather than a stale token.
+// Upsert on the singleton row rather than insert-if-absent: a push
+// subscription expires, and is replaced outright by a reinstall or a browser
+// clearing site data. The app re-subscribes on every launch and posts the
+// result. A statement that refused the second registration would leave the
+// deployment holding a subscription the push service has already retired,
+// which fails permanently on the next signal and looks like a broken strategy
+// rather than a stale registration.
 //
-// registered_at is kept when the token is unchanged and reset when it is not:
-// a refresh of the same token is the same phone still there, a different
-// token is a new registration.
+// registered_at is kept when the endpoint is unchanged and reset when it is
+// not. The endpoint is the identity: the keys are rotated with it, so two
+// registrations sharing an endpoint are the same phone still there.
 func (q *Queries) RegisterDevice(ctx context.Context, arg RegisterDeviceParams) (Device, error) {
-	row := q.db.QueryRow(ctx, registerDevice, arg.Token, arg.Platform, arg.Label)
+	row := q.db.QueryRow(ctx, registerDevice,
+		arg.Endpoint,
+		arg.P256dh,
+		arg.Auth,
+		arg.Platform,
+		arg.Label,
+	)
 	var i Device
 	err := row.Scan(
 		&i.ID,
-		&i.Token,
 		&i.Platform,
 		&i.Label,
 		&i.RegisteredAt,
 		&i.RefreshedAt,
+		&i.Endpoint,
+		&i.P256dh,
+		&i.Auth,
 	)
 	return i, err
 }

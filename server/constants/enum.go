@@ -321,19 +321,22 @@ type DevicePlatform string
 
 // Supported device platforms.
 const (
-	DevicePlatformAndroid DevicePlatform = "android"
+	// DevicePlatformWeb is what an installed PWA is: a browser on an OS,
+	// rather than the OS. It is the only one this deployment produces.
+	DevicePlatformWeb DevicePlatform = "web"
 
-	// DevicePlatformIOS is accepted by the schema and not built for. Phase 09
-	// is Android only — there is no Mac and no developer account — and a
-	// platform nobody can build for must not be silently rejected later by a
-	// check constraint if that changes.
-	DevicePlatformIOS DevicePlatform = "ios"
+	// DevicePlatformAndroid and DevicePlatformIOS are accepted by the schema
+	// and not built for. Neither has a native build (ADR 0028), and a platform
+	// nobody can build for must not be silently rejected later by a check
+	// constraint if that changes.
+	DevicePlatformAndroid DevicePlatform = "android"
+	DevicePlatformIOS     DevicePlatform = "ios"
 )
 
 // Valid reports whether p is a known platform.
 func (p DevicePlatform) Valid() bool {
 	switch p {
-	case DevicePlatformAndroid, DevicePlatformIOS:
+	case DevicePlatformWeb, DevicePlatformAndroid, DevicePlatformIOS:
 		return true
 	default:
 		return false
@@ -348,7 +351,7 @@ func (p DevicePlatform) String() string { return string(p) }
 func ParseDevicePlatform(s string) (DevicePlatform, error) {
 	platform := DevicePlatform(s)
 	if !platform.Valid() {
-		return "", fmt.Errorf("%q is not a device platform; the platforms are android, ios", s)
+		return "", fmt.Errorf("%q is not a device platform; the platforms are web, android, ios", s)
 	}
 	return platform, nil
 }
@@ -357,8 +360,13 @@ func ParseDevicePlatform(s string) (DevicePlatform, error) {
 type NotificationChannel string
 
 // Supported notification channels.
+//
+// One, and it is the transport this deployment actually has. "fcm" appears in
+// rows written before phase 09b and is not written again; the migration that
+// retired it failed everything still pending on it, because a row queued for a
+// transport that no longer exists would wait forever.
 const (
-	NotificationChannelFCM NotificationChannel = "fcm"
+	NotificationChannelWebPush NotificationChannel = "webpush"
 )
 
 // String returns the wire/database representation of the channel.
