@@ -58,54 +58,116 @@ $ npm run check          # typecheck, lint, test
 |---|---|
 | `npm run typecheck` | `tsc --noEmit`, strict, with `noUncheckedIndexedAccess` |
 | `npm run lint` | ESLint, including the rule that fails on a colour literal outside `src/theme/` |
-| `npm test` | Jest — 169 tests |
+| `npm test` | Jest — 206 tests |
 
-### The APK
+### The web build
 
-Android only. iOS needs a Mac and a developer account; do not build for a
-platform you cannot run on.
+There is no APK. The phone is an iPhone and the development machine is Linux,
+which closes native iOS twice over; ADR 0028 records the trade and the
+condition under which to revisit it.
 
 ```console
-$ npx expo prebuild --platform android
-$ cd android && ./gradlew assembleRelease
-# app/build/outputs/apk/release/app-release.apk
+$ npm run build:web              # into dist/
+$ OUT=/srv/btcusd/web npm run build:web
 ```
 
-This needs the Android SDK and a JDK. **It has not been run in the development
-environment for this phase** — `dl.google.com` is blocked by network policy
-there, so no SDK could be installed. Everything else in this document was
-verified; the APK build is the one step waiting on a machine that can reach
-Google.
+That runs `expo export --platform web` and then stamps the service worker with
+two things only the export knows: a build identity, and the list of files this
+build actually emitted. Hand-maintaining either is the classic PWA failure — a
+worker whose version never changes never updates, and a precache list naming
+last build's bundle caches a 404.
 
-Before the first build you need `google-services.json` from the Firebase
-console, in `mobile/`. It is git-ignored: it identifies the project and is per
-deployment, so a committed one is the wrong project's.
+The build identity is a hash of the file list rather than a timestamp, so
+building the same source twice produces the same worker. A version that changed
+when nothing did would make every deployment look like an update.
+
+The icons are **not** part of the build:
+
+```console
+$ npm run icons                  # public/{apple-touch-icon,icon-192,icon-512}.png
+```
+
+They are generated from `assets/icon.png` and committed. Running a browser to
+produce identical bytes on every build is a slow way to change nothing, and the
+icon changes about once.
+
+> The source icon is still the Expo scaffold default — a blue "A" on white with
+> construction guides. It resizes correctly and it is not this app's icon.
 
 ---
 
 ## Installing
 
-Sideload. There is no app store listing and there will not be one.
+On the phone, over the tailnet, in Safari:
+
+1. Open `https://<machine>.<tailnet>.ts.net/`
+2. Share → **Add to Home Screen**
+3. Launch it from the icon
+
+It must be launched from the icon, not from Safari. An installed PWA is the
+only place iOS grants a service worker its full behaviour and the only place
+push can even be requested — opened as a tab, the app works but has no
+notifications and no offline shell.
+
+Confirm the install worked by looking for what is missing: no address bar, no
+Safari toolbar. If either is there, the `apple-mobile-web-app-*` tags did not
+reach the page.
+
+**HTTPS is not optional.** iOS gives a plain-HTTP page no service worker, no
+push and no home-screen install. `deploy/README.md` §2.6 sets it up with
+`tailscale serve`, which also means the app and the API share an origin.
+
+### The service worker
+
+It does three things, and the third is the one that goes wrong quietly.
+
+**It never caches the API.** A price from twenty minutes ago rendered as
+current is worse than no price, because no price is visibly no price. Every
+`/api/` request goes to the network untouched — not stale-while-revalidate, not
+a short max-age.
+
+**It serves the shell with no network.** A cold launch on a dropped tailnet
+shows the app and its own "cannot reach the server" state, which names
+Tailscale and says what to do. Safari's offline page says none of that.
+
+**It can replace itself.** A worker answered from the browser's HTTP cache
+cannot update — the update check fetches the copy it is trying to replace — so
+the api serves `sw.js` with `Cache-Control: no-cache`. A new build waits rather
+than activating: taking it over immediately would reload the page underneath
+whoever is reading, silently, which is the same complaint as never updating at
+all. Instead the app shows one line at the top — *"A newer version of this app
+is installed."* — and reloading is a tap.
 
 ```console
-$ adb install -r app-release.apk
+$ BASE=https://<machine>.<tailnet>.ts.net npm run pwa-check
 ```
 
-Or copy the APK to the phone and open it, with "install unknown apps" allowed
-for whatever opened it.
+`tools/pwa-check.mjs` drives all of that in a real browser: install, precache,
+the API bypass, a cold load of a signal URL, the offline shell, and a full
+update cycle. It exists because those span files that cannot see each other —
+`src/pwa/` is tested against a fake registration and `public/sw.js` is tested by
+nothing, so the two halves can disagree while every unit test passes. They did:
+`sw.js` called `skipWaiting()` on install while `register.ts` was built around a
+worker that waits. Both were internally consistent; together they were wrong,
+and only a browser against a real export could say so.
 
 ---
 
 ## Configuring
 
-One setting: where the API is.
+Usually nothing.
 
-It defaults to `EXPO_PUBLIC_API_BASE_URL` at build time, or
-`http://100.64.0.1:8080` — replace that with what `tailscale ip -4` prints on
-the VPS. The value is persisted on the device, so it survives a restart, and it
-is a setting rather than a constant because a rebuilt VPS gets a new tailnet
-address and the app would otherwise be permanently unable to reach a server
-that is running fine.
+The app is served by the api, so its default base URL is the page's own origin.
+That is not a convenience — same-origin is what lets the websocket's origin
+check hold with nothing configured, and a base URL pointing elsewhere is the
+one way to break it from inside the app.
+
+`EXPO_PUBLIC_API_BASE_URL` overrides it at build time, for a development build
+that genuinely talks to another port. A value typed into the settings field is
+persisted on the device and takes the page's own scheme when it has none —
+assuming `http://` on an HTTPS page would produce mixed content, which the
+browser blocks silently and which then looks exactly like the server being
+down.
 
 **The app reaches the API only over the tailnet.** There is no authentication —
 the network is the boundary (ADR 0024) — so if Tailscale is off, nothing works.
@@ -113,7 +175,7 @@ That is the commonest failure this app will ever see, and it is handled
 explicitly rather than as a spinner:
 
 > **Cannot reach the server**
-> Nothing answered at http://100.72.14.3:8080. This deployment is only
+> Nothing answered at https://btcusd.tail1234.ts.net. This deployment is only
 > reachable over the tailnet, so the usual cause is Tailscale being switched
 > off.
 > Open Tailscale and check this device is connected, then pull to retry.
@@ -499,13 +561,22 @@ thing your eye lands on the most important element on that screen?*
 
 Stated plainly rather than left to be discovered:
 
-- **No APK was built.** `dl.google.com` is blocked in the development
-  environment, so there is no Android SDK.
-- **Nothing ran on a device or an emulator.** No hardware, and no SDK to build
-  an emulator with.
-- **Push was not verified end to end.** That is phase 07's open item, and the
-  procedure above is what closes it.
-- **Nothing was tested over an actual tailnet.** The API was reached on
-  loopback.
-- **iOS is out of scope**, and stays out until there is a Mac and a developer
-  account.
+- **Nothing ran on a phone.** No hardware here. The web build, the service
+  worker, the routing and the offline shell were all exercised in a real
+  browser against a real export (`npm run pwa-check`), which is the same engine
+  Safari is not — WebKit differs, and the install behaviour especially is
+  iOS's own.
+- **The app has not been installed to a home screen.** That is the step that
+  decides whether the `apple-mobile-web-app-*` tags did their job, and it is
+  three taps on the phone.
+- **Push has not been touched yet.** Phase 09b part C replaces FCM with Web
+  Push; the section above still describes the FCM path, which is what exists
+  today and is about to be retired.
+- **Push was not verified end to end.** Still phase 07's open item.
+- **Nothing was tested over an actual tailnet**, and nothing over real HTTPS.
+  The API was reached on loopback, which browsers treat as a secure context —
+  which is why the service worker could be tested at all here.
+- **The app icon is the Expo scaffold default.** It resizes correctly to every
+  size an install needs, and it is not this app's icon.
+- **No APK, and no native iOS.** Neither is coming; ADR 0028 says why and under
+  what condition to reconsider.

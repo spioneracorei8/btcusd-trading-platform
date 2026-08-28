@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+
+    <!--
+      viewport-fit=cover so the background reaches under the notch and the home
+      indicator. Without it a standalone app is framed in white bars on an
+      iPhone, which is the first thing the eye lands on and is nothing.
+    -->
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover"
+    />
+
+    <title>BTCUSD Signals</title>
+    <meta
+      name="description"
+      content="Signals, charts and pipeline health for one BTC/USDT deployment. It places no orders."
+    />
+
+    <!--
+      bg.base, from src/theme/colors.ts. It appears three times on this page and
+      once in manifest.json, and src/theme/manifest.test.ts fails if any of them
+      drifts from the token — the lint rule that keeps colours in one place
+      cannot see HTML or JSON, so a test does that job here.
+    -->
+    <meta name="theme-color" content="#0D1512" />
+
+    <link rel="manifest" href="/manifest.json" />
+
+    <!--
+      iOS ignores most of the manifest. These three are what actually decide
+      whether an installed app opens as an app: without them it opens in Safari
+      chrome with an address bar, which defeats the point of installing it.
+    -->
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Signals" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+
+    <style>
+      /*
+        The ground, painted before a single byte of JavaScript runs.
+
+        A standalone PWA shows this between the launch image and the first
+        paint, and the default is white — a full-screen flash of white on a
+        phone in a dark room, from an app whose entire brief is "never bright".
+      */
+      html,
+      body,
+      #root {
+        margin: 0;
+        padding: 0;
+        height: 100%;
+        background-color: #0d1512;
+      }
+
+      body {
+        overscroll-behavior: none;
+        -webkit-tap-highlight-color: transparent;
+      }
+
+      /* React Native Web measures against a root that fills the viewport. */
+      #root {
+        display: flex;
+        flex-direction: column;
+      }
+    </style>
+  </head>
+
+  <body>
+    <div id="root"></div>
+  </body>
+</html>

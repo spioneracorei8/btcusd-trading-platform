@@ -6,36 +6,11 @@
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "scheme": "btcusd",
-
     "userInterfaceStyle": "dark",
     "backgroundColor": "#0D1512",
-
-    "android": {
-      "package": "com.spioneracorei8.btcusdsignals",
-      "adaptiveIcon": {
-        "backgroundColor": "#0D1512",
-        "foregroundImage": "./assets/android-icon-foreground.png",
-        "monochromeImage": "./assets/android-icon-monochrome.png"
-      },
-      "predictiveBackGestureEnabled": false,
-      "permissions": ["android.permission.POST_NOTIFICATIONS"],
-      "googleServicesFile": "./google-services.json"
-    },
-
     "web": {
       "favicon": "./assets/favicon.png",
       "bundler": "metro"
-    },
-
-    "plugins": [
-      [
-        "expo-build-properties",
-        {
-          "android": {
-            "usesCleartextTraffic": true
-          }
-        }
-      ]
-    ]
+    }
   }
 }

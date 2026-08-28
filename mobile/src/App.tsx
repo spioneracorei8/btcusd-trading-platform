@@ -4,6 +4,7 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import { ApiProvider } from './api/provider';
 import { Navigation } from './navigation';
+import { UpdateBanner } from './pwa/UpdateBanner';
 import { configureForegroundBehaviour } from './notifications/useNotifications';
 import type { ApiClient } from './api/client';
 
@@ -35,6 +36,9 @@ export function Root({ client }: { client?: ApiClient } = {}) {
       <QueryClientProvider client={queryClient}>
         <ApiProvider client={client}>
           <StatusBar style="light" />
+          {/* Above the navigator, so it is not inside a screen that scrolls
+              away from it. It renders nothing until a build is waiting. */}
+          <UpdateBanner />
           <Navigation />
         </ApiProvider>
       </QueryClientProvider>

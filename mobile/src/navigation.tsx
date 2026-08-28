@@ -1,6 +1,7 @@
 import {
   NavigationContainer,
   DefaultTheme,
+  type LinkingOptions,
   type NavigationContainerRef,
 } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
@@ -35,6 +36,67 @@ import { StatusScreen } from './features/status/StatusScreen';
 export type SignalsStackParams = {
   SignalsList: undefined;
   SignalDetail: { id: string };
+};
+
+export type AppTabsParams = {
+  Now: undefined;
+  Signals: undefined;
+  Chart: undefined;
+  Performance: undefined;
+  Status: undefined;
+};
+
+/**
+ * Which URL each screen lives at.
+ *
+ * # Why the app has URLs at all
+ *
+ * On a phone this is invisible — navigation is state and nobody sees an
+ * address. On the web it is the difference between an app that works and one
+ * that half does, for two reasons:
+ *
+ *   1. A notification click has to navigate somewhere. The service worker's
+ *      only move is to open a URL, and with every screen at "/" there is
+ *      nowhere to send it — so tapping an alert would land on the dashboard
+ *      and the signal it was about would be three taps away.
+ *   2. A standalone PWA reloads. iOS evicts backgrounded web apps freely, and
+ *      a relaunch that lands somewhere other than where somebody was is the
+ *      small wrongness that makes an app feel broken.
+ *
+ * The paths are the tab names in lower case, which keeps them guessable, and
+ * /signals/:id is the one that carries anything.
+ */
+export const linking: LinkingOptions<AppTabsParams> = {
+  // The custom scheme for a native build, and the page's own origin on the
+  // web. React Navigation matches the path either way; the prefix is what
+  // tells it which part of an incoming URL to ignore.
+  prefixes: ['btcusd://'],
+  config: {
+    screens: {
+      Now: '',
+      Signals: {
+        screens: {
+          SignalsList: 'signals',
+          SignalDetail: 'signals/:id',
+        },
+      },
+      Chart: 'chart',
+      Performance: 'performance',
+      Status: 'status',
+    },
+  },
+};
+
+/**
+ * What the browser tab says.
+ *
+ * An installed PWA has no visible title, but a tab does, and so does the
+ * history entry a back gesture walks through. "BTCUSD Signals" on every one of
+ * them makes the history useless.
+ */
+const documentTitle = {
+  formatter: (_options: object | undefined, route: { name?: string } | undefined) =>
+    route?.name ? `${route.name} · BTCUSD Signals` : 'BTCUSD Signals',
 };
 
 const Tabs = createBottomTabNavigator();
@@ -135,7 +197,12 @@ export function Navigation({ children }: { children?: React.ReactNode }) {
   const navigator = useRef<NavigationContainerRef<Record<string, object | undefined>>>(null);
 
   return (
-    <NavigationContainer ref={navigator} theme={navigationTheme}>
+    <NavigationContainer
+      ref={navigator}
+      theme={navigationTheme}
+      linking={linking}
+      documentTitle={documentTitle}
+    >
       {children ?? (
         <AppTabs
           onOpenSignal={(id) =>

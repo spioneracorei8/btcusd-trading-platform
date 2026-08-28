@@ -54,4 +54,26 @@ module.exports = [
     files: ['src/theme/**/*.ts', 'src/theme/**/*.tsx'],
     rules: { 'no-restricted-syntax': 'off' },
   },
+  {
+    // Build tooling runs in Node, not in the app.
+    files: ['tools/**/*.mjs'],
+    languageOptions: {
+      globals: { Buffer: 'readonly', process: 'readonly', console: 'readonly' },
+    },
+  },
+  {
+    // The service worker runs in neither: no window, no document, and `self`
+    // is a ServiceWorkerGlobalScope. Linting it against the browser's globals
+    // reports `caches` and `clients` as undefined, which they are not there.
+    files: ['public/sw.js'],
+    languageOptions: {
+      globals: {
+        self: 'readonly',
+        caches: 'readonly',
+        clients: 'readonly',
+        fetch: 'readonly',
+        URL: 'readonly',
+      },
+    },
+  },
 ];
