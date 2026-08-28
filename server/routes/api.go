@@ -6,9 +6,13 @@
 package routes
 
 import (
+	"fmt"
+	"net/http"
+
 	"github.com/go-chi/chi/v5"
 
 	"github.com/spioneracorei8/btcusd-trading-platform/server/constants"
+	"github.com/spioneracorei8/btcusd-trading-platform/server/helper"
 	"github.com/spioneracorei8/btcusd-trading-platform/server/middleware"
 	"github.com/spioneracorei8/btcusd-trading-platform/server/services/candle"
 	"github.com/spioneracorei8/btcusd-trading-platform/server/services/health"
@@ -19,6 +23,7 @@ import (
 	"github.com/spioneracorei8/btcusd-trading-platform/server/services/pipeline"
 	"github.com/spioneracorei8/btcusd-trading-platform/server/services/signal"
 	"github.com/spioneracorei8/btcusd-trading-platform/server/services/stream"
+	"github.com/spioneracorei8/btcusd-trading-platform/server/services/web"
 )
 
 type route struct {
@@ -101,7 +106,41 @@ func (r *route) RegisterAPI(api APIHandlers) {
 		v.Post("/device", api.Devices.RegisterDevice)
 		v.Get("/device", api.Devices.Device)
 		v.Delete("/device", api.Devices.ForgetDevice)
+
+		// An unknown path under /api/v1 is an error in JSON, not the app.
+		//
+		// Without this, a chi sub-router inherits the parent's NotFound — and
+		// the parent's is the web app, which answers a mistyped endpoint with
+		// the entry document and a 200. A client then parses HTML as JSON and
+		// reports something that has nothing to do with the mistake.
+		v.NotFound(func(w http.ResponseWriter, r *http.Request) {
+			helper.WriteAPIError(w, nil, http.StatusNotFound, constants.APIErrNotFound,
+				fmt.Sprintf("no endpoint at %s %s", r.Method, r.URL.Path))
+		})
+		v.MethodNotAllowed(func(w http.ResponseWriter, r *http.Request) {
+			helper.WriteAPIError(w, nil, http.StatusMethodNotAllowed,
+				constants.APIErrNotFound,
+				fmt.Sprintf("%s is not allowed on %s", r.Method, r.URL.Path))
+		})
 	})
+}
+
+// RegisterApp mounts the built web app underneath everything else.
+//
+// # Why the app is served by this process
+//
+// So that it and the API share an origin. A page on one origin talking to an
+// API on another needs CORS on every endpoint and an origin allowlist on the
+// websocket, and when a preflight fails the reflex is to widen the allowlist
+// until it stops failing. Same-origin has none of those decisions in it, and
+// the websocket's origin check then holds with nothing configured — see
+// ADR 0024 and the stream handler.
+//
+// It is a NotFound handler rather than a route because the app owns every path
+// the API has not claimed, including ones that were never exported: /signals/
+// {id} is a screen, and a notification tap cold-loads it.
+func (r *route) RegisterApp(handler web.AppHandler) {
+	r.router.NotFound(handler.App)
 }
 
 // APIHandlers is everything the versioned API needs.

@@ -1,8 +1,20 @@
 # Caddy runs on the VPS host and terminates TLS in front of the api container,
-# which only listens on 127.0.0.1:8080 and on the tailnet address.
+# which listens on 127.0.0.1:8080 and nothing else.
 #
-# NOT USED BY THIS DEPLOYMENT. Access is over Tailscale (ADR 0017, ADR 0024);
-# this file is kept for the day a public hostname is genuinely needed.
+# NOT USED BY THIS DEPLOYMENT, and not the way this deployment got TLS.
+#
+# Phase 09b needed HTTPS, because iOS gives a plain-HTTP page no service
+# worker, no push and no home-screen install. It got it from `tailscale serve`
+# (deploy/README.md §2.6): the certificate is issued for the tailnet name,
+# renewed by tailscaled, and reachable only from the tailnet by construction.
+# No reverse proxy, no renewal timer.
+#
+# This file is for a different job — a **public** hostname — and is kept for
+# the day one is genuinely needed. Note that it cannot be repurposed for the
+# tailnet as written: a *.ts.net name has no public DNS record to solve an ACME
+# challenge against, so the automatic HTTPS below would never issue for it and
+# the site block would need an explicit `tls <cert> <key>` from
+# `tailscale cert` plus something to renew it.
 #
 # Replace the site address with the real hostname before deploying. Caddy
 # obtains and renews the certificate automatically.

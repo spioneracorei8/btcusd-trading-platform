@@ -55,6 +55,7 @@ import (
 	_stream_handler "github.com/spioneracorei8/btcusd-trading-platform/server/services/stream/handler"
 	_stream_repo "github.com/spioneracorei8/btcusd-trading-platform/server/services/stream/repository"
 	_stream_us "github.com/spioneracorei8/btcusd-trading-platform/server/services/stream/usecase"
+	_web_handler "github.com/spioneracorei8/btcusd-trading-platform/server/services/web/handler"
 )
 
 // Server holds everything the API process needs to start.
@@ -201,7 +202,8 @@ func (s *Server) Start() error {
 			signalUs, s.Logger, s.Config.Market.Symbol, s.Config.Market.Type),
 		Outcomes: outcomeHandler,
 		Status:   _pipeline_handler.NewStatusHandlerImpl(pipelineUs, s.Logger),
-		Stream:   _stream_handler.NewStreamHandlerImpl(hub, s.Logger),
+		Stream: _stream_handler.NewStreamHandlerImpl(
+			hub, s.Logger, s.Config.App.StreamOrigins),
 		Devices: _notify_handler.NewDeviceHandlerImpl(
 			deviceUs, s.Logger, s.Config.Notify.SignalMode),
 	}
@@ -214,6 +216,15 @@ func (s *Server) Start() error {
 	route.RegisterMarketHandler(marketHandler)
 	route.RegisterOutcomeHandler(outcomeHandler)
 	route.RegisterAPI(apiHandlers)
+
+	// The app, underneath everything above. Mounted last because it claims
+	// every path the API did not, and only when there is something to serve:
+	// with WEB_ROOT unset this process is the API alone, which is what the
+	// collector and every test run want.
+	if s.Config.App.WebRoot != "" {
+		route.RegisterApp(_web_handler.NewAppHandlerImpl(s.Config.App.WebRoot, s.Logger))
+		s.Logger.Info("serving the web app", "root", s.Config.App.WebRoot)
+	}
 
 	// The sources that feed the stream. They run for the life of the process
 	// and stop with it; a failure in one is logged and does not take the API

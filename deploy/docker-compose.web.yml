@@ -1,0 +1,28 @@
+# The built web app, for a stack that serves the PWA.
+#
+#   docker compose --env-file .env \
+#     -f deploy/docker-compose.yml \
+#     -f deploy/docker-compose.prod.yml \
+#     -f deploy/docker-compose.web.yml up -d
+#
+# An overlay rather than part of the base file, for the same reason as the
+# notify one: a bind mount whose source does not exist makes Docker create a
+# directory in its place, and WEB_ROOT pointing at an empty directory is a
+# deployment that serves 404s and looks like a build problem. Mounting it only
+# when there is something to mount keeps that failure impossible.
+#
+# Set WEB_ROOT_HOST to the directory `expo export --platform web` wrote on this
+# host. It is read-only inside the container: the api serves these files and
+# has no reason to be able to change them.
+#
+# Only the api gets it. The collector serves no HTTP.
+
+services:
+  api:
+    environment:
+      # Where the app is, inside the container. The api refuses to start if
+      # this is set and is not a directory, so a typo is a refusal to boot
+      # rather than a site that 404s.
+      WEB_ROOT: ${WEB_ROOT:-/srv/web}
+    volumes:
+      - ${WEB_ROOT_HOST:?set WEB_ROOT_HOST to the directory expo export wrote on this host}:${WEB_ROOT:-/srv/web}:ro

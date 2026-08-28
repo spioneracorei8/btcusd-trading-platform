@@ -3,6 +3,8 @@ package config_test
 import (
 	"errors"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -436,4 +438,151 @@ func TestStrategyParametersAreReadInTheSameFormTheCLITakes(t *testing.T) {
 			t.Errorf("Strategy.Params[%q] = %q, want %q", name, got, value)
 		}
 	}
+}
+
+/*
+TestTheWebRootIsCheckedAtStartUp.
+
+# What this prevents
+
+A WEB_ROOT with a typo in it produces a process that starts, answers the API,
+and 404s every page. The symptom is an app that will not load, which sends
+whoever is looking at the export, the service worker and the browser cache
+before the environment file.
+
+Checking at start-up turns an afternoon into a refusal to boot that names the
+variable.
+*/
+func TestTheWebRootIsCheckedAtStartUp(t *testing.T) {
+	t.Run("a directory loads", func(t *testing.T) {
+		e := validEnv()
+		e["WEB_ROOT"] = t.TempDir()
+
+		cfg, err := config.LoadFrom(env(e))
+		if err != nil {
+			t.Fatalf("LoadFrom() returned error: %v", err)
+		}
+		if cfg.App.WebRoot != e["WEB_ROOT"] {
+			t.Fatalf("WebRoot = %q; want %q", cfg.App.WebRoot, e["WEB_ROOT"])
+		}
+	})
+
+	t.Run("a path that is not there is refused, by name", func(t *testing.T) {
+		e := validEnv()
+		e["WEB_ROOT"] = filepath.Join(t.TempDir(), "not-exported")
+
+		_, err := config.LoadFrom(env(e))
+		if err == nil {
+			t.Fatal("a WEB_ROOT that does not exist was accepted")
+		}
+		if !strings.Contains(err.Error(), "WEB_ROOT") {
+			t.Fatalf("the error does not name the variable: %v", err)
+		}
+	})
+
+	t.Run("a file is refused", func(t *testing.T) {
+		file := filepath.Join(t.TempDir(), "index.html")
+		if err := os.WriteFile(file, []byte("<!doctype html>"), 0o644); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+
+		e := validEnv()
+		e["WEB_ROOT"] = file
+
+		if _, err := config.LoadFrom(env(e)); err == nil {
+			t.Fatal("a WEB_ROOT pointing at a file was accepted")
+		}
+	})
+
+	t.Run("unset serves no app", func(t *testing.T) {
+		cfg, err := config.LoadFrom(env(validEnv()))
+		if err != nil {
+			t.Fatalf("LoadFrom() returned error: %v", err)
+		}
+		if cfg.App.WebRoot != "" {
+			t.Fatalf("WebRoot = %q with nothing set; want empty", cfg.App.WebRoot)
+		}
+	})
+}
+
+/*
+TestStreamOriginsAreHostsAndNeverAWildcard.
+
+# What this prevents
+
+STREAM_ALLOWED_ORIGINS widens who may open the signal feed from a browser. It
+exists for development and is empty in a real deployment, so the two failures
+worth refusing at start-up are a value that does not do what it looks like, and
+a value that switches the check off while looking like it is on.
+
+"*" is the second one. It reads as configuration and means "any page on any
+host may read every signal, its entry, stop, target and reason".
+*/
+func TestStreamOriginsAreHostsAndNeverAWildcard(t *testing.T) {
+	t.Run("an origin is reduced to its host", func(t *testing.T) {
+		e := validEnv()
+		e["STREAM_ALLOWED_ORIGINS"] = "http://localhost:8081, https://phone.tail1234.ts.net"
+
+		cfg, err := config.LoadFrom(env(e))
+		if err != nil {
+			t.Fatalf("LoadFrom() returned error: %v", err)
+		}
+
+		want := []string{"localhost:8081", "phone.tail1234.ts.net"}
+		if len(cfg.App.StreamOrigins) != len(want) {
+			t.Fatalf("StreamOrigins = %v; want %v", cfg.App.StreamOrigins, want)
+		}
+		for i, host := range want {
+			if cfg.App.StreamOrigins[i] != host {
+				t.Fatalf("StreamOrigins = %v; want %v", cfg.App.StreamOrigins, want)
+			}
+		}
+	})
+
+	t.Run("a bare host is taken as written", func(t *testing.T) {
+		e := validEnv()
+		e["STREAM_ALLOWED_ORIGINS"] = "localhost:8081"
+
+		cfg, err := config.LoadFrom(env(e))
+		if err != nil {
+			t.Fatalf("LoadFrom() returned error: %v", err)
+		}
+		if len(cfg.App.StreamOrigins) != 1 || cfg.App.StreamOrigins[0] != "localhost:8081" {
+			t.Fatalf("StreamOrigins = %v", cfg.App.StreamOrigins)
+		}
+	})
+
+	t.Run("a wildcard is refused", func(t *testing.T) {
+		e := validEnv()
+		e["STREAM_ALLOWED_ORIGINS"] = "*"
+
+		_, err := config.LoadFrom(env(e))
+		if err == nil {
+			t.Fatal("a wildcard origin was accepted; the check is off and looks on")
+		}
+		if !strings.Contains(err.Error(), "STREAM_ALLOWED_ORIGINS") {
+			t.Fatalf("the error does not name the variable: %v", err)
+		}
+	})
+
+	t.Run("a url with a path is refused", func(t *testing.T) {
+		e := validEnv()
+		// An origin is scheme, host and port. A path here means somebody
+		// expects it to be matched, and it never is.
+		e["STREAM_ALLOWED_ORIGINS"] = "https://phone.tail1234.ts.net/app"
+
+		if _, err := config.LoadFrom(env(e)); err == nil {
+			t.Fatal("an origin with a path was accepted")
+		}
+	})
+
+	t.Run("unset allows nothing beyond same-origin", func(t *testing.T) {
+		cfg, err := config.LoadFrom(env(validEnv()))
+		if err != nil {
+			t.Fatalf("LoadFrom() returned error: %v", err)
+		}
+		if len(cfg.App.StreamOrigins) != 0 {
+			t.Fatalf("StreamOrigins = %v with nothing set; want none", cfg.App.StreamOrigins)
+		}
+	})
 }

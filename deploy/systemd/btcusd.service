@@ -18,22 +18,20 @@ Type=oneshot
 RemainAfterExit=yes
 WorkingDirectory=/opt/btcusd
 
-# The api publishes on the Tailscale address. If that address is not on the
-# interface yet, Docker fails with "cannot assign requested address" and the
-# stack stays down until somebody notices — which on a reboot at 3am means
-# hours of missing candles. tailscaled being *started* is not the same as the
-# interface having an address, so this waits for the address itself.
-ExecStartPre=/usr/bin/env bash -c 'for i in $(seq 1 30); do ip -4 addr show tailscale0 2>/dev/null | grep -q "inet " && exit 0; sleep 2; done; echo "tailscale0 still has no IPv4 address after 60s" >&2; exit 1'
+# There is no wait for tailscale0 here any more.
+#
+# There used to be: the api published on the Tailscale address, so Docker
+# failed with "cannot assign requested address" if the interface had no address
+# yet, and the stack stayed down until somebody noticed. Since phase 09b the
+# api publishes on loopback only and `tailscale serve` puts it on the tailnet,
+# so nothing in this stack needs that address to exist.
+#
+# That is the better arrangement anyway: collecting candles no longer depends
+# on the tailnet being healthy. A host that boots with Tailscale broken still
+# records the market and is simply unreachable until it is fixed.
 
-ExecStart=/usr/bin/docker compose --env-file /opt/btcusd/.env \
-    -f /opt/btcusd/deploy/docker-compose.yml \
-    -f /opt/btcusd/deploy/docker-compose.prod.yml \
-    up -d --remove-orphans
-
-ExecStop=/usr/bin/docker compose --env-file /opt/btcusd/.env \
-    -f /opt/btcusd/deploy/docker-compose.yml \
-    -f /opt/btcusd/deploy/docker-compose.prod.yml \
-    down
+ExecStart=/opt/btcusd/deploy/compose.sh up -d --remove-orphans
+ExecStop=/opt/btcusd/deploy/compose.sh down
 
 # Pulling and building images on a 2 vCPU box is not quick, and a timeout part
 # way through a build leaves a half-built stack.

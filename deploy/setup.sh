@@ -220,8 +220,9 @@ step_tailscale() {
 		# --ssh=false is deliberate. Tailscale SSH would make the only way into
 		# this machine depend on a third party being reachable; key-based SSH
 		# on the public interface stays as the path that does not.
-		log "Then put the address 'tailscale ip -4' prints into ${APP_DIR}/.env"
-		log "as TAILSCALE_IP, and record the tailnet name in deploy/README.md."
+		log "Then record the address 'tailscale ip -4' prints, and the tailnet"
+		log "name, in the table in deploy/README.md §1. Neither is configuration"
+		log "any more — 'tailscale serve' puts the api on the tailnet, see §2.6."
 	fi
 }
 
@@ -286,12 +287,8 @@ step_app() {
 		chmod 600 "${APP_DIR}/.env"
 		log ""
 		log "A PostgreSQL password was generated and written to ${APP_DIR}/.env."
-		log "TAILSCALE_IP is still empty — the stack will refuse to start until"
-		log "it is set. See deploy/README.md §5."
+		log "Fill in the rest before starting the stack. See deploy/README.md §2.3."
 	fi
-
-	grep -q '^TAILSCALE_IP=' "${APP_DIR}/.env" ||
-		printf '\n# This host'"'"'s tailnet address; `tailscale ip -4`.\nTAILSCALE_IP=\n' >>"${APP_DIR}/.env"
 }
 
 # ---------------------------------------------------------------------------

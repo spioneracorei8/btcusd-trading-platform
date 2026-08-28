@@ -29,8 +29,17 @@ anywhere else.
 
 ## Conventions
 
-**Base URL.** `http://<host>:8080/api/v1`. The examples below use
-`http://127.0.0.1:8099` because that is where they were run.
+**Base URL.** `https://<machine>.<tailnet>.ts.net/api/v1` on the deployment,
+where `tailscale serve` terminates TLS in front of an api bound to loopback.
+The examples below use `http://127.0.0.1:8099` because that is where they were
+run.
+
+The api also serves the web app itself, from the same origin. That is
+deliberate: a page on one origin talking to an API on another needs CORS on
+every endpoint and an origin allowlist on the websocket, and same-origin has
+neither decision in it. Anything not claimed below is the app's — including
+paths that were never exported, such as `/signals/{id}`, which is a screen. An
+unknown path *under* `/api/v1` is a JSON `not_found`, never the app's HTML.
 
 **Versioning.** The version is in the path. A deployed phone cannot be
 redeployed with the server: phase 09 is written against this shape, and the
@@ -772,8 +781,17 @@ HTTP/1.1 426 Upgrade Required
 Connect to:
 
 ```
-ws://<host>:8080/api/v1/stream?topics=candles,signals,outcomes,status
+wss://<machine>.<tailnet>.ts.net/api/v1/stream?topics=candles,signals,outcomes,status
 ```
+
+**The handshake checks `Origin`.** A websocket handshake is not bound by the
+same-origin policy the way `fetch` is, so without this any page in the owner's
+browser could open this endpoint and read every signal with its full reason. A
+request whose `Origin` matches the host it was sent to is accepted, and so is
+one with no `Origin` at all — a native client or `curl`, which no page can
+arrange on someone's behalf. Anything else is `403` unless the host is listed
+in `STREAM_ALLOWED_ORIGINS`, which is a development setting and empty in the
+deployment. See ADR 0024.
 
 The frames below were captured with a small client built on
 `github.com/coder/websocket`, the same library the server uses. Any websocket
@@ -919,6 +937,21 @@ $ curl -s "$B/stream?since=candles" | jq -c
 {"error":{"code":"invalid_parameter","message":"since=candles is not a list of topic:sequence pairs"}}
 ```
 
+A refused origin is a `403` from the handshake itself, before any of the above:
+
+```console
+$ curl -s -o /dev/null -w '%{http_code}\n' \
+    -H 'Connection: Upgrade' -H 'Upgrade: websocket' \
+    -H 'Sec-WebSocket-Version: 13' -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' \
+    -H 'Origin: https://somewhere.else' "$B/stream"
+403
+```
+
+The body is the library's, not this API's error shape. It is a handshake
+failure rather than a request the API answered, and it is logged server-side
+with the `Origin` and the `host` it was compared against — which is the pair
+worth seeing when a chart stops updating with nothing on screen to say why.
+
 ---
 
 ## Endpoints outside /api/v1
@@ -931,6 +964,7 @@ Not part of the app's contract and not versioned.
 | `GET /ready` | Readiness. Pings the database. |
 | `GET /internal/market/status` | Ingestion detail per timeframe. Superseded for app purposes by `/api/v1/status`. |
 | `GET /internal/signals/reconciliation` | Live signals against a backtest of the same strategy. Expensive — it replays history. Same report as `make reconcile`. See `docs/reading-a-divergence.md`. |
+| `GET /` and anything unclaimed | The web app, when `WEB_ROOT` is set. A path with no file extension that does not exist resolves to the app's entry document, because the app routes in the browser and `/signals/{id}` is a screen a notification tap cold-loads. A missing path that looks like an asset is a plain `404` — answering a missing `.js` with HTML produces a console error that sends the reader to the wrong file. |
 
 `/internal` is operational detail rather than anything a client should depend
 on. `/health` and `/ready` are the only two paths `deploy/Caddyfile` would

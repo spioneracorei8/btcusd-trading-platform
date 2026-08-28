@@ -21,11 +21,37 @@ import (
 type streamHandler struct {
 	hub    *_stream_us.Hub
 	logger *slog.Logger
+
+	// allowedOrigins are browser origins permitted in addition to the one
+	// this request was served from. See NewStreamHandlerImpl.
+	allowedOrigins []string
 }
 
 // NewStreamHandlerImpl builds the websocket handler.
-func NewStreamHandlerImpl(hub *_stream_us.Hub, logger *slog.Logger) stream.StreamHandler {
-	return &streamHandler{hub: hub, logger: logger}
+//
+// # Why origins are checked at all
+//
+// A websocket handshake is not bound by the same-origin policy the way fetch
+// is. Any page loaded in a browser that can route to this host may open this
+// endpoint and read the signal feed — every entry, stop, target and reason —
+// unless the handshake refuses it.
+//
+// That was not true while the only client was a native app on a tailnet, and
+// ADR 0024 said as much: origin checking was listed as something that becomes
+// necessary "the moment a browser can reach it". Serving the app as a PWA is
+// that moment, so this is now checked whether or not the API is public.
+//
+// The default needs no configuration: coder/websocket allows a request whose
+// Origin host equals the Host it was sent to, and one with no Origin header at
+// all — a native client or curl, which no page can forge on someone's behalf.
+// Everything else must match allowedOrigins or the handshake is refused with
+// 403. So a same-origin deployment is correct with the list empty, and the
+// list exists for development, where the app is served by Metro on one port
+// and the API answers on another.
+func NewStreamHandlerImpl(
+	hub *_stream_us.Hub, logger *slog.Logger, allowedOrigins []string,
+) stream.StreamHandler {
+	return &streamHandler{hub: hub, logger: logger, allowedOrigins: allowedOrigins}
 }
 
 // Stream answers GET /api/v1/stream.
@@ -61,12 +87,14 @@ func (h *streamHandler) Stream(w http.ResponseWriter, r *http.Request) {
 	}
 
 	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
-		// One user on a tailnet; there is no browser origin to check against
-		// and no cross-site request that could reach this.
-		InsecureSkipVerify: true,
+		// Same-origin and no-origin are allowed by the library; these are the
+		// extra ones this deployment trusts. Accept has already written the
+		// 403 by the time a refusal reaches the error below.
+		OriginPatterns: h.allowedOrigins,
 	})
 	if err != nil {
-		h.logger.WarnContext(r.Context(), "websocket handshake failed", "error", err)
+		h.logger.WarnContext(r.Context(), "websocket handshake failed",
+			"error", err, "origin", r.Header.Get("Origin"), "host", r.Host)
 		return
 	}
 	defer conn.CloseNow()

@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -30,6 +31,26 @@ type App struct {
 	LogLevel slog.Level
 	// HTTPPort is the port the API server listens on.
 	HTTPPort int
+
+	// WebRoot is the directory holding the exported web app, or "" to serve
+	// no app at all.
+	//
+	// The app is served by this process rather than beside it so that it and
+	// the API share an origin. That is not tidiness: a page served from one
+	// origin and an API on another needs CORS on every endpoint and an origin
+	// allowlist on the websocket, and the first thing anybody does when a
+	// preflight fails is widen the allowlist. Same-origin has none of those
+	// decisions in it.
+	WebRoot string
+
+	// StreamOrigins are browser origins the websocket accepts in addition to
+	// the one the request was served from.
+	//
+	// Empty in a real deployment, where the app and the API share an origin.
+	// It exists for development, where the app is served by Metro on one port
+	// and the API answers on another. Adding a host here lets any page on that
+	// host read the signal feed, so it is a development tool and says so.
+	StreamOrigins []string
 }
 
 // Database holds PostgreSQL/TimescaleDB connection settings.
@@ -252,9 +273,11 @@ func LoadFrom(lookup helper.LookupFunc, opts ...Option) (*Config, error) {
 
 	cfg := &Config{
 		App: App{
-			Env:      l.appEnv("APP_ENV"),
-			LogLevel: l.logLevel("LOG_LEVEL"),
-			HTTPPort: l.port("HTTP_PORT", set.servesHTTP),
+			Env:           l.appEnv("APP_ENV"),
+			LogLevel:      l.logLevel("LOG_LEVEL"),
+			HTTPPort:      l.port("HTTP_PORT", set.servesHTTP),
+			WebRoot:       l.directory("WEB_ROOT"),
+			StreamOrigins: l.originHosts("STREAM_ALLOWED_ORIGINS"),
 		},
 		Database: Database{
 			URL:            l.requiredString("DATABASE_URL"),
@@ -554,6 +577,80 @@ func (l *loader) baseURL(key, def, wantScheme string) string {
 		return ""
 	}
 	return strings.TrimRight(raw, "/")
+}
+
+// directory reads an optional path and checks that it is one.
+//
+// Checked at start-up rather than on the first request, because the failure it
+// prevents is a deployment that serves 404s from a typo and looks like an app
+// that will not load.
+func (l *loader) directory(key string) string {
+	raw := strings.TrimSpace(l.optionalString(key, ""))
+	if raw == "" {
+		return ""
+	}
+
+	info, err := os.Stat(raw)
+	if err != nil {
+		l.invalidf(key, "%q cannot be read: %s", raw, err)
+		return ""
+	}
+	if !info.IsDir() {
+		l.invalidf(key, "%q is not a directory", raw)
+		return ""
+	}
+	return strings.TrimRight(raw, "/")
+}
+
+// originHosts reads a comma-separated list of browser origins and returns the
+// host of each.
+//
+// The websocket library matches on host rather than on the whole origin, so a
+// value is accepted in either form and reduced to one. Taking full origins is
+// what a person writes, and it keeps the scheme visible in the environment
+// file even though the match ignores it.
+func (l *loader) originHosts(key string) []string {
+	raw := l.optionalString(key, "")
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+
+	out := make([]string, 0, 2)
+	for _, part := range strings.Split(raw, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+
+		// A bare host is what the matcher wants; a full origin is what people
+		// write. Accept both and keep the host.
+		host := part
+		if strings.Contains(part, "//") {
+			parsed, err := url.Parse(part)
+			if err != nil || parsed.Host == "" {
+				l.invalidf(key, "%q is not an origin like https://host:port", part)
+				continue
+			}
+			if parsed.Path != "" && parsed.Path != "/" {
+				l.invalidf(key, "%q has a path; an origin is scheme, host and port only", part)
+				continue
+			}
+			host = parsed.Host
+		} else if strings.ContainsAny(part, "/?#") {
+			l.invalidf(key, "%q is not a host or an origin", part)
+			continue
+		}
+
+		// "*" would accept every origin, which is the check switched off
+		// while looking like it is on.
+		if host == "*" {
+			l.invalidf(key, "%q accepts every origin, which is the same as no check; "+
+				"list the hosts instead", part)
+			continue
+		}
+		out = append(out, host)
+	}
+	return out
 }
 
 // timestamp parses an RFC3339 instant and normalises it to UTC.

@@ -237,11 +237,19 @@ adminer-stop: require-env ## Stop and remove Adminer, leaving the rest of the st
 # targets are for the times you are logged in and want the compose command
 # without retyping both -f flags.
 #
-# The production overlay adds the Tailscale binding and the 4 GB PostgreSQL
-# tuning, and refuses to start when TAILSCALE_IP is unset.
+# The production overlay adds the 4 GB PostgreSQL tuning and caps container
+# logs. It publishes nothing on the tailnet: `tailscale serve` does that, over
+# HTTPS. See deploy/README.md §2.6.
+
+# The web overlay joins the list only when there is an export to mount, which
+# is the same rule deploy/compose.sh applies for systemd. A bind mount with no
+# source makes Docker invent an empty directory, and an empty WEB_ROOT is a
+# deployment that 404s every page and looks like a build problem.
+WEB_OVERLAY := $(shell grep -qE '^[[:space:]]*WEB_ROOT_HOST=[^[:space:]\#]' $(ENV_FILE) 2>/dev/null \
+	&& echo "-f deploy/docker-compose.web.yml")
 
 PROD_COMPOSE := $(CONTAINER_ENGINE) compose --env-file $(ENV_FILE) \
-	-f $(COMPOSE_FILE) -f deploy/docker-compose.prod.yml
+	-f $(COMPOSE_FILE) -f deploy/docker-compose.prod.yml $(WEB_OVERLAY)
 
 .PHONY: prod-up
 prod-up: require-env ## VPS: build and start the production stack

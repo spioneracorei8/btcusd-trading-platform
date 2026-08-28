@@ -130,17 +130,16 @@ The token is stored in `~/.git-credentials` at mode 600 rather than in the
 remote URL, so `git remote -v` does not print it and it does not end up in
 `.git/config`.
 
-**[by hand]** Set the Tailscale address in the environment file:
+**[by hand]** Record the Tailscale address in the table in §1:
 
 ```bash
 tailscale ip -4                # e.g. 100.72.14.3
-nano /opt/btcusd/.env          # TAILSCALE_IP=100.72.14.3
 ```
 
-The stack **refuses to start** while `TAILSCALE_IP` is empty. That is on
-purpose: an empty value inside a port mapping expands to `":8080:8080"`, which
-binds every interface including the public one, and nothing in
-`docker compose ps` would show it. Failing loudly is the only safe behaviour.
+It is a fact about this host, not configuration. Nothing reads `TAILSCALE_IP`
+any more: the api is published on loopback only, and `tailscale serve` (§2.6)
+is what puts it on the tailnet. If an old `.env` still carries the variable it
+is inert, and deleting it is tidier than leaving it looking live.
 
 ### 2.4 systemd
 
@@ -156,6 +155,98 @@ That installs and enables `btcusd.service` (the stack, on boot),
 The first start builds three images on a 2 vCPU box. It is not fast; the unit
 has no start timeout for that reason. Watch it with
 `journalctl -u btcusd -f`.
+
+### 2.6 HTTPS, with a Tailscale certificate
+
+The app is a PWA, and iOS gives a page served over plain HTTP no service
+worker, no push and no home-screen install. So the tailnet needs TLS. This is
+also the step that retires the plain `:8080` publish — a page served over
+HTTPS cannot fetch `http://`, and Safari blocks the attempt with nothing in
+the UI to say why.
+
+**[once, in the browser]** In the Tailscale admin console, enable **HTTPS
+Certificates** under DNS. MagicDNS must be on as well; enabling HTTPS turns it
+on if it is not. This is a setting, not a command, and without it every
+`tailscale cert` and `tailscale serve --https` below fails in a way that reads
+like a bug on the host.
+
+**[on the VPS]** Find this machine's name and put the api behind TLS:
+
+```bash
+tailscale status --json | jq -r .Self.DNSName    # e.g. btcusd.tail1234.ts.net
+sudo tailscale serve --bg --https=443 http://127.0.0.1:8080
+tailscale serve status
+```
+
+That is the whole thing. `tailscale serve` obtains the certificate, renews it
+on its own, and listens on the tailnet interface only — there is no line here
+that could accidentally bind the public IP, and no renewal timer to forget.
+Making it public is a different command (`tailscale funnel`), which is not run
+here and is out of scope for this deployment.
+
+**Order matters.** Do the two commands above *before* redeploying, and check:
+
+```bash
+curl -s https://<machine>.<tailnet>.ts.net/health
+```
+
+The api is already published on `127.0.0.1:8080` by the base compose file, so
+this works against the running stack with nothing rebuilt. Once it answers,
+redeploy to drop the old tailnet port:
+
+```bash
+cd /opt/btcusd && git pull && sudo systemctl restart btcusd
+```
+
+Doing it the other way round leaves the host with no way in until
+`tailscale serve` is set up — recoverable over SSH, but a bad five minutes.
+
+**Then check the plain port is gone:**
+
+```bash
+curl -sS -m 5 http://<tailscale-ip>:8080/health     # must fail: connection refused
+curl -s https://<machine>.<tailnet>.ts.net/health   # must answer
+```
+
+#### Serving the app
+
+The api serves the built web app as well as the API, so the page and the
+endpoints share an origin. That is not tidiness: cross-origin needs CORS on
+every endpoint and an origin allowlist on the websocket, and the reflex when a
+preflight fails is to widen the allowlist. Same-origin has none of those
+decisions in it — see ADR 0024 and ADR 0028.
+
+Put the export somewhere the api can read and add the overlay:
+
+```bash
+# in .env
+WEB_ROOT_HOST=/srv/btcusd/web
+
+sudo systemctl restart btcusd
+```
+
+`btcusd.service` passes `-f deploy/docker-compose.web.yml` when
+`WEB_ROOT_HOST` is set. The api refuses to start if `WEB_ROOT` points at
+something that is not a directory, so a typo is a refusal to boot rather than
+a site that answers every page with 404.
+
+#### If the websocket 403s
+
+The symptom is a chart and a dashboard that load once and never update, with
+no error on screen. Look for `websocket handshake failed` in the api log; it
+records the `Origin` and the `host` it was compared against.
+
+The check passes when they match, which is what same-origin means and what
+this deployment is. If `tailscale serve` ever forwards a rewritten `Host`, they
+will not match, and the fix is to name the origin explicitly:
+
+```bash
+# in .env
+STREAM_ALLOWED_ORIGINS=https://<machine>.<tailnet>.ts.net
+```
+
+That widens the check rather than disabling it. `*` is refused at start-up —
+it is the check switched off while looking like it is on.
 
 ### 2.5 Harden SSH — last, and deliberately
 
@@ -286,18 +377,26 @@ history nobody can supply.
 
 ### Reaching the API
 
-Over the tailnet, from any device on it:
+Over the tailnet, from any device on it. `H` is this machine's tailnet name —
+`tailscale status --json | jq -r .Self.DNSName`:
 
 ```bash
-curl http://<tailscale-ip>:8080/health
-curl http://<tailscale-ip>:8080/internal/market/status | jq
+H=https://btcusd.tail1234.ts.net
+
+curl $H/health
+curl $H/internal/market/status | jq
 ```
+
+Plain HTTP on `<tailscale-ip>:8080` is gone as of phase 09b; the api is on
+loopback and `tailscale serve` terminates TLS in front of it (§2.6). On the
+host itself `curl http://127.0.0.1:8080/health` still works and is the way to
+tell an api problem from a `tailscale serve` problem.
 
 The status response nests the collector's own fields under `collector`, and
 reports freshness per timeframe under `timeframes`:
 
 ```bash
-S=http://<tailscale-ip>:8080/internal/market/status
+S=$H/internal/market/status
 
 curl -s $S | jq '.collector | {state, running, ws_connected, reconnect_count, heartbeat_age_seconds}'
 curl -s $S | jq '.timeframes[] | {timeframe, latest_age_seconds, unfilled_gaps}'
@@ -498,8 +597,14 @@ Checked on: `________________`
 
 - [ ] `make prod-ps` shows `postgres`, `api`, `collector` running
 - [ ] Migrations applied automatically, with no manual step
-- [ ] `/health` returns 200 over Tailscale
+- [ ] `/health` returns 200 over Tailscale, **over HTTPS**
 - [ ] `/health` is **unreachable** from the public IP
+- [ ] The plain `<tailscale-ip>:8080` port is gone — connection refused
+- [ ] `tailscale serve status` shows one HTTPS proxy and no funnel
+- [ ] The app loads at `https://<machine>.<tailnet>.ts.net/`, and
+      `/signals/<some id>` loads it too rather than 404ing
+- [ ] The websocket connects: the chart keeps updating, and there is no
+      `websocket handshake failed` in the api log
 - [ ] `/internal/market/status` shows `ws_connected: true` and state `live` after backfill
 - [ ] 1m `latest_age_seconds` stays under 120 across several checks
 - [ ] `data_gaps` has no unfilled rows, or only the known 2023-03-24 outage
@@ -513,13 +618,22 @@ Commands for the ones that are not obvious:
 
 ```bash
 # From a device on the tailnet:
-curl -s http://<tailscale-ip>:8080/health
-curl -s http://<tailscale-ip>:8080/internal/market/status |
+H=https://btcusd.tail1234.ts.net
+
+curl -s $H/health
+curl -s $H/internal/market/status |
   jq '{state: .collector.state, ws: .collector.ws_connected, stale,
        tf: [.timeframes[] | {timeframe, latest_age_seconds, unfilled_gaps}]}'
 
+# The app, and a screen path that was never exported:
+curl -sI $H/ | head -1
+curl -sI $H/signals/00000000-0000-0000-0000-000000000000 | head -1
+
+# The old plain port, which must now refuse:
+curl -m 5 http://<tailscale-ip>:8080/health ; echo "exit=$?"
+
 # From anywhere else — both must fail, not hang and not answer:
-curl -m 5 http://<public-ip>:8080/health ; echo "exit=$?"
+curl -m 5 https://<public-ip>/health     ; echo "exit=$?"
 curl -m 5 http://<public-ip>:5432        ; echo "exit=$?"
 
 # Unfilled gaps:
@@ -555,7 +669,7 @@ fix is verified against fakes and **has never met the real exchange.**
 Leave the collector running at least 48 hours, then check:
 
 ```bash
-curl -s http://<tailscale-ip>:8080/internal/market/status |
+curl -s https://<machine>.<tailnet>.ts.net/internal/market/status |
   jq '.collector | {reconnect_count, last_connected_at, last_disconnected_at, last_disconnect_note}'
 
 # Reconnects, and the backfill that should follow each one:
@@ -637,13 +751,16 @@ Be certain. Two years of candles do not come back.
 
 ## 9. Deliberately not here
 
-- **Nginx, Caddy, TLS, a public domain.** Tailscale covers access, and phase 08
-  did not change that: the app reaches the API over the tailnet.
-  `deploy/Caddyfile` is kept for the day a public hostname is genuinely needed
-  and is not used by this deployment. It proxies `/health` and `/ready` and
-  404s everything else — the API has no authentication, so publishing a
-  hostname would make every signal, its reason and the whole performance
-  history world-readable. ADR 0024 lists what would have to exist first.
+- **Nginx, Caddy, a public domain.** TLS itself arrived in phase 09b, because
+  iOS gives a plain-HTTP page no service worker, no push and no home-screen
+  install — but it arrived as `tailscale serve` (§2.6), which terminates TLS
+  with the tailnet certificate, renews it itself, and cannot reach the public
+  internet without a different command. No reverse proxy, no ACME, no renewal
+  timer. `deploy/Caddyfile` is kept for the day a **public** hostname is
+  genuinely needed and is still not used: the API has no authentication, so
+  publishing a hostname would make every signal, its reason and the whole
+  performance history world-readable. ADR 0024 lists what would have to exist
+  first.
 - **CI/CD.** Deployment is `git pull` and `systemctl restart`.
 - **Prometheus, Grafana, external alerting.** The disk check logs to journald;
   `/internal/market/status` is the health surface. Alerting arrives with the
