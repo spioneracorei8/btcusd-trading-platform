@@ -1,0 +1,14 @@
+{
+  "colors": {
+    "ground": "#0D1512",
+    "jade": "#5A9179",
+    "jadeDim": "#3E6B5A",
+    "gold": "#B39B63"
+  },
+  "geometry": {
+    "size": 1024,
+    "outer": 344,
+    "inner": 224,
+    "goldWidth": 16
+  }
+}

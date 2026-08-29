@@ -17,25 +17,41 @@
 import { chromium } from 'playwright';
 import { mkdir, writeFile } from 'node:fs/promises';
 
+import { group, luminance as luminanceOf, token } from './theme.mjs';
+
 const URL_BASE = process.env.APP_URL ?? 'http://127.0.0.1:8081';
 const OUT = process.env.OUT ?? 'screenshots';
 
 const SCREENS = ['Now', 'Signals', 'Chart', 'Performance', 'Status'];
 
-/** The gold tokens, from src/theme/colors.ts. */
-const GOLD = ['#8A7A52', '#B39B63', '#D4BC85', '#4A4032'].map((h) => h.toLowerCase());
+/**
+ * The gold tokens, read from src/theme/colors.ts rather than copied.
+ *
+ * A copy would be the quiet failure this tool is supposed to catch: change a
+ * gold token, and an audit matching against the old list stops recognising
+ * gold at all — so the area cap passes on every screen and reports success.
+ */
+const GOLD = [
+  ...Object.values(group('gold')),
+  // The gold hairline lives with the borders and is gold for this purpose.
+  token('border', 'gold'),
+].map((hex) => hex.toLowerCase());
 
 /** Anything larger than roughly a 24pt square is a fill, not an accent. */
 const MAX_GOLD_AREA = 24 * 24;
 
 /**
- * The brightest thing the palette allows: text.primary, #E8E4D9.
+ * The brightest thing the palette allows: text.primary.
  *
- * "Easy on the eyes, never bright." Nothing painted should exceed it —
- * a value above this is either pure white, which the palette forbids
- * outright, or a colour that got in from outside src/theme.
+ * "Easy on the eyes, never bright." Nothing painted should exceed it — a value
+ * above this is either pure white, which the palette forbids outright, or a
+ * colour that got in from outside src/theme.
+ *
+ * Computed from the token rather than written down, for the same reason as the
+ * golds above: a ceiling that stopped matching the palette would raise or lower
+ * itself silently.
  */
-const MAX_LUMINANCE = 0.7765;
+const MAX_LUMINANCE = Number(luminanceOf(token('text', 'primary')).toFixed(4));
 
 await mkdir(OUT, { recursive: true });
 

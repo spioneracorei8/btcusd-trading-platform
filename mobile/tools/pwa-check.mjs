@@ -2,8 +2,9 @@
  * Drives the built app in a browser and checks the four things that only work
  * end to end.
  *
- *   OUT=dist npm run build:web
- *   BASE=http://127.0.0.1:8099 node tools/pwa-check.mjs
+ *   BASE=http://127.0.0.1:8099 OUT=dist node tools/pwa-check.mjs
+ *
+ * It builds first, so it can be run against a directory in any state.
  *
  * # Why this is not a unit test
  *
@@ -24,6 +25,14 @@ import { writeFileSync, unlinkSync } from 'node:fs';
 
 const BASE = process.env.BASE ?? 'http://127.0.0.1:8099';
 const OUT = process.env.OUT ?? 'dist';
+
+// Built here rather than assumed, because the update check below deliberately
+// deploys a second build into the same directory and leaves it there. A run
+// that started from the previous run's leftovers would produce the same build
+// id twice, see no update, and fail — which is what happened, and which reads
+// as a broken worker rather than a stale export.
+console.log('building');
+execFileSync('node', ['tools/build-web.mjs'], { env: { ...process.env, OUT }, stdio: 'pipe' });
 
 const failures = [];
 const check = (name, ok, detail = '') => {

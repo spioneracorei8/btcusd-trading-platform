@@ -46,8 +46,8 @@
     "lint": "eslint .",
     "check": "npm run typecheck && npm run lint && npm run test",
     "build:web": "node tools/build-web.mjs",
-    "icons": "node tools/icons.mjs",
-    "pwa-check": "node tools/pwa-check.mjs"
+    "pwa-check": "node tools/pwa-check.mjs",
+    "icon": "node tools/draw-icon.mjs && node tools/icons.mjs"
   },
   "private": true
 }

@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import fs from 'fs';
 import path from 'path';
 
@@ -130,5 +131,66 @@ describe('the tokens hold the rules they were chosen for', () => {
     // what turns an instrument into a celebration.
     expect(budget.maxGoldAreaPt).toBeLessThanOrEqual(24 * 24);
     expect(Object.keys(gold)).toEqual(['dim', 'base', 'bright']);
+  });
+});
+
+/*
+TestTheToolsReadTheSameTokensTheAppDoes.
+
+# What this prevents
+
+tools/theme.mjs pulls the palette out of colors.ts with a regex, because a Node
+script cannot import TypeScript. Two tools depend on it, and one of them —
+tools/audit.mjs — uses it to decide what counts as gold when enforcing the area
+cap.
+
+A regex that stopped matching would not throw. It would return fewer tokens, or
+none, and the audit would then find no gold on any screen and report that every
+screen is within budget. That is the failure this whole convention exists to
+prevent, arriving through the tool meant to enforce it.
+
+So the extractor is run the way the tools run it — in Node, from the package
+root — and its output compared against what the app imports.
+*/
+describe('the token reader the build tools use', () => {
+  const extracted = JSON.parse(
+    execFileSync(
+      'node',
+      [
+        '--input-type=module',
+        '-e',
+        `import { group, luminance, token } from './tools/theme.mjs';
+         const groups = ['bg', 'border', 'jade', 'gold', 'text', 'direction', 'semantic'];
+         console.log(JSON.stringify({
+           groups: Object.fromEntries(groups.map((g) => [g, group(g)])),
+           textPrimary: token('text', 'primary'),
+           luminance: Number(luminance(token('text', 'primary')).toFixed(4)),
+         }));`,
+      ],
+      { cwd: path.join(__dirname, '..', '..'), encoding: 'utf8' },
+    ),
+  ) as {
+    groups: Record<string, Record<string, string>>;
+    textPrimary: string;
+    luminance: number;
+  };
+
+  it.each([
+    ['bg', colors.bg],
+    ['border', colors.border],
+    ['jade', colors.jade],
+    ['gold', colors.gold],
+    ['text', colors.text],
+    ['direction', colors.direction],
+    ['semantic', colors.semantic],
+  ])('reads %s exactly as the app imports it', (name, imported) => {
+    expect(extracted.groups[name]).toEqual({ ...imported });
+  });
+
+  it('agrees with the app on the brightest thing the palette allows', () => {
+    expect(extracted.textPrimary).toBe(colors.text.primary);
+    // The ceiling tools/audit.mjs enforces. Computed on both sides rather than
+    // written down, so it cannot drift from the token it describes.
+    expect(extracted.luminance).toBe(0.7765);
   });
 });

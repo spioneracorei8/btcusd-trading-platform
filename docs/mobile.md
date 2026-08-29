@@ -84,15 +84,35 @@ when nothing did would make every deployment look like an update.
 The icons are **not** part of the build:
 
 ```console
-$ npm run icons                  # public/{apple-touch-icon,icon-192,icon-512}.png
+$ npm run icon                   # draws assets/icon.png, then the three sizes
 ```
 
-They are generated from `assets/icon.png` and committed. Running a browser to
-produce identical bytes on every build is a slow way to change nothing, and the
-icon changes about once.
+They are committed. Running a browser to produce identical bytes on every build
+is a slow way to change nothing, and the icon changes about once.
 
-> The source icon is still the Expo scaffold default — a blue "A" on white with
-> construction guides. It resizes correctly and it is not this app's icon.
+### The icon
+
+A jade bi disc: a flat ring with an open centre, drawn from the theme tokens —
+`bg.base` as the ground, `jade.base` to `jade.dim` for the mark, and
+`gold.base` as a rim on the opening and nothing else.
+
+It is not a candlestick. A chart rendered at 60 pixels is a smudge, and the
+proportions here were chosen at 60 and checked upwards rather than the other
+way round: this sits on a home screen at small sizes far more often than
+anybody looks at it large. A ring is among the most robust shapes there is when
+there are only a few dozen pixels to say it in.
+
+The gold is about 2% of the icon's area and no fill. At 180pt it reads as a
+fine warm line; by 60pt it has faded to almost nothing, which is what an accent
+should do rather than being the first thing the eye lands on. An earlier draft
+put the gold ring *outside* the jade, and that was exactly the mistake — the
+brightest thing in the icon was its frame rather than its subject.
+
+The colours are not typed into the drawing tool. A PNG is the one artefact here
+where a literal could hide from the lint rule, so `tools/draw-icon.mjs` reads
+`src/theme/colors.ts` and records what it used in `assets/icon.tokens.json`;
+`src/theme/icon.test.ts` compares that record against the tokens. Change a
+token without redrawing and the test says so.
 
 ---
 
@@ -555,6 +575,13 @@ Three things are enforced mechanically rather than described:
 walks the source. Tokens that are only documented drift, because the day
 somebody needs "just a slightly different green" nothing stops them.
 
+The rule covers the build tools too, which is why they read the palette rather
+than repeating it. That was not cosmetic: `tools/audit.mjs` decides what counts
+as gold when it enforces the area cap, and a stale copy of the gold tokens
+would have made it find no gold on any screen and report every screen within
+budget. The three places a colour can escape the rule entirely — `index.html`,
+`manifest.json` and the icon PNG — are each pinned to the tokens by a test.
+
 **No order-placing code or UI** — `src/__tests__/no-orders.test.ts` checks for
 trading endpoints, venue credentials, wording that reads as acting on a
 position, and that the only non-GET request in the app is the device
@@ -638,7 +665,9 @@ Stated plainly rather than left to be discovered:
 - **Nothing was tested over an actual tailnet**, and nothing over real HTTPS.
   The API was reached on loopback, which browsers treat as a secure context —
   which is why the service worker could be tested at all here.
-- **The app icon is the Expo scaffold default.** It resizes correctly to every
-  size an install needs, and it is not this app's icon.
+- **The icon has not been seen on a home screen.** It was checked at 60, 76,
+  120 and 180 points, downscaled from the shipped files rather than re-rendered,
+  on black. What iOS does with its own mask and its own scaling is one thing
+  that still needs the phone.
 - **No APK, and no native iOS.** Neither is coming; ADR 0028 says why and under
   what condition to reconsider.

@@ -26,7 +26,7 @@ module.exports = [
     },
   },
   {
-    files: ['**/*.{ts,tsx,js,jsx}'],
+    files: ['**/*.{ts,tsx,js,jsx,mjs}'],
     rules: {
       'no-restricted-syntax': [
         'error',
@@ -56,6 +56,12 @@ module.exports = [
   },
   {
     // Build tooling runs in Node, not in the app.
+    //
+    // The colour rule above covers it too. These scripts sit outside src/ and
+    // used to carry their own copies of the palette, which is the drift the
+    // rule exists to prevent — and in tools/audit.mjs it was worse than
+    // cosmetic: a stale copy of the gold tokens would have made the gold-area
+    // cap pass on everything. They read tools/theme.mjs instead.
     files: ['tools/**/*.mjs'],
     languageOptions: {
       globals: { Buffer: 'readonly', process: 'readonly', console: 'readonly' },
