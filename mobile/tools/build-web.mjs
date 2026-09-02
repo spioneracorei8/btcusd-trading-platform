@@ -23,9 +23,17 @@ const OUT = process.env.OUT ?? 'dist';
 await rm(OUT, { recursive: true, force: true });
 
 console.log(`exporting to ${OUT}`);
-execFileSync('npx', ['expo', 'export', '--platform', 'web', '--output-dir', OUT], {
-  stdio: 'inherit',
-});
+try {
+  execFileSync('npx', ['expo', 'export', '--platform', 'web', '--output-dir', OUT], {
+    stdio: 'inherit',
+  });
+} catch {
+  // Expo has already printed why. Adding a Node stack trace on top buries it
+  // under twenty lines of internals, which is where the useful message goes to
+  // die — the export failing is an ordinary thing to have to read.
+  console.error('\nexport failed; see the error above');
+  process.exit(1);
+}
 
 /** Every file in the export, as absolute-from-root URLs. */
 async function walk(dir, prefix = '') {
@@ -39,6 +47,17 @@ async function walk(dir, prefix = '') {
 }
 
 const files = (await walk(OUT)).sort();
+
+// A build that emits nothing is not a build. Expo has exited zero with an
+// empty directory before now — a cache in a bad state, a bundler crash it
+// swallowed — and the next thing to happen would be a service worker
+// precaching a list of files that are not there.
+for (const required of ['/index.html', '/sw.js']) {
+  if (!files.includes(required)) {
+    console.error(`\nthe export has no ${required}; it produced ${files.length} files`);
+    process.exit(1);
+  }
+}
 
 /**
  * What the worker precaches on install.

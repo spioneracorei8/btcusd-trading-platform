@@ -67,9 +67,24 @@ which closes native iOS twice over; ADR 0028 records the trade and the
 condition under which to revisit it.
 
 ```console
+$ npm install
 $ npm run build:web              # into dist/
 $ OUT=/srv/btcusd/web npm run build:web
 ```
+
+`app.json` declares `platforms: ["web"]`. That is the only target — there is no
+APK and no native iOS (ADR 0028) — and saying so removes a guess: undeclared,
+Expo infers all three from the SDK, and `expo export --platform web` then
+refuses with *"No platforms are configured to use the Metro bundler in the
+project Expo config"* whenever it cannot work out that web is among them.
+
+**That message is usually a missing `npm install`, not a broken config.** With
+no `node_modules`, the SDK version cannot resolve, the platform inference comes
+back without web, and the error describes a symptom two steps from its cause.
+Declaring the platform means the inference is never consulted.
+
+It also makes a native export refuse outright, naming what is configured,
+rather than producing a bundle for a target nobody can install.
 
 That runs `expo export --platform web` and then stamps the service worker with
 two things only the export knows: a build identity, and the list of files this
@@ -162,9 +177,17 @@ is installed."* — and reloading is a tap.
 $ BASE=https://<machine>.<tailnet>.ts.net npm run pwa-check
 ```
 
-`tools/pwa-check.mjs` drives all of that in a real browser: install, precache,
-the API bypass, a cold load of a signal URL, the offline shell, and a full
-update cycle. It exists because those span files that cannot see each other —
+`tools/pwa-check.mjs` drives all of that in a real browser: the export itself,
+then install, precache, the API bypass, a cold load of a signal URL, the
+offline shell, and a full update cycle.
+
+The export is the first check rather than a prerequisite, for two reasons. The
+update cycle deliberately deploys a second build into the same directory and
+leaves it there, so a run starting from the previous run's leftovers would see
+no change and fail — which reads as a broken worker rather than a stale export.
+And an export that cannot be produced at all is the most basic thing that can
+be wrong, so it fails here, with what the build actually said, rather than
+being swallowed while the browser is driven against whatever was left behind. It exists because those span files that cannot see each other —
 `src/pwa/` is tested against a fake registration and `public/sw.js` is tested by
 nothing, so the two halves can disagree while every unit test passes. They did:
 `sw.js` called `skipWaiting()` on install while `register.ts` was built around a

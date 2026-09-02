@@ -9,7 +9,15 @@ const manifest = JSON.parse(
   readFileSync(path.join(root, 'public', 'manifest.json'), 'utf8'),
 ) as Record<string, unknown>;
 const appJson = JSON.parse(readFileSync(path.join(root, 'app.json'), 'utf8')) as {
-  expo: { backgroundColor?: string; name?: string };
+  expo: {
+    backgroundColor?: string;
+    name?: string;
+    platforms?: string[];
+    web?: { bundler?: string };
+    android?: unknown;
+    ios?: unknown;
+    plugins?: unknown;
+  };
 };
 
 /*
@@ -102,5 +110,45 @@ describe('the apple-specific tags', () => {
 
   it('covers the notch, so the background is not framed in white', () => {
     expect(html).toMatch(/viewport-fit=cover/);
+  });
+});
+
+/*
+TestTheConfigTargetsTheWebAndSaysSo.
+
+# What this prevents
+
+Web is the only build target this project has: there is no APK and no native
+iOS (ADR 0028). Left undeclared, Expo infers `["ios", "android", "web"]` from
+the SDK — which is three platforms, two of which cannot be built and one of
+which is the whole app.
+
+The inference is also the failure mode. `expo export --platform web` refuses
+with "No platforms are configured to use the Metro bundler in the project Expo
+config" when it cannot work out that web is one of them, and it cannot work
+that out when the install is incomplete — which reads as a broken config rather
+than a missing `npm install`. Declaring the platform removes the guess.
+
+Saying it outright has a second effect worth having: `expo export --platform
+android` now refuses and names what *is* configured, instead of producing a
+bundle for a target nobody can install.
+*/
+describe('the Expo config', () => {
+  it('declares web as the platform', () => {
+    expect(appJson.expo.platforms).toEqual(['web']);
+  });
+
+  it('says which bundler web uses, which is what the export looks for', () => {
+    expect(appJson.expo.web?.bundler).toBe('metro');
+  });
+
+  /*
+   * Removed in phase 09b part A, when the app stopped being an APK. Dead
+   * configuration that still looks live is the thing this project keeps
+   * closing: `usesCleartextTraffic` in particular described a plain-HTTP
+   * deployment that part B made untrue.
+   */
+  it.each(['android', 'ios', 'plugins'] as const)('carries no %s configuration', (key) => {
+    expect(appJson.expo[key]).toBeUndefined();
   });
 });

@@ -8,6 +8,9 @@
     "scheme": "btcusd",
     "userInterfaceStyle": "dark",
     "backgroundColor": "#0D1512",
+    "platforms": [
+      "web"
+    ],
     "web": {
       "favicon": "./assets/favicon.png",
       "bundler": "metro"

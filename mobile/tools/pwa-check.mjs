@@ -26,19 +26,48 @@ import { writeFileSync, unlinkSync } from 'node:fs';
 const BASE = process.env.BASE ?? 'http://127.0.0.1:8099';
 const OUT = process.env.OUT ?? 'dist';
 
-// Built here rather than assumed, because the update check below deliberately
-// deploys a second build into the same directory and leaves it there. A run
-// that started from the previous run's leftovers would produce the same build
-// id twice, see no update, and fail — which is what happened, and which reads
-// as a broken worker rather than a stale export.
-console.log('building');
-execFileSync('node', ['tools/build-web.mjs'], { env: { ...process.env, OUT }, stdio: 'pipe' });
 
 const failures = [];
+/** Records a check, and reports whether it held so a caller can stop. */
 const check = (name, ok, detail = '') => {
   console.log(`  ${ok ? 'ok  ' : 'FAIL'}  ${name}${detail ? `  — ${detail}` : ''}`);
   if (!ok) failures.push(name);
+  return ok;
 };
+
+/**
+ * Builds, and reports the build as the first check.
+ *
+ * # Why this is a check and not a prerequisite
+ *
+ * Two reasons, and the second is the one that bit.
+ *
+ * The export has to happen here because the update check below deliberately
+ * deploys a second build into the same directory and leaves it there. A run
+ * starting from the previous run's leftovers produces the same build id twice,
+ * sees no update, and fails — which reads as a broken service worker rather
+ * than a stale export.
+ *
+ * And an export that cannot be produced at all is the most basic thing that
+ * can be wrong, so it must fail here rather than being swallowed. This used to
+ * throw out of execFileSync with stdio piped, which exited non-zero but showed
+ * a Node stack instead of what Expo actually said.
+ */
+function build() {
+  try {
+    execFileSync('node', ['tools/build-web.mjs'], {
+      env: { ...process.env, OUT },
+      stdio: 'pipe',
+      encoding: 'utf8',
+    });
+    return true;
+  } catch (failure) {
+    // What the build printed, which is the only part worth reading.
+    const said = `${failure.stdout ?? ''}${failure.stderr ?? ''}`.trim();
+    console.log(said ? `\n${said}\n` : `\n${failure.message}\n`);
+    return false;
+  }
+}
 
 const browser = await chromium.launch({
   executablePath: process.env.CHROMIUM_PATH ?? '/opt/pw-browsers/chromium-1194/chrome-linux/chrome',
@@ -46,6 +75,17 @@ const browser = await chromium.launch({
 });
 const context = await browser.newContext({ viewport: { width: 412, height: 915 } });
 const page = await context.newPage();
+
+// ---------------------------------------------------------------------------
+console.log('\nbuild');
+// ---------------------------------------------------------------------------
+if (!check('the app exports', build())) {
+  // Nothing below can mean anything: the browser would be driven against
+  // whatever the last run happened to leave behind, and would mostly pass.
+  console.log('\n1 failed: the app exports');
+  await browser.close();
+  process.exit(1);
+}
 
 // ---------------------------------------------------------------------------
 console.log('\ninstall');
