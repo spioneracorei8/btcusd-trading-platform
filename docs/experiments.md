@@ -1026,3 +1026,11 @@ of the arithmetic, not a market observation. Ignore that section in runs 1–7.
 - **Concentration (best 5):** 20.19%
 - **Verdict:** fail — Profit factor (1.19, needs > 1.30), Trades in the development period (70, needs >= 200)
 - **Note:** _(to fill in — what you learned, not what you hoped)_
+
+### 65. 2026-08-22 — suppressed
+
+- **Suppressed:** details withheld with `--no-experiment-log`. The number is spent so the count of runs stays honest.
+
+### 66. 2026-08-22 — suppressed
+
+- **Suppressed:** details withheld with `--no-experiment-log`. The number is spent so the count of runs stays honest.
