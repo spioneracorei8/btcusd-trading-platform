@@ -479,18 +479,33 @@ Here is the procedure. It needs the iPhone, the VPS, and about twenty minutes.
 Open the app, go to Status, tap through the alerts card. Confirm it says
 *Alerts are on* and `GET /api/v1/status` shows `devices_registered: 1`.
 
-Then lock the phone and wait for a signal — or force one:
+Then lock the phone and wait for a signal — or force one.
+
+**Forcing one means inserting two rows, not one.** A signal is queued for
+delivery by the evaluator, in the same pass that records it; nothing sweeps the
+table afterwards looking for signals that have no notification. So a row put
+straight into `signals` is a signal that will never be delivered, and waiting
+for an alert from one is waiting for something that cannot arrive.
 
 ```console
 $ psql "$DATABASE_URL" -c "
-  INSERT INTO signals (id, symbol, market_type, timeframe, signal_time,
-                       direction, strength, signal_price, stop_loss,
-                       take_profit, strategy_name, strategy_version, reason)
-  VALUES (gen_random_uuid(), 'BTCUSDT', 'spot', '4h', now(), 'long', 50,
-          64000, 63500, 65000, 'ema_crossover', 'v1',
-          '{\"trigger\":\"delivery check\"}'::jsonb)
-  RETURNING id;"
+  WITH s AS (
+    INSERT INTO signals (id, symbol, market_type, timeframe, signal_time,
+                         direction, strength, signal_price, entry_price,
+                         stop_loss, take_profit, strategy_name,
+                         strategy_version, reason)
+    VALUES (gen_random_uuid(), 'BTCUSDT', 'spot', '4h', now(), 'long', 50,
+            64000, 64010, 63500, 65000, 'ema_crossover', 'v1',
+            '{\"trigger\":\"delivery check\"}'::jsonb)
+    RETURNING id
+  )
+  INSERT INTO notifications (signal_id, channel)
+  SELECT id, 'webpush' FROM s
+  RETURNING signal_id;"
 ```
+
+`next_attempt_at` defaults to `now()`, so the row is due on the delivery
+worker's next pass — within a minute.
 
 **Expected:** an alert within a minute. Title `BTCUSDT 4h LONG`, body carrying
 `ref 64000 · stop 63500 · target 65000`.
@@ -521,7 +536,7 @@ $ psql "$DATABASE_URL" -c "
 **4. A subscription that is gone retries nothing and gives up at once.**
 
 Delete the app from the home screen without deregistering, then insert another
-signal.
+signal — both rows again, as above.
 
 **Expected:** the push service answers `410 Gone`, the worker treats it as
 permanent and marks the row `failed` on the **first** attempt — not after five
@@ -532,7 +547,7 @@ The queue does not grow without bound.
 
 Add to the home screen again, open it, allow notifications. Confirm the status
 screen shows a **different** masked endpoint and that `registered_at` has moved.
-Insert another signal.
+Insert another signal, both rows.
 
 **Expected:** delivered. This is the replacement path, and it is the one that
 silently breaks a deployment holding a subscription in a config file.
