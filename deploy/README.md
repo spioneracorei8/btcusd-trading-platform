@@ -216,9 +216,32 @@ every endpoint and an origin allowlist on the websocket, and the reflex when a
 preflight fails is to widen the allowlist. Same-origin has none of those
 decisions in it — see ADR 0024 and ADR 0028.
 
-Put the export somewhere the api can read and add the overlay:
+**The export is built on the development machine, not here.** There is no node
+on this host — §2.2 installs Docker and Tailscale and nothing else — and
+bundling six hundred modules on 2 vCPU would be slow even if there were. It is
+the same split as everything else: this host collects and serves, the
+developer machine builds.
+
+**[on the development machine]**
 
 ```bash
+cd mobile
+npm install                       # once
+npm run build:web                 # into mobile/dist
+
+rsync -a --delete dist/ btcusd@<host>:/srv/btcusd/web/
+```
+
+`--delete` matters. The service worker precaches a list of fingerprinted
+filenames taken from the export, so a directory still holding the previous
+build's bundle is a directory where the old one is reachable — and a worker
+that fetches it gets a 200 for a file this build never emitted.
+
+**[on the VPS]**
+
+```bash
+sudo mkdir -p /srv/btcusd/web && sudo chown btcusd:btcusd /srv/btcusd/web
+
 # in .env
 WEB_ROOT_HOST=/srv/btcusd/web
 

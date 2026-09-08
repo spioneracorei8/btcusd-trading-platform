@@ -69,8 +69,13 @@ condition under which to revisit it.
 ```console
 $ npm install
 $ npm run build:web              # into dist/
-$ OUT=/srv/btcusd/web npm run build:web
 ```
+
+The VPS has no node — it runs Docker and Tailscale and nothing else — so the
+export is built here and copied there. `deploy/README.md` §2.6 has the rsync,
+and the `--delete` in it is not optional: the service worker precaches
+fingerprinted filenames from this build, and a directory still holding the
+previous build's bundle is one where the old one answers 200.
 
 `app.json` declares `platforms: ["web"]`. That is the only target — there is no
 APK and no native iOS (ADR 0028) — and saying so removes a guess: undeclared,
