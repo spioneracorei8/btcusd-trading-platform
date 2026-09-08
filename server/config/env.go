@@ -250,11 +250,32 @@ type Config struct {
 // setting it would never use.
 type Option func(*settings)
 
-type settings struct{ servesHTTP bool }
+type settings struct {
+	servesHTTP bool
+	delivers   bool
+}
 
 // WithoutHTTPServer relaxes HTTP_PORT for a process that never listens.
 func WithoutHTTPServer() Option {
 	return func(s *settings) { s.servesHTTP = false }
+}
+
+// WithoutDelivery relaxes the sending half of the VAPID pair for a process
+// that never pushes.
+//
+// # Why this is not the same question as the mode
+//
+// SIGNAL_MODE=notify is a fact about the deployment; whether *this* process
+// sends is a fact about the binary. Only the collector sends. The api holds the
+// public key because it serves it to the app — which cannot subscribe without
+// it — and deliberately never receives the private one, so that a compromise
+// of the process on the network boundary cannot push to the owner's phone.
+//
+// Conflating the two required the private key everywhere and made the api
+// unable to start at all in notify mode, while the collector ran fine: one
+// setting, two processes, and only one of them broken.
+func WithoutDelivery() Option {
+	return func(s *settings) { s.delivers = false }
 }
 
 // Load reads the configuration from the process environment, after loading a
@@ -276,7 +297,7 @@ func Load(opts ...Option) (*Config, error) {
 // LoadFrom reads the configuration through lookup. It exists so tests can
 // supply an environment without mutating the process one.
 func LoadFrom(lookup helper.LookupFunc, opts ...Option) (*Config, error) {
-	set := settings{servesHTTP: true}
+	set := settings{servesHTTP: true, delivers: true}
 	for _, opt := range opts {
 		opt(&set)
 	}
@@ -348,32 +369,38 @@ func LoadFrom(lookup helper.LookupFunc, opts ...Option) (*Config, error) {
 	// A mode that claims to deliver and cannot is worse than one that says it
 	// will not: the first looks like it is working.
 	if cfg.Notify.Delivers() {
-		if cfg.Notify.VAPIDPublicKey == "" {
+		// The public key is wanted by both kinds of process: the sender puts it
+		// in the VAPID header, and the api serves it to the app, which cannot
+		// subscribe without it.
+		if (set.delivers || set.servesHTTP) && cfg.Notify.VAPIDPublicKey == "" {
 			l.missing = append(l.missing, "VAPID_PUBLIC_KEY")
 		}
-		if cfg.Notify.VAPIDPrivateKey == "" {
-			l.missing = append(l.missing, "VAPID_PRIVATE_KEY")
-		}
-		switch {
-		case cfg.Notify.VAPIDSubject == "":
-			l.missing = append(l.missing, "VAPID_SUBJECT")
 
-		// Checked here rather than only where the push is signed, so that
-		// every process refuses together.
-		//
-		// The sender validates it too, but the sender only exists in the
-		// collector — so a malformed subject used to start the api happily
-		// and crash-loop the collector, which looks like two unrelated
-		// problems rather than one line in a file.
-		//
-		// A bare address is the way it goes wrong: RFC 8292 wants a URL, and
-		// "set this to a real address" reads as "replace the address".
-		case !strings.HasPrefix(cfg.Notify.VAPIDSubject, "mailto:") &&
-			!strings.HasPrefix(cfg.Notify.VAPIDSubject, "https://"):
-			l.invalidf("VAPID_SUBJECT",
-				"%q must be a mailto: or https: URL saying who to contact about this "+
-					"application server; an address on its own is not one — try mailto:%s",
-				cfg.Notify.VAPIDSubject, cfg.Notify.VAPIDSubject)
+		// The private half and the subject are the sender's alone. Requiring
+		// them of a process that never pushes would demand a credential it is
+		// deliberately not given — see WithoutDelivery.
+		if set.delivers {
+			if cfg.Notify.VAPIDPrivateKey == "" {
+				l.missing = append(l.missing, "VAPID_PRIVATE_KEY")
+			}
+
+			switch {
+			case cfg.Notify.VAPIDSubject == "":
+				l.missing = append(l.missing, "VAPID_SUBJECT")
+
+			// Checked here rather than only where the push is signed, so that
+			// every process that needs it refuses at the same point, with the
+			// same shape of message as every other configuration error.
+			//
+			// A bare address is the way it goes wrong: RFC 8292 wants a URL,
+			// and "set this to a real address" reads as "replace the address".
+			case !strings.HasPrefix(cfg.Notify.VAPIDSubject, "mailto:") &&
+				!strings.HasPrefix(cfg.Notify.VAPIDSubject, "https://"):
+				l.invalidf("VAPID_SUBJECT",
+					"%q must be a mailto: or https: URL saying who to contact about this "+
+						"application server; an address on its own is not one — try mailto:%s",
+					cfg.Notify.VAPIDSubject, cfg.Notify.VAPIDSubject)
+			}
 		}
 	}
 

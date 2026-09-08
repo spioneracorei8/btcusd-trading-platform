@@ -23,7 +23,7 @@ func getMainServer(cfg *config.Config, log *slog.Logger) *server.Server {
 }
 
 func main() {
-	cfg, err := config.Load()
+	cfg, err := config.Load(config.WithoutDelivery())
 	if err != nil {
 		// Every missing or invalid variable is named in err.
 		slog.Error("invalid configuration", "error", err)

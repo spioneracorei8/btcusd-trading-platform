@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -706,5 +707,176 @@ func TestAMailtoOrHttpsSubjectIsAccepted(t *testing.T) {
 		if _, err := config.LoadFrom(env(e)); err != nil {
 			t.Errorf("%q was refused: %v", subject, err)
 		}
+	}
+}
+
+/*
+TestEachProcessRequiresOnlyWhatItIsGiven.
+
+# What this prevents, and did not
+
+SIGNAL_MODE=notify is a fact about the deployment. Whether a given binary sends
+is a fact about that binary — only the collector does. The api holds the public
+key because it serves it to the app, which cannot subscribe without it, and is
+deliberately never given the private one: a process on the network boundary
+that cannot push is one whose compromise cannot either.
+
+Requiring all three of every process made the api unable to start at all in
+notify mode while the collector ran fine. It reached the VPS, where it looked
+like two unrelated faults, and the api had been crash-looping for some minutes
+before anybody connected it to a setting changed in one file.
+
+It was invisible in development because a shell that sources the whole .env
+gives every process everything. Only compose withholds, and only in production.
+*/
+func TestEachProcessRequiresOnlyWhatItIsGiven(t *testing.T) {
+	// Exactly what deploy/docker-compose.yml passes to the api.
+	apiEnv := func() map[string]string {
+		e := validEnv()
+		e["SIGNAL_MODE"] = "notify"
+		e["VAPID_PUBLIC_KEY"] = "a-public-key"
+		return e
+	}
+
+	t.Run("the api starts on the public key alone", func(t *testing.T) {
+		if _, err := config.LoadFrom(env(apiEnv()), config.WithoutDelivery()); err != nil {
+			t.Fatalf("the api cannot start on what compose gives it: %v", err)
+		}
+	})
+
+	t.Run("the api still needs the public key, which it serves", func(t *testing.T) {
+		e := apiEnv()
+		delete(e, "VAPID_PUBLIC_KEY")
+
+		_, err := config.LoadFrom(env(e), config.WithoutDelivery())
+		if err == nil {
+			t.Fatal("the api started with nothing to hand the app to subscribe with")
+		}
+		if !strings.Contains(err.Error(), "VAPID_PUBLIC_KEY") {
+			t.Errorf("the error does not name it: %v", err)
+		}
+	})
+
+	t.Run("the collector needs the sending half too", func(t *testing.T) {
+		_, err := config.LoadFrom(env(apiEnv()))
+		if err == nil {
+			t.Fatal("the collector started with no private key to sign with")
+		}
+		for _, key := range []string{"VAPID_PRIVATE_KEY", "VAPID_SUBJECT"} {
+			if !strings.Contains(err.Error(), key) {
+				t.Errorf("the error does not name %s: %v", key, err)
+			}
+		}
+	})
+
+	t.Run("the CLIs need none of it", func(t *testing.T) {
+		e := validEnv()
+		e["SIGNAL_MODE"] = "notify"
+
+		if _, err := config.LoadFrom(env(e),
+			config.WithoutHTTPServer(), config.WithoutDelivery()); err != nil {
+			t.Fatalf("a read-only tool was refused over a key it never uses: %v", err)
+		}
+	})
+}
+
+/*
+TestComposeGivesTheApiTheHalfItNeedsAndNotTheOther.
+
+The other side of the same coupling. The test above says what each process
+requires; this says what the compose file actually supplies, because the bug
+lived in the gap between the two and neither file alone was wrong.
+
+It reads the compose file as text rather than parsing YAML — coarse, and enough
+to catch a key being added to the wrong service.
+*/
+func TestComposeGivesTheApiTheHalfItNeedsAndNotTheOther(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "deploy", "docker-compose.yml"))
+	if err != nil {
+		t.Skipf("no compose file alongside the module: %v", err)
+	}
+
+	// The api service block: from "  api:" to the next top-level service.
+	compose := string(raw)
+	start := strings.Index(compose, "\n  api:\n")
+	if start < 0 {
+		t.Fatal("no api service in the compose file")
+	}
+	rest := compose[start+len("\n  api:\n"):]
+	end := strings.Index(rest, "\n  collector:")
+	if end < 0 {
+		t.Fatal("no collector service after the api")
+	}
+	api := rest[:end]
+
+	if !strings.Contains(api, "VAPID_PUBLIC_KEY") {
+		t.Error("the api is not given VAPID_PUBLIC_KEY; it has nothing to hand the app")
+	}
+	if strings.Contains(api, "VAPID_PRIVATE_KEY") {
+		t.Error("the api is given VAPID_PRIVATE_KEY; only the collector should be able to push")
+	}
+
+	collector := rest[end:]
+	for _, key := range []string{"VAPID_PUBLIC_KEY", "VAPID_PRIVATE_KEY", "VAPID_SUBJECT"} {
+		if !strings.Contains(collector, key) {
+			t.Errorf("the collector is not given %s; it cannot send without it", key)
+		}
+	}
+}
+
+/*
+TestEachBinaryDeclaresWhatItIs.
+
+# What this prevents
+
+The check above knows what a process needs once it says what it is. Nothing
+knew whether the binaries say so. Removing `config.WithoutDelivery()` from
+server/main.go puts the api back to demanding a private key it is never given,
+and every test still passed — which is how the bug got out in the first place:
+the two halves were in different files and nothing read both.
+
+Coarse on purpose. It reads the call as text rather than resolving it, which is
+enough to catch an option being dropped or added to the wrong binary.
+*/
+func TestEachBinaryDeclaresWhatItIs(t *testing.T) {
+	for _, binary := range []struct {
+		file    string
+		wants   []string
+		refuses []string
+	}{
+		// Serves the app and the API; never pushes.
+		{file: "main.go", wants: []string{"WithoutDelivery"}, refuses: []string{"WithoutHTTPServer"}},
+
+		// The only one that sends, and the only one given the private key.
+		{file: "collector/main.go", refuses: []string{"WithoutDelivery", "WithoutHTTPServer"}},
+
+		// Read-only tools: no socket, no push.
+		{file: "backtest/main.go", wants: []string{"WithoutHTTPServer", "WithoutDelivery"}},
+		{file: "reconcile/main.go", wants: []string{"WithoutHTTPServer", "WithoutDelivery"}},
+	} {
+		t.Run(binary.file, func(t *testing.T) {
+			raw, err := os.ReadFile(filepath.Join("..", filepath.FromSlash(binary.file)))
+			if err != nil {
+				t.Skipf("cannot read %s: %v", binary.file, err)
+			}
+
+			// To the end of the line rather than to the first ")", which is the
+			// closing paren of the first option rather than of the call.
+			call := regexp.MustCompile(`config\.Load\(.*`).FindString(string(raw))
+			if call == "" {
+				t.Fatalf("%s does not call config.Load", binary.file)
+			}
+
+			for _, want := range binary.wants {
+				if !strings.Contains(call, want) {
+					t.Errorf("%s calls %s, which does not declare %s", binary.file, call, want)
+				}
+			}
+			for _, refuse := range binary.refuses {
+				if strings.Contains(call, refuse) {
+					t.Errorf("%s calls %s, which should not declare %s", binary.file, call, refuse)
+				}
+			}
+		})
 	}
 }

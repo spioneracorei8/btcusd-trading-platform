@@ -60,7 +60,7 @@ func run() int {
 	// This opens no socket, so demanding a listen port from it would be
 	// asking for a value it has no use for — the same reason the backtest CLI
 	// does not want one.
-	cfg, err := config.Load(config.WithoutHTTPServer())
+	cfg, err := config.Load(config.WithoutHTTPServer(), config.WithoutDelivery())
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return exitUsage

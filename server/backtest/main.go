@@ -146,7 +146,7 @@ func run() int {
 	// The CLI opens no socket, so HTTP_PORT is none of its business. It also
 	// loads the repository .env itself, which is what stops every invocation
 	// having to be preceded by sourcing the same file.
-	cfg, err := config.Load(config.WithoutHTTPServer())
+	cfg, err := config.Load(config.WithoutHTTPServer(), config.WithoutDelivery())
 	if err != nil {
 		slog.Error("invalid configuration", "error", err)
 		return exitUsage
