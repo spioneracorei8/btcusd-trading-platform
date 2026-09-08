@@ -30,6 +30,14 @@ WorkingDirectory=/opt/btcusd
 # on the tailnet being healthy. A host that boots with Tailscale broken still
 # records the market and is simply unreachable until it is fixed.
 
+# No --build here, deliberately. This unit is for the host coming back after a
+# reboot, and rebuilding three images on 2 vCPU before the stack can start
+# would make a reboot both slow and able to fail.
+#
+# The consequence is that `git pull && systemctl restart` starts the OLD binary
+# against the NEW configuration, and looks like it worked — compose applies the
+# new environment, mounts and overlays regardless. Deploying code is
+# `make prod-up`, which builds first. See deploy/README.md §2.6.
 ExecStart=/opt/btcusd/deploy/compose.sh up -d --remove-orphans
 ExecStop=/opt/btcusd/deploy/compose.sh down
 

@@ -195,8 +195,26 @@ this works against the running stack with nothing rebuilt. Once it answers,
 redeploy to drop the old tailnet port:
 
 ```bash
-cd /opt/btcusd && git pull && sudo systemctl restart btcusd
+cd /opt/btcusd && git pull && make prod-up
 ```
+
+**`make prod-up`, not `systemctl restart`.** The unit runs `compose.sh up -d`
+with no `--build`: it exists for the host coming back after a reboot, and
+rebuilding three images on 2 vCPU before the stack can start would make a
+reboot slow and able to fail. So it starts what is already built.
+
+That means `git pull && systemctl restart` starts the **old binary** against
+the new configuration. Which is worse than it sounds, because the compose layer
+does update — new environment, new mounts, new overlays — so everything looks
+deployed. It took a 404 on the app root and a missing log line to notice, with
+`WEB_ROOT` correctly set and the export correctly mounted into a container
+whose api did not yet have the code to read either.
+
+| | |
+|---|---|
+| code changed (`git pull`) | `make prod-up` — builds, then starts |
+| only `.env` or a compose file changed | `sudo systemctl restart btcusd` |
+| the host rebooted | nothing; the unit does it |
 
 Doing it the other way round leaves the host with no way in until
 `tailscale serve` is set up — recoverable over SSH, but a bad five minutes.
@@ -789,7 +807,8 @@ Be certain. Two years of candles do not come back.
   publishing a hostname would make every signal, its reason and the whole
   performance history world-readable. ADR 0024 lists what would have to exist
   first.
-- **CI/CD.** Deployment is `git pull` and `systemctl restart`.
+- **CI/CD.** Deployment is `git pull` and `make prod-up` — the second half
+  builds, which `systemctl restart` does not do. See §2.6.
 - **Prometheus, Grafana, external alerting.** The disk check logs to journald;
   `/internal/market/status` is the health surface. Alerting arrives with the
   notification work in phase 07.
