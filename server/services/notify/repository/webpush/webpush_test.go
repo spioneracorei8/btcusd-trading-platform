@@ -118,6 +118,43 @@ func TestAGoneSubscriptionIsPermanentAndSaysWhatToDo(t *testing.T) {
 }
 
 /*
+TestARefusedApplicationServerNamesTheCredentialRatherThanThePhone.
+
+# What this prevents
+
+The first real delivery attempt in this project came back
+`403 {"reason":"BadJwtToken"}` from web.push.apple.com, and the row was marked
+failed with "the message cannot be delivered" — which is true, says nothing,
+and points at the phone. A 401 or 403 is the push service refusing the
+*application server*: the VAPID pair, or a subscription made against a
+different public key than the one being signed with now.
+
+The second is the common one, because it is what rotating the pair leaves
+behind, and its remedy is the same as a gone subscription's — open the app. An
+error that does not say so sends whoever reads it to the network, the
+firewall, and the TLS certificate first.
+*/
+func TestARefusedApplicationServerNamesTheCredentialRatherThanThePhone(t *testing.T) {
+	for _, status := range []int{http.StatusUnauthorized, http.StatusForbidden} {
+		sender, _ := senderAnswering(t, status, `{"reason":"BadJwtToken"}`)
+
+		err := sender.Send(context.Background(), message())
+		if err == nil {
+			t.Fatalf("%d was reported as delivered", status)
+		}
+		if !errors.Is(err, notify.ErrUndeliverable) {
+			t.Errorf("%d is retried; the same token will be refused again: %v", status, err)
+		}
+		if !strings.Contains(err.Error(), "VAPID") {
+			t.Errorf("%d does not name the credential that was refused: %v", status, err)
+		}
+		if !strings.Contains(err.Error(), "open the app") {
+			t.Errorf("%d does not give the remedy for the common cause: %v", status, err)
+		}
+	}
+}
+
+/*
 TestARateLimitIsRetriedRatherThanAbandoned.
 
 The mirror of the case above, and the one that costs a real alert if it is got

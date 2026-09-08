@@ -170,6 +170,26 @@ func classify(status int, detail string, to models.PushSubscription) error {
 				"to register again: %w",
 			status, detail, where, notify.ErrUndeliverable)
 
+	case status == http.StatusUnauthorized, status == http.StatusForbidden:
+		// The push service refused this application server, not the phone.
+		//
+		// Two things produce it, and both read as a broken deployment: a VAPID
+		// pair the service will not accept, and — far more often — a
+		// subscription made against a *different* public key, which is what
+		// rotating the pair leaves behind. The remedy for the second is the
+		// same as for a gone subscription, so it is worth saying: the phone
+		// re-registers on its next launch.
+		//
+		// Retrying signs the same rejected token again, so it stops here. The
+		// message is the whole value: Apple answers this as
+		// `403 {"reason":"BadJwtToken"}`, which on its own sends whoever reads
+		// it looking at the network.
+		return fmt.Errorf(
+			"webpush: %d %s to %s: the push service refused this application server's VAPID "+
+				"credentials; if the pair was rotated, the phone must open the app to "+
+				"register against the new key: %w",
+			status, detail, where, notify.ErrUndeliverable)
+
 	case status == http.StatusRequestEntityTooLarge:
 		// The payload is over the push service's limit. It will be over it
 		// next time too.

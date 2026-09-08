@@ -527,6 +527,42 @@ numbers here.
 If nothing arrives, the first thing to check is that the app was launched from
 the icon rather than from Safari.
 
+**If the row failed with `401` or `403`** — Apple words it
+`403 {"reason":"BadJwtToken"}` — the push service refused *this server's*
+credentials, not the phone. The message stored in `last_error` says so, and the
+delivery worker stops on the first attempt because signing the same token again
+produces the same refusal.
+
+Two things cause it. The pair itself may be wrong, and a leftover `VAPID_` line
+is the usual way — `make vapid-keys >> .env` appends, so a second run leaves two
+pairs in the file and compose takes the last of each. Or the pair is fine and
+the *subscription* was made against a different public key, which is what
+rotating leaves behind: the phone holds a subscription the new key cannot push
+to.
+
+Tell them apart on the VPS. The public key and the subject are not secrets; the
+private key is, and never needs to be printed:
+
+```console
+$ grep -c '^VAPID_PUBLIC_KEY=' .env      # each must be exactly 1
+$ grep -c '^VAPID_PRIVATE_KEY=' .env
+$ grep -c '^VAPID_SUBJECT=' .env
+
+$ curl -s https://<machine>.<tailnet>.ts.net/api/v1/device | jq -r .vapid_public_key
+$ docker compose --env-file .env -f deploy/docker-compose.yml \
+    exec -T collector printenv VAPID_PUBLIC_KEY
+```
+
+The api serves the key the phone subscribes against and the collector signs
+with it, so those two strings must be identical. A duplicate line is the fault
+itself: delete the old pair, `systemctl restart btcusd`, and re-register.
+
+If they match, it is the subscription. **Open the app on the phone** — it
+re-subscribes on every launch, and unsubscribes a subscription made against a
+different key rather than failing on it. Confirm on the status screen that the
+masked endpoint has changed and `registered_at` has moved, then insert another
+signal.
+
 **2. The alert's numbers match the stored signal exactly.**
 
 Compare against `GET /api/v1/signals/{id}`. The body rounds for reading; the
