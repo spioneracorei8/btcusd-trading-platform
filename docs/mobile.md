@@ -487,22 +487,31 @@ table afterwards looking for signals that have no notification. So a row put
 straight into `signals` is a signal that will never be delivered, and waiting
 for an alert from one is waiting for something that cannot arrive.
 
+On the VPS. There is no `psql` on that host — it runs Docker and nothing else —
+so this goes through the container, and through a quoted heredoc so that
+neither the shell nor psql's own meta-commands touch the JSON:
+
 ```console
-$ psql "$DATABASE_URL" -c "
-  WITH s AS (
-    INSERT INTO signals (id, symbol, market_type, timeframe, signal_time,
-                         direction, strength, signal_price, entry_price,
-                         stop_loss, take_profit, strategy_name,
-                         strategy_version, reason)
-    VALUES (gen_random_uuid(), 'BTCUSDT', 'spot', '4h', now(), 'long', 50,
-            64000, 64010, 63500, 65000, 'ema_crossover', 'v1',
-            '{\"trigger\":\"delivery check\"}'::jsonb)
-    RETURNING id
-  )
-  INSERT INTO notifications (signal_id, channel)
-  SELECT id, 'webpush' FROM s
-  RETURNING signal_id;"
+$ docker exec -i btcusd-trading-platform-postgres-1 psql -U trading -d btcusd <<'SQL'
+WITH s AS (
+  INSERT INTO signals (id, symbol, market_type, timeframe, signal_time,
+                       direction, strength, signal_price, entry_price,
+                       stop_loss, take_profit, strategy_name,
+                       strategy_version, reason)
+  VALUES (gen_random_uuid(), 'BTCUSDT', 'spot', '4h', now(), 'long', 50,
+          64000, 64010, 63500, 65000, 'ema_crossover', 'v1',
+          '{"trigger":"delivery check"}'::jsonb)
+  RETURNING id
+)
+INSERT INTO notifications (signal_id, channel)
+SELECT id, 'webpush' FROM s
+RETURNING signal_id;
+SQL
 ```
+
+`-i` rather than `-it`: it is reading stdin, not driving a terminal. The
+`psql -c "..."` form is a trap here — the JSON needs escaped quotes, and a
+`\"` pasted into an interactive prompt is read as a psql meta-command.
 
 `next_attempt_at` defaults to `now()`, so the row is due on the delivery
 worker's next pass — within a minute.
