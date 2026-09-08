@@ -38,6 +38,11 @@ func main() {
 
 	fmt.Fprintln(os.Stderr)
 	fmt.Fprintln(os.Stderr, "Append these to .env and set VAPID_SUBJECT to a real address.")
+	fmt.Fprintln(os.Stderr)
+	fmt.Fprintln(os.Stderr, "If .env already carries VAPID_ lines, delete the old ones. A public")
+	fmt.Fprintln(os.Stderr, "key left over from a different pair is refused at start-up — the two")
+	fmt.Fprintln(os.Stderr, "halves are checked against each other, because a mismatch otherwise")
+	fmt.Fprintln(os.Stderr, "surfaces as a 403 from the push service days later.")
 	fmt.Fprintln(os.Stderr, "The private key is a credential: it is never logged, never served,")
 	fmt.Fprintln(os.Stderr, "and must not reach an image layer or the repository.")
 }
