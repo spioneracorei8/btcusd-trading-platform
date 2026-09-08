@@ -229,13 +229,18 @@ cd mobile
 npm install                       # once
 npm run build:web                 # into mobile/dist
 
-rsync -a --delete dist/ btcusd@<host>:/srv/btcusd/web/
+cd .. && deploy/push-web.sh <machine>.<tailnet>.ts.net
 ```
 
-`--delete` matters. The service worker precaches a list of fingerprinted
-filenames taken from the export, so a directory still holding the previous
-build's bundle is a directory where the old one is reachable — and a worker
-that fetches it gets a 200 for a file this build never emitted.
+> **Do not do this with a bare `rsync --delete`.** The deletion is needed — the
+> service worker precaches fingerprinted filenames from the build it was
+> stamped with, so a directory still holding the previous build's bundle is one
+> where the old one answers 200 — but `--delete` removes everything at the
+> destination that is not in the source. Pointed at `/opt/btcusd` it takes the
+> checkout, the `.env` and the `.git` directory. That has happened.
+>
+> `push-web.sh` refuses unless the destination is absent, empty, or a previous
+> export, and refuses unless the source actually is one.
 
 **[on the VPS]**
 

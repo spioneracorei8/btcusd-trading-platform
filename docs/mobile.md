@@ -72,10 +72,12 @@ $ npm run build:web              # into dist/
 ```
 
 The VPS has no node — it runs Docker and Tailscale and nothing else — so the
-export is built here and copied there. `deploy/README.md` §2.6 has the rsync,
-and the `--delete` in it is not optional: the service worker precaches
-fingerprinted filenames from this build, and a directory still holding the
-previous build's bundle is one where the old one answers 200.
+export is built here and copied there by `deploy/push-web.sh`, which is a
+guarded rsync. The deletion it does is not optional: the service worker
+precaches fingerprinted filenames from this build, and a directory still
+holding the previous build's bundle is one where the old one answers 200. What
+the guard is for is the other half — `--delete` at the wrong path removes
+whatever is there, and pointed at the checkout it takes the `.env` with it.
 
 `app.json` declares `platforms: ["web"]`. That is the only target — there is no
 APK and no native iOS (ADR 0028) — and saying so removes a guess: undeclared,
