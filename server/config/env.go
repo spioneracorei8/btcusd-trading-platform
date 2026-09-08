@@ -354,8 +354,26 @@ func LoadFrom(lookup helper.LookupFunc, opts ...Option) (*Config, error) {
 		if cfg.Notify.VAPIDPrivateKey == "" {
 			l.missing = append(l.missing, "VAPID_PRIVATE_KEY")
 		}
-		if cfg.Notify.VAPIDSubject == "" {
+		switch {
+		case cfg.Notify.VAPIDSubject == "":
 			l.missing = append(l.missing, "VAPID_SUBJECT")
+
+		// Checked here rather than only where the push is signed, so that
+		// every process refuses together.
+		//
+		// The sender validates it too, but the sender only exists in the
+		// collector — so a malformed subject used to start the api happily
+		// and crash-loop the collector, which looks like two unrelated
+		// problems rather than one line in a file.
+		//
+		// A bare address is the way it goes wrong: RFC 8292 wants a URL, and
+		// "set this to a real address" reads as "replace the address".
+		case !strings.HasPrefix(cfg.Notify.VAPIDSubject, "mailto:") &&
+			!strings.HasPrefix(cfg.Notify.VAPIDSubject, "https://"):
+			l.invalidf("VAPID_SUBJECT",
+				"%q must be a mailto: or https: URL saying who to contact about this "+
+					"application server; an address on its own is not one — try mailto:%s",
+				cfg.Notify.VAPIDSubject, cfg.Notify.VAPIDSubject)
 		}
 	}
 

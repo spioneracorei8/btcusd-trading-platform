@@ -655,3 +655,56 @@ func TestTheVAPIDPrivateKeyIsNeverInAnErrorMessage(t *testing.T) {
 		t.Fatalf("the private key appears in the error: %v", err)
 	}
 }
+
+/*
+TestABareAddressIsRefusedAsAVAPIDSubject.
+
+# What this prevents
+
+RFC 8292 wants a URL — `mailto:someone@example.com` — and the natural way to
+get it wrong is to write the address on its own, because "set this to a real
+address" reads as "replace the address" and the mailto: goes with it.
+
+The sender catches that too, but the sender only exists in the collector. So a
+bare address started the api happily and crash-looped the collector, which
+presents as two unrelated problems rather than one line in one file. Checking
+it here makes every process refuse together, and the message carries the value
+with the prefix already added.
+*/
+func TestABareAddressIsRefusedAsAVAPIDSubject(t *testing.T) {
+	e := validEnv()
+	e["SIGNAL_MODE"] = "notify"
+	e["VAPID_PUBLIC_KEY"] = "a-public-key"
+	e["VAPID_PRIVATE_KEY"] = "a-private-key"
+	e["VAPID_SUBJECT"] = "owner@example.com"
+
+	_, err := config.LoadFrom(env(e))
+	if err == nil {
+		t.Fatal("a bare address was accepted as a VAPID subject")
+	}
+	if !strings.Contains(err.Error(), "VAPID_SUBJECT") {
+		t.Errorf("the error does not name the variable: %v", err)
+	}
+	// The fix, spelled out, because the difference is one word.
+	if !strings.Contains(err.Error(), "mailto:owner@example.com") {
+		t.Errorf("the error does not show what it should have been: %v", err)
+	}
+}
+
+// TestAMailtoOrHttpsSubjectIsAccepted, which are the two RFC 8292 allows.
+func TestAMailtoOrHttpsSubjectIsAccepted(t *testing.T) {
+	for _, subject := range []string{
+		"mailto:owner@example.com",
+		"https://example.com/contact",
+	} {
+		e := validEnv()
+		e["SIGNAL_MODE"] = "notify"
+		e["VAPID_PUBLIC_KEY"] = "a-public-key"
+		e["VAPID_PRIVATE_KEY"] = "a-private-key"
+		e["VAPID_SUBJECT"] = subject
+
+		if _, err := config.LoadFrom(env(e)); err != nil {
+			t.Errorf("%q was refused: %v", subject, err)
+		}
+	}
+}

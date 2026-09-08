@@ -380,7 +380,8 @@ reason to, so the target falls back to the golang image it already has from
 building the stack. Nothing is appended when it fails, so a failed run cannot
 half-write the file.
 
-Then set `VAPID_SUBJECT` to a real address. The **public** half is served to
+Then set `VAPID_SUBJECT` to a real address, **keeping the `mailto:`** — it is a
+URL, not an address, and a bare one is refused at start-up. The **public** half is served to
 the app on `GET /api/v1/device` — it is not a secret, and serving it rather
 than building it in means rotating the pair does not need a rebuild. The
 **private** half is the one credential here that can push to the phone: never
