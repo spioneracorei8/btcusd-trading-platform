@@ -15,16 +15,45 @@
  */
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
+import { existsSync } from 'node:fs';
 import { readdir, readFile, writeFile, rm } from 'node:fs/promises';
 import path from 'node:path';
 
 const OUT = process.env.OUT ?? 'dist';
 
+/**
+ * Refuse before invoking Expo when the dependencies are not installed.
+ *
+ * # Why this is worth a check of its own
+ *
+ * Without it, `npx` does not fail — it offers to *download* the Expo CLI, and
+ * a CLI fetched on its own cannot resolve this project's SDK version. The
+ * platform inference then comes back without web and it reports:
+ *
+ *     No platforms are configured to use the Metro bundler in the project
+ *     Expo config.
+ *
+ * Which sends whoever reads it to app.json, where nothing is wrong. This has
+ * now misdirected two people, so it is worth the six lines to say the real
+ * thing instead.
+ */
+if (!existsSync('node_modules/expo')) {
+  console.error('mobile/node_modules is missing or incomplete: no node_modules/expo.\n');
+  console.error('Run:\n');
+  console.error('    npm install\n');
+  console.error('Without it npx downloads a detached Expo CLI, which cannot read this');
+  console.error("project's config and reports a platform problem that does not exist.");
+  process.exit(1);
+}
+
 await rm(OUT, { recursive: true, force: true });
 
 console.log(`exporting to ${OUT}`);
 try {
-  execFileSync('npx', ['expo', 'export', '--platform', 'web', '--output-dir', OUT], {
+  // --no-install so this can never silently reach for a CLI off the registry.
+  // The check above should have caught that already; this makes it impossible
+  // rather than merely reported.
+  execFileSync('npx', ['--no-install', 'expo', 'export', '--platform', 'web', '--output-dir', OUT], {
     stdio: 'inherit',
   });
 } catch {

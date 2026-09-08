@@ -79,9 +79,15 @@ refuses with *"No platforms are configured to use the Metro bundler in the
 project Expo config"* whenever it cannot work out that web is among them.
 
 **That message is usually a missing `npm install`, not a broken config.** With
-no `node_modules`, the SDK version cannot resolve, the platform inference comes
-back without web, and the error describes a symptom two steps from its cause.
-Declaring the platform means the inference is never consulted.
+no `node_modules`, `npx` offers to *download* the Expo CLI instead of failing —
+and a CLI fetched on its own cannot resolve this project's SDK version, so the
+platform inference comes back without web and the error describes a symptom two
+steps from its cause. The giveaway is the line above it: `Need to install the
+following packages: expo@...`.
+
+`build-web.mjs` refuses before reaching Expo when `node_modules/expo` is not
+there, and says to run `npm install`. It also passes `--no-install`, so a
+detached CLI cannot be reached for even by accident.
 
 It also makes a native export refuse outright, naming what is configured,
 rather than producing a bundle for a target nobody can install.
