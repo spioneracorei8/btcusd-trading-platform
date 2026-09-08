@@ -375,6 +375,11 @@ once:
 $ make vapid-keys >> .env
 ```
 
+Run it where the keys are needed — on the VPS. That host has no Go and no
+reason to, so the target falls back to the golang image it already has from
+building the stack. Nothing is appended when it fails, so a failed run cannot
+half-write the file.
+
 Then set `VAPID_SUBJECT` to a real address. The **public** half is served to
 the app on `GET /api/v1/device` — it is not a secret, and serving it rather
 than building it in means rotating the pair does not need a rebuild. The
@@ -454,7 +459,8 @@ Here is the procedure. It needs the iPhone, the VPS, and about twenty minutes.
    the page no service worker and no push, and none of what follows can happen.
 2. On the VPS, generate a key pair and switch delivery on:
    ```console
-   $ make vapid-keys >> .env      # then set VAPID_SUBJECT to a real address
+   $ make vapid-keys >> .env      # no Go on that host; it runs in a container
+   #                                then set VAPID_SUBJECT to a real address
    $ echo 'SIGNAL_MODE=notify' >> .env
    $ sudo systemctl restart btcusd
    ```

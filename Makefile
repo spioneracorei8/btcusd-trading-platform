@@ -191,9 +191,20 @@ sqlc: ## Regenerate the sqlc query layer from the migrations
 # Printed as .env lines so the output can be appended rather than transcribed.
 # A key copied by hand is a key with a missing character, and the symptom is a
 # 403 from the push service that reads like a server problem.
+#
+# The VPS has no Go — it runs Docker and Tailscale and nothing else — and this
+# is a command the runbook asks for *there*, since that is where the key is
+# needed. So it falls back to the golang image, which that host already has
+# from building the stack.
 .PHONY: vapid-keys
 vapid-keys: ## Print a fresh VAPID key pair for SIGNAL_MODE=notify
-	@cd $(SERVER) && go run ./vapidkeys
+	@if command -v go >/dev/null 2>&1; then \
+		cd $(SERVER) && go run ./vapidkeys; \
+	else \
+		echo "no go on this host; running it in a container instead" >&2; \
+		$(CONTAINER_ENGINE) run --rm -v "$(CURDIR)/$(SERVER)":/src:ro -w /src \
+			golang:1.23-alpine go run ./vapidkeys; \
+	fi
 
 # ---------------------------------------------------------------------------
 # Containers
