@@ -464,6 +464,10 @@ ssh -L 5432:127.0.0.1:5432 btcusd@<public-ip>
 psql "postgres://trading:<password>@localhost:5432/btcusd"
 ```
 
+That `psql` is the one on your own machine, reached through the tunnel. The VPS
+does not have a client of its own — when you are already logged in there,
+`make psql` runs one inside the postgres container instead.
+
 > This is stricter than the deployment spec, which grouped PostgreSQL with the
 > API as "reached over Tailscale". Nothing on the tailnet needs SQL — the
 > mobile app and the phase 08 API both go through HTTP — so the database stays
@@ -682,8 +686,11 @@ curl -m 5 http://<tailscale-ip>:8080/health ; echo "exit=$?"
 curl -m 5 https://<public-ip>/health     ; echo "exit=$?"
 curl -m 5 http://<public-ip>:5432        ; echo "exit=$?"
 
-# Unfilled gaps:
-psql -c "SELECT * FROM data_gaps WHERE filled_at IS NULL ORDER BY gap_start;"
+# Unfilled gaps (make psql runs the client inside the container; this host
+# has none):
+make psql <<'SQL'
+SELECT * FROM data_gaps WHERE filled_at IS NULL ORDER BY gap_start;
+SQL
 
 # Password login must be refused, not prompted:
 ssh -o PreferredAuthentications=password -o PubkeyAuthentication=no \
@@ -722,7 +729,9 @@ curl -s https://<machine>.<tailnet>.ts.net/internal/market/status |
 journalctl -u btcusd --since '48 hours ago' | grep -iE 'reconnect|backfill'
 
 # Any gap that appeared, and when:
-psql -c "SELECT * FROM data_gaps ORDER BY gap_start DESC LIMIT 20;"
+make psql <<'SQL'
+SELECT * FROM data_gaps ORDER BY gap_start DESC LIMIT 20;
+SQL
 ```
 
 Pass conditions:

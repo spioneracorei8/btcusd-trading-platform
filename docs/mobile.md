@@ -487,12 +487,14 @@ table afterwards looking for signals that have no notification. So a row put
 straight into `signals` is a signal that will never be delivered, and waiting
 for an alert from one is waiting for something that cannot arrive.
 
-On the VPS. There is no `psql` on that host — it runs Docker and nothing else —
-so this goes through the container, and through a quoted heredoc so that
-neither the shell nor psql's own meta-commands touch the JSON:
+On the VPS, from `/opt/btcusd`. There is no `psql` client on that host — it
+runs Docker and Tailscale and nothing else — so `make psql` runs one inside the
+postgres container, taking the credentials from that container's environment.
+The SQL arrives on stdin through a quoted heredoc, so neither the shell nor
+psql's own meta-commands touch the JSON:
 
 ```console
-$ docker exec -i btcusd-trading-platform-postgres-1 psql -U trading -d btcusd <<'SQL'
+$ make psql <<'SQL'
 WITH s AS (
   INSERT INTO signals (id, symbol, market_type, timeframe, signal_time,
                        direction, strength, signal_price, entry_price,
@@ -509,15 +511,18 @@ RETURNING signal_id;
 SQL
 ```
 
-`-i` rather than `-it`: it is reading stdin, not driving a terminal. The
-`psql -c "..."` form is a trap here — the JSON needs escaped quotes, and a
-`\"` pasted into an interactive prompt is read as a psql meta-command.
+The `psql -c "..."` form is a trap here — the JSON needs escaped quotes, and a
+`\"` pasted at an interactive prompt is read as a psql meta-command, which is
+how this step first went wrong.
 
 `next_attempt_at` defaults to `now()`, so the row is due on the delivery
 worker's next pass — within a minute.
 
-**Expected:** an alert within a minute. Title `BTCUSDT 4h LONG`, body carrying
-`ref 64000 · stop 63500 · target 65000`.
+**Expected:** an alert within a minute. Title `BTCUSDT 4h LONG`, body
+`ref 64000 · stop 63500 · target 65000 — delivery check`. The trailing clause
+is the `trigger` from the `reason` column; the prices are rounded to two
+decimals and printed without trailing zeros, which is why they read as whole
+numbers here.
 
 If nothing arrives, the first thing to check is that the app was launched from
 the icon rather than from Safari.
@@ -533,9 +538,10 @@ nothing traded at.
 **3. Delivery is recorded `sent`.**
 
 ```console
-$ psql "$DATABASE_URL" -c "
-  SELECT status, attempts, sent_at, last_error FROM notifications
-  ORDER BY created_at DESC LIMIT 3;"
+$ make psql <<'SQL'
+SELECT status, attempts, channel, sent_at, last_error FROM notifications
+ORDER BY created_at DESC LIMIT 3;
+SQL
 ```
 
 **Expected:** `sent`, `attempts` 1, `sent_at` populated, `last_error` empty,

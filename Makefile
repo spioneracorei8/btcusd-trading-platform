@@ -247,6 +247,39 @@ adminer: require-env ## Start Adminer to browse the database, then print its URL
 adminer-stop: require-env ## Stop and remove Adminer, leaving the rest of the stack up
 	$(COMPOSE) --profile tools rm -sf adminer
 
+# A psql prompt in the running postgres container.
+#
+# The VPS has no psql client — it runs Docker and Tailscale and nothing else —
+# and the runbooks ask for SQL *there*, which is where every "psql: command not
+# found" in this project has come from. So this reaches into the container that
+# already has the client.
+#
+# Credentials come from that container's own environment rather than being
+# repeated here: a snippet that hard-codes `-U trading -d btcusd` is wrong the
+# moment .env says anything else, and the failure looks like a broken database
+# rather than a stale command.
+#
+# Works both ways round. On a terminal it is a prompt; with SQL arriving on
+# stdin it adds -T, because compose exec otherwise insists on a TTY it cannot
+# have:
+#
+#     make psql <<'SQL'
+#     SELECT count(*) FROM candles;
+#     SQL
+#
+# Feeding SQL in is the safer form for anything containing quotes. A `\"` typed
+# at an interactive prompt is read as a psql meta-command, not as text, and the
+# error it produces says nothing about the quoting.
+#
+# There is no prod- twin. compose finds a container by project and service
+# name, and the production overlay changes neither, so this reaches the stack
+# systemd started as readily as one from `make up`.
+.PHONY: psql
+psql: require-env ## Open a psql prompt in the running postgres container
+	@if [ -t 0 ]; then tty=; else tty=-T; fi; \
+	$(COMPOSE) exec $$tty postgres \
+		sh -c 'exec psql -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"'
+
 # ---------------------------------------------------------------------------
 # VPS deployment
 # ---------------------------------------------------------------------------
